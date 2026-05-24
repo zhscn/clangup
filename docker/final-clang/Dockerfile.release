@@ -1,0 +1,39 @@
+# syntax=docker/dockerfile:1
+
+ARG BASE_IMAGE=clangup-builder:el7-glibc2.17-v1
+
+FROM ${BASE_IMAGE} AS build
+
+ARG STAGE0_TARBALL=clangup-stage0.tar.zst
+ARG BASE_PROFILE=el7
+ARG LLVM_VERSION=21.1.8
+ARG LLVM_SHA256=4633a23617fa31a3ea51242586ea7fb1da7140e426bd62fc164261fe036aa142
+ARG NINJA_JOBS=4
+ARG LLVM_PARALLEL_LINK_JOBS=1
+ARG ZSTD_CLEVEL=19
+
+COPY ${STAGE0_TARBALL} /tmp/clangup-stage0.tar.zst
+
+RUN set -eux; \
+    rm -rf /opt/clangup-seed; \
+    mkdir -p /opt/clangup-seed; \
+    tar --use-compress-program=zstd -xf /tmp/clangup-stage0.tar.zst -C /opt/clangup-seed; \
+    test -x /opt/clangup-seed/bin/clang; \
+    test -x /opt/clangup-seed/bin/clang++; \
+    test -x /opt/clangup-seed/bin/ld.lld; \
+    rm -f /tmp/clangup-stage0.tar.zst
+
+ENV BASE_PROFILE=${BASE_PROFILE}
+ENV LLVM_VERSION=${LLVM_VERSION}
+ENV LLVM_SHA256=${LLVM_SHA256}
+ENV NINJA_JOBS=${NINJA_JOBS}
+ENV LLVM_PARALLEL_LINK_JOBS=${LLVM_PARALLEL_LINK_JOBS}
+ENV ZSTD_CLEVEL=${ZSTD_CLEVEL}
+
+COPY docker/final-clang/build-final-clang.sh /usr/local/bin/build-final-clang
+
+RUN chmod 0755 /usr/local/bin/build-final-clang \
+  && /usr/local/bin/build-final-clang
+
+FROM scratch AS output
+COPY --from=build /out/ /
