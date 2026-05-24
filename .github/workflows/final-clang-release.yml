@@ -1,0 +1,163 @@
+name: final-clang release
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage0_version:
+        description: LLVM version of the stage0 artifact already published on R2
+        type: string
+        required: true
+      stage0_prefix:
+        description: R2 key prefix where stage0 artifacts live (no leading/trailing slash)
+        type: string
+        default: clangup/final
+      llvm_version:
+        description: LLVM version to build
+        type: string
+        required: true
+      llvm_sha256:
+        description: SHA256 of llvm-project-<version>.src.tar.xz
+        type: string
+        required: true
+      builder_version:
+        description: clangup-builder tag suffix (e.g. v1)
+        type: string
+        default: v1
+      r2_prefix:
+        description: R2 key prefix to publish the new artifact under
+        type: string
+        default: clangup/final
+
+env:
+  REGISTRY: ghcr.io
+  BUILDER_REPO: ${{ github.repository_owner }}/clangup-builder
+
+jobs:
+  build:
+    name: build ${{ matrix.tag }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tag: el7-x86_64
+            profile: el7
+            arch: x86_64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+            builder_tag: el7-glibc2.17
+            link_jobs: 2
+          - tag: el8-aarch64
+            profile: el8
+            arch: aarch64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            builder_tag: el8-aarch64-glibc2.28
+            link_jobs: 2
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 300
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+            /usr/local/share/powershell /usr/lib/jvm /opt/microsoft || true
+          sudo apt-get -qq purge -y \
+            'aspnetcore-*' 'dotnet-*' 'llvm-*' 'mongodb-*' 'mysql-*' \
+            'php-*' azure-cli google-cloud-sdk google-chrome-stable \
+            firefox powershell mono-devel 2>/dev/null || true
+          sudo apt-get -qq autoremove -y 2>/dev/null || true
+          sudo apt-get -qq clean 2>/dev/null || true
+          docker image prune -af 2>/dev/null || true
+          df -h
+
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR (pull clangup-builder)
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve builder image ref
+        id: builder
+        run: |
+          ref="${REGISTRY}/${BUILDER_REPO,,}:${{ matrix.builder_tag }}-${{ inputs.builder_version }}"
+          echo "ref=${ref}" >> "$GITHUB_OUTPUT"
+          echo "builder image: ${ref}"
+
+      - name: Download stage0 artifact from public R2
+        env:
+          R2_PUBLIC_BASE_URL: https://dl.clangup.dev
+        run: |
+          set -euo pipefail
+          mkdir -p .artifacts
+          key="${{ inputs.stage0_prefix }}/${{ inputs.stage0_version }}/clang-${{ inputs.stage0_version }}-${{ matrix.arch }}.tar.zst"
+          echo "← ${R2_PUBLIC_BASE_URL}/${key}"
+          curl -fsSL -o .artifacts/clangup-stage0.tar.zst "${R2_PUBLIC_BASE_URL}/${key}"
+          if curl -fsSL -o .artifacts/clangup-stage0.tar.zst.sha256 "${R2_PUBLIC_BASE_URL}/${key}.sha256" 2>/dev/null; then
+            expected=$(awk '{print $1}' .artifacts/clangup-stage0.tar.zst.sha256)
+            actual=$(sha256sum .artifacts/clangup-stage0.tar.zst | awk '{print $1}')
+            test "${expected}" = "${actual}"
+            echo "stage0 sha256 verified: ${actual}"
+          fi
+          ls -lh .artifacts/
+
+      - name: Build final-clang tarball (release)
+        run: |
+          docker buildx build \
+            -f docker/final-clang/Dockerfile.release \
+            --build-arg BASE_IMAGE=${{ steps.builder.outputs.ref }} \
+            --build-arg BASE_PROFILE=${{ matrix.profile }} \
+            --build-arg STAGE0_TARBALL=.artifacts/clangup-stage0.tar.zst \
+            --build-arg LLVM_VERSION=${{ inputs.llvm_version }} \
+            --build-arg LLVM_SHA256=${{ inputs.llvm_sha256 }} \
+            --build-arg NINJA_JOBS=$(nproc) \
+            --build-arg LLVM_PARALLEL_LINK_JOBS=${{ matrix.link_jobs }} \
+            --output type=local,dest=dist \
+            --progress=plain \
+            .
+
+      - name: Show manifest
+        run: |
+          ls -lh dist/
+          echo
+          cat dist/*.manifest.json
+          {
+            echo "## final-clang artifact (${{ matrix.tag }}, release, stage0=${{ inputs.stage0_version }})"
+            echo
+            echo '```json'
+            cat dist/*.manifest.json
+            echo
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload to R2 via Worker-signed URLs
+        env:
+          WORKER: https://upload.clangup.dev/sign
+          R2_PREFIX: ${{ inputs.r2_prefix }}/${{ inputs.llvm_version }}
+        run: |
+          set -euo pipefail
+          oidc=$(curl -fsS \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=clangup-r2-uploader" \
+            | jq -r .value)
+          echo "::add-mask::${oidc}"
+          for f in dist/*.tar.zst dist/*.tar.zst.sha256 dist/*.manifest.json; do
+            [ -e "$f" ] || continue
+            key="${R2_PREFIX}/$(basename "$f")"
+            url=$(curl -fsS -X POST "${WORKER}" \
+              -H "Authorization: Bearer ${oidc}" \
+              -H "Content-Type: application/json" \
+              -d "{\"key\":\"${key}\"}" | jq -r .url)
+            echo "::add-mask::${url}"
+            echo "→ ${key}"
+            curl -fsS -X PUT --data-binary "@${f}" "${url}"
+          done

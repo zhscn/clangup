@@ -1,0 +1,135 @@
+name: final-clang bootstrap
+
+on:
+  workflow_dispatch:
+    inputs:
+      llvm_version:
+        description: LLVM version to build (e.g. 21.1.8)
+        type: string
+        default: '21.1.8'
+      llvm_sha256:
+        description: SHA256 of llvm-project-<version>.src.tar.xz
+        type: string
+        default: '4633a23617fa31a3ea51242586ea7fb1da7140e426bd62fc164261fe036aa142'
+      seed_llvm_version:
+        description: LLVM version of the seed-clang image to bootstrap from
+        type: string
+        default: '21.1.8'
+      r2_prefix:
+        description: R2 key prefix under the bucket (no leading or trailing slash)
+        type: string
+        default: clangup/final
+
+env:
+  REGISTRY: ghcr.io
+  SEED_REPO: ${{ github.repository_owner }}/clangup-seed-clang
+
+jobs:
+  build:
+    name: build ${{ matrix.tag }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tag: el7-x86_64
+            profile: el7
+            platform: linux/amd64
+            runner: ubuntu-24.04
+            seed_tag: el7-x86_64
+            link_jobs: 2
+          - tag: el8-aarch64
+            profile: el8
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            seed_tag: el8-aarch64
+            link_jobs: 2
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 300
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+            /usr/local/share/powershell /usr/lib/jvm /opt/microsoft || true
+          sudo apt-get -qq purge -y \
+            'aspnetcore-*' 'dotnet-*' 'llvm-*' 'mongodb-*' 'mysql-*' \
+            'php-*' azure-cli google-cloud-sdk google-chrome-stable \
+            firefox powershell mono-devel 2>/dev/null || true
+          sudo apt-get -qq autoremove -y 2>/dev/null || true
+          sudo apt-get -qq clean 2>/dev/null || true
+          docker image prune -af 2>/dev/null || true
+          df -h
+
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR (pull seed-clang)
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve seed image ref
+        id: seed
+        run: |
+          ref="${REGISTRY}/${SEED_REPO,,}:llvmorg-${{ inputs.seed_llvm_version }}-${{ matrix.seed_tag }}"
+          echo "ref=${ref}" >> "$GITHUB_OUTPUT"
+          echo "seed image: ${ref}"
+
+      - name: Build final-clang tarball (bootstrap)
+        run: |
+          docker buildx build \
+            -f docker/final-clang/Dockerfile.bootstrap \
+            --build-arg BASE_IMAGE=${{ steps.seed.outputs.ref }} \
+            --build-arg BASE_PROFILE=${{ matrix.profile }} \
+            --build-arg LLVM_VERSION=${{ inputs.llvm_version }} \
+            --build-arg LLVM_SHA256=${{ inputs.llvm_sha256 }} \
+            --build-arg NINJA_JOBS=$(nproc) \
+            --build-arg LLVM_PARALLEL_LINK_JOBS=${{ matrix.link_jobs }} \
+            --output type=local,dest=dist \
+            --progress=plain \
+            .
+
+      - name: Show manifest
+        run: |
+          ls -lh dist/
+          echo
+          cat dist/*.manifest.json
+          {
+            echo "## final-clang artifact (${{ matrix.tag }}, bootstrap)"
+            echo
+            echo '```json'
+            cat dist/*.manifest.json
+            echo
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload to R2 via Worker-signed URLs
+        env:
+          WORKER: https://upload.clangup.dev/sign
+          R2_PREFIX: ${{ inputs.r2_prefix }}/${{ inputs.llvm_version }}
+        run: |
+          set -euo pipefail
+          oidc=$(curl -fsS \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=clangup-r2-uploader" \
+            | jq -r .value)
+          echo "::add-mask::${oidc}"
+          for f in dist/*.tar.zst dist/*.tar.zst.sha256 dist/*.manifest.json; do
+            [ -e "$f" ] || continue
+            key="${R2_PREFIX}/$(basename "$f")"
+            url=$(curl -fsS -X POST "${WORKER}" \
+              -H "Authorization: Bearer ${oidc}" \
+              -H "Content-Type: application/json" \
+              -d "{\"key\":\"${key}\"}" | jq -r .url)
+            echo "::add-mask::${url}"
+            echo "→ ${key}"
+            curl -fsS -X PUT --data-binary "@${f}" "${url}"
+          done
