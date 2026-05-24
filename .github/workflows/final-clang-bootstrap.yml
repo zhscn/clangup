@@ -133,3 +133,21 @@ jobs:
             echo "→ ${key}"
             curl -fsS -X PUT --data-binary "@${f}" "${url}"
           done
+
+  publish-index:
+    name: publish index.json
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      id-token: write
+    steps:
+      - name: Trigger worker /publish-index
+        run: |
+          set -euo pipefail
+          oidc=$(curl -fsS \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=clangup-r2-uploader" \
+            | jq -r .value)
+          echo "::add-mask::${oidc}"
+          curl -fsS -X POST https://upload.clangup.dev/publish-index \
+            -H "Authorization: Bearer ${oidc}" | jq .
