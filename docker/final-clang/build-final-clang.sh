@@ -228,8 +228,7 @@ tar \
   -cf "${OUT_DIR}/${ARTIFACT_NAME}" \
   .
 
-(cd "${OUT_DIR}" && sha256sum "${ARTIFACT_NAME}" > "${ARTIFACT_NAME}.sha256")
-artifact_sha256=$(awk '{print $1}' "${OUT_DIR}/${ARTIFACT_NAME}.sha256")
+artifact_sha256=$(sha256sum "${OUT_DIR}/${ARTIFACT_NAME}" | awk '{print $1}')
 artifact_size=$(stat -c '%s' "${OUT_DIR}/${ARTIFACT_NAME}")
 build_date=$(date -u -d "@${SOURCE_DATE_EPOCH:-$(date -u +%s)}" -Iseconds)
 

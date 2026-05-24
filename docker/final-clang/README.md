@@ -43,9 +43,9 @@ The output directory contains:
 
 ```text
 clang-<version>-<arch>.tar.zst
-clang-<version>-<arch>.tar.zst.sha256
 clang-<version>-<arch>.manifest.json
 ```
 
-The manifest carries build metadata (LLVM source sha256, base profile, glibc
-baseline, target triple, seed/final compiler versions, default toolchain libs).
+The manifest carries build metadata including `artifact.sha256` (the tarball
+hash), LLVM source sha256, base profile, glibc baseline, target triple,
+seed/final compiler versions, and default toolchain libs.

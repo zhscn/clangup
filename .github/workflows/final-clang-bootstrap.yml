@@ -122,16 +122,23 @@ jobs:
             "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=clangup-r2-uploader" \
             | jq -r .value)
           echo "::add-mask::${oidc}"
-          for f in dist/*.tar.zst dist/*.tar.zst.sha256 dist/*.manifest.json; do
+          for f in dist/*.tar.zst dist/*.manifest.json; do
             [ -e "$f" ] || continue
+            case "$f" in
+              *.tar.zst)      ct="application/zstd" ;;
+              *.manifest.json) ct="application/json" ;;
+              *)              ct="application/octet-stream" ;;
+            esac
             key="${R2_PREFIX}/$(basename "$f")"
             url=$(curl -fsS -X POST "${WORKER}" \
               -H "Authorization: Bearer ${oidc}" \
               -H "Content-Type: application/json" \
               -d "{\"key\":\"${key}\"}" | jq -r .url)
             echo "::add-mask::${url}"
-            echo "→ ${key}"
-            curl -fsS -X PUT --data-binary "@${f}" "${url}"
+            echo "→ ${key} (${ct})"
+            curl -fsS -X PUT \
+              -H "Content-Type: ${ct}" \
+              --data-binary "@${f}" "${url}"
           done
 
   publish-index:

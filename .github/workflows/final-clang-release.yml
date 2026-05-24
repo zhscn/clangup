@@ -99,15 +99,17 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .artifacts
-          key="${{ inputs.stage0_prefix }}/${{ inputs.stage0_version }}/clang-${{ inputs.stage0_version }}-${{ matrix.arch }}.tar.zst"
-          echo "← ${R2_PUBLIC_BASE_URL}/${key}"
-          curl -fsSL -o .artifacts/clangup-stage0.tar.zst "${R2_PUBLIC_BASE_URL}/${key}"
-          if curl -fsSL -o .artifacts/clangup-stage0.tar.zst.sha256 "${R2_PUBLIC_BASE_URL}/${key}.sha256" 2>/dev/null; then
-            expected=$(awk '{print $1}' .artifacts/clangup-stage0.tar.zst.sha256)
-            actual=$(sha256sum .artifacts/clangup-stage0.tar.zst | awk '{print $1}')
-            test "${expected}" = "${actual}"
-            echo "stage0 sha256 verified: ${actual}"
-          fi
+          dir="${{ inputs.stage0_prefix }}/${{ inputs.stage0_version }}"
+          tar_key="${dir}/clang-${{ inputs.stage0_version }}-${{ matrix.arch }}.tar.zst"
+          manifest_key="${dir}/clang-${{ inputs.stage0_version }}-${{ matrix.arch }}.manifest.json"
+          echo "← ${R2_PUBLIC_BASE_URL}/${manifest_key}"
+          curl -fsSL -o .artifacts/stage0.manifest.json "${R2_PUBLIC_BASE_URL}/${manifest_key}"
+          echo "← ${R2_PUBLIC_BASE_URL}/${tar_key}"
+          curl -fsSL -o .artifacts/clangup-stage0.tar.zst "${R2_PUBLIC_BASE_URL}/${tar_key}"
+          expected=$(jq -r '.artifact.sha256' .artifacts/stage0.manifest.json)
+          actual=$(sha256sum .artifacts/clangup-stage0.tar.zst | awk '{print $1}')
+          test "${expected}" = "${actual}"
+          echo "stage0 sha256 verified: ${actual}"
           ls -lh .artifacts/
 
       - name: Build final-clang tarball (release)
@@ -150,16 +152,23 @@ jobs:
             "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=clangup-r2-uploader" \
             | jq -r .value)
           echo "::add-mask::${oidc}"
-          for f in dist/*.tar.zst dist/*.tar.zst.sha256 dist/*.manifest.json; do
+          for f in dist/*.tar.zst dist/*.manifest.json; do
             [ -e "$f" ] || continue
+            case "$f" in
+              *.tar.zst)      ct="application/zstd" ;;
+              *.manifest.json) ct="application/json" ;;
+              *)              ct="application/octet-stream" ;;
+            esac
             key="${R2_PREFIX}/$(basename "$f")"
             url=$(curl -fsS -X POST "${WORKER}" \
               -H "Authorization: Bearer ${oidc}" \
               -H "Content-Type: application/json" \
               -d "{\"key\":\"${key}\"}" | jq -r .url)
             echo "::add-mask::${url}"
-            echo "→ ${key}"
-            curl -fsS -X PUT --data-binary "@${f}" "${url}"
+            echo "→ ${key} (${ct})"
+            curl -fsS -X PUT \
+              -H "Content-Type: ${ct}" \
+              --data-binary "@${f}" "${url}"
           done
 
   publish-index:
