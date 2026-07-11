@@ -77,11 +77,10 @@ RUN set -eux; \
       el8) ;; \
     esac; \
     case "$(uname -m)" in \
-      x86_64) llvm_targets=X86 ;; \
-      aarch64) llvm_targets=AArch64 ;; \
+      x86_64) llvm_targets=X86; seed_triple=x86_64-unknown-linux-gnu ;; \
+      aarch64) llvm_targets=AArch64; seed_triple=aarch64-unknown-linux-gnu ;; \
       *) echo "unsupported seed clang arch: $(uname -m)" >&2; exit 2 ;; \
     esac; \
-    resource_version="${LLVM_VERSION%%.*}"; \
     archive="llvm-project-${LLVM_VERSION}.src.tar.xz"; \
     curl --retry 5 --connect-timeout 30 -fsSL -o "${archive}" \
       "https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVM_VERSION}/${archive}"; \
@@ -95,7 +94,10 @@ RUN set -eux; \
       -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc" \
       -DCMAKE_SHARED_LINKER_FLAGS="-static-libstdc++ -static-libgcc" \
       -DLLVM_ENABLE_PROJECTS="clang;lld" \
+      -DLLVM_ENABLE_RUNTIMES="compiler-rt;libcxx;libcxxabi" \
       -DLLVM_TARGETS_TO_BUILD="${llvm_targets}" \
+      -DLLVM_DEFAULT_TARGET_TRIPLE="${seed_triple}" \
+      -DLLVM_ENABLE_PER_TARGET_RUNTIME_DIR=ON \
       -DLLVM_INSTALL_TOOLCHAIN_ONLY=ON \
       -DLLVM_DISTRIBUTION_COMPONENTS="clang;clang-resource-headers;lld;llvm-ar;llvm-nm;llvm-ranlib" \
       -DCLANG_CONFIG_FILE_SYSTEM_DIR="${SEED_PREFIX}/etc/clang" \
@@ -110,35 +112,10 @@ RUN set -eux; \
       -DLLVM_INCLUDE_TESTS=OFF \
       -DLLVM_PARALLEL_LINK_JOBS="${LLVM_PARALLEL_LINK_JOBS}" \
       -DCLANG_ENABLE_OBJC_REWRITER=OFF \
-      -DCLANG_ENABLE_STATIC_ANALYZER=OFF; \
-    ninja -C build -j "${NINJA_JOBS}" distribution; \
-    ninja -C build install-distribution; \
-    CC="${SEED_PREFIX}/bin/clang" CXX="${SEED_PREFIX}/bin/clang++" \
-      cmake -G Ninja -S "${src}/runtimes" -B runtimes-build \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_INSTALL_PREFIX="${SEED_PREFIX}" \
-        -DLLVM_ENABLE_RUNTIMES="compiler-rt;libcxx;libcxxabi" \
-        -DCOMPILER_RT_BUILD_BUILTINS=ON \
-        -DCOMPILER_RT_BUILD_CRT=OFF \
-        -DCOMPILER_RT_BUILD_SANITIZERS=OFF \
-        -DCOMPILER_RT_BUILD_LIBFUZZER=OFF \
-        -DCOMPILER_RT_BUILD_PROFILE=OFF \
-        -DCOMPILER_RT_BUILD_MEMPROF=OFF \
-        -DCOMPILER_RT_BUILD_ORC=OFF \
-        -DCOMPILER_RT_INCLUDE_TESTS=OFF \
-        -DCOMPILER_RT_INSTALL_PATH:PATH="lib/clang/${resource_version}" \
-        -DLLVM_ENABLE_PER_TARGET_RUNTIME_DIR=ON \
-        -DLIBCXX_ENABLE_SHARED=OFF \
-        -DLIBCXX_ENABLE_STATIC=ON \
-        -DLIBCXX_ENABLE_STATIC_ABI_LIBRARY=ON \
-        -DLIBCXX_INCLUDE_BENCHMARKS=OFF \
-        -DLIBCXX_INCLUDE_TESTS=OFF \
-        -DLIBCXXABI_ENABLE_SHARED=OFF \
-        -DLIBCXXABI_ENABLE_STATIC=ON \
-        -DLIBCXXABI_INCLUDE_TESTS=OFF \
-        -DLIBCXXABI_USE_LLVM_UNWINDER=OFF; \
-    ninja -C runtimes-build -j "${NINJA_JOBS}" builtins cxx cxxabi; \
-    ninja -C runtimes-build install-builtins install-cxx install-cxxabi; \
+      -DCLANG_ENABLE_STATIC_ANALYZER=OFF \
+      -DRUNTIMES_CMAKE_ARGS="-DCOMPILER_RT_BUILD_CRT=OFF;-DCOMPILER_RT_BUILD_SANITIZERS=OFF;-DCOMPILER_RT_BUILD_LIBFUZZER=OFF;-DCOMPILER_RT_BUILD_PROFILE=OFF;-DCOMPILER_RT_BUILD_MEMPROF=OFF;-DCOMPILER_RT_BUILD_ORC=OFF;-DCOMPILER_RT_INCLUDE_TESTS=OFF;-DLIBCXX_ENABLE_SHARED=OFF;-DLIBCXX_ENABLE_STATIC=ON;-DLIBCXX_ENABLE_STATIC_ABI_LIBRARY=ON;-DLIBCXX_INCLUDE_BENCHMARKS=OFF;-DLIBCXX_INCLUDE_TESTS=OFF;-DLIBCXXABI_ENABLE_SHARED=OFF;-DLIBCXXABI_ENABLE_STATIC=ON;-DLIBCXXABI_INCLUDE_TESTS=OFF;-DLIBCXXABI_USE_LLVM_UNWINDER=OFF"; \
+    ninja -C build -j "${NINJA_JOBS}" distribution runtimes; \
+    ninja -C build install-distribution install-builtins install-runtimes; \
     mkdir -p "${SEED_PREFIX}/etc/clang"; \
     printf '%s\n' "--gcc-toolchain=${GCC_PREFIX}" > "${SEED_PREFIX}/etc/clang/clang.cfg"; \
     printf '%s\n' "--gcc-toolchain=${GCC_PREFIX}" > "${SEED_PREFIX}/etc/clang/clang++.cfg"; \
@@ -168,8 +145,6 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 COPY --from=seed-builder ${SEED_PREFIX}/ ${SEED_PREFIX}/
 
 RUN set -eux; \
-    printf '%s\n' "-L${SEED_PREFIX}/lib" >> "${SEED_PREFIX}/etc/clang/clang.cfg"; \
-    printf '%s\n' "-L${SEED_PREFIX}/lib" >> "${SEED_PREFIX}/etc/clang/clang++.cfg"; \
     for compiler in gcc g++ cc c++ cpp; do \
       if command -v "${compiler}"; then \
         echo "unexpected system compiler in seed image: ${compiler}" >&2; \
@@ -181,9 +156,13 @@ RUN set -eux; \
     llvm-ar --version | head -1; \
     test -x "${SEED_PREFIX}/bin/llvm-nm"; \
     test -x "${SEED_PREFIX}/bin/llvm-ranlib"; \
+    seed_triple="$(clang -dumpmachine)"; \
+    test "${seed_triple}" = "$(uname -m)-unknown-linux-gnu"; \
     test -f "${SEED_PREFIX}/include/c++/v1/__config"; \
-    test -f "${SEED_PREFIX}/lib/libc++.a"; \
-    test -f "${SEED_PREFIX}/lib/libc++abi.a"; \
+    test -f "${SEED_PREFIX}/include/${seed_triple}/c++/v1/__config_site"; \
+    test ! -e "${SEED_PREFIX}/include/c++/v1/__config_site"; \
+    test -f "${SEED_PREFIX}/lib/${seed_triple}/libc++.a"; \
+    test -f "${SEED_PREFIX}/lib/${seed_triple}/libc++abi.a"; \
     runtime_dir="$(clang --print-runtime-dir)"; \
     test -f "${runtime_dir}/libclang_rt.builtins.a"; \
     ldd "${SEED_PREFIX}/bin/clang" | tee /tmp/seed-clang.ldd; \
