@@ -191,28 +191,72 @@ RUN set -eux; \
       echo "seed clang has an external GCC runtime dependency" >&2; \
       exit 1; \
     fi; \
-    printf '%s\n' '#include <string>' 'int main() { std::string value = "seed"; return value.size() != 4; }' \
-      > /tmp/seed-smoke.cc; \
-    clang++ -fuse-ld=lld /tmp/seed-smoke.cc -o /tmp/seed-smoke; \
-    /tmp/seed-smoke; \
-    printf '%s\n' 'int main(void) { return 0; }' > /tmp/seed-builtins-smoke.c; \
-    clang --rtlib=compiler-rt --unwindlib=none -fuse-ld=lld \
-      /tmp/seed-builtins-smoke.c -o /tmp/seed-builtins-smoke; \
-    /tmp/seed-builtins-smoke; \
-    printf '%s\n' '#include <stdexcept>' '#include <string>' \
-      'int main() { try { throw std::runtime_error("libc++"); } catch (const std::exception& e) { return std::string(e.what()) != "libc++"; } }' \
-      > /tmp/seed-libcxx-smoke.cc; \
-    clang++ -stdlib=libc++ -fuse-ld=lld /tmp/seed-libcxx-smoke.cc -o /tmp/seed-libcxx-smoke; \
-    if ldd /tmp/seed-libcxx-smoke | grep -E 'libc[+][+]|libc[+][+]abi'; then \
-      echo "seed libc++ smoke test has a shared libc++ dependency" >&2; \
+    clang++ -### -x c++ /dev/null 2> /tmp/seed-default-driver.txt; \
+    grep -Fq "${GCC_PREFIX}/" /tmp/seed-default-driver.txt; \
+    grep -q -- '-lstdc++' /tmp/seed-default-driver.txt; \
+    if grep -q -- '-lc++' /tmp/seed-default-driver.txt; then \
+      echo "seed default driver unexpectedly selects libc++" >&2; \
+      exit 1; \
+    fi; \
+    printf '%s\n' \
+      '#include <stdexcept>' '#include <string>' '#include <thread>' '#include <vector>' \
+      'int main() {' \
+      '  std::vector<int> values(1);' \
+      '  std::thread worker([&] { values[0] = 42; });' \
+      '  worker.join();' \
+      '  try { throw std::runtime_error("seed"); }' \
+      '  catch (const std::exception& error) {' \
+      '    return values[0] != 42 || std::string(error.what()) != "seed";' \
+      '  }' \
+      '}' > /tmp/seed-cxx-smoke.cc; \
+    clang++ -std=c++11 -pthread -fuse-ld=lld \
+      /tmp/seed-cxx-smoke.cc -o /tmp/seed-libstdcxx-smoke; \
+    ldd /tmp/seed-libstdcxx-smoke | tee /tmp/seed-libstdcxx-smoke.ldd; \
+    grep -q 'libstdc[+][+][.]so' /tmp/seed-libstdcxx-smoke.ldd; \
+    /tmp/seed-libstdcxx-smoke; \
+    clang++ -std=c++11 -pthread -stdlib=libc++ -fuse-ld=lld \
+      /tmp/seed-cxx-smoke.cc -o /tmp/seed-libcxx-smoke; \
+    if ldd /tmp/seed-libcxx-smoke | grep -E 'libstdc[+][+]|libc[+][+][.]so|libc[+][+]abi[.]so'; then \
+      echo "seed libc++ smoke test has a shared C++ runtime dependency" >&2; \
       exit 1; \
     fi; \
     /tmp/seed-libcxx-smoke; \
+    printf '%s\n' \
+      'volatile unsigned __int128 seed_input = ((unsigned __int128)1 << 100) + 17;' \
+      'volatile unsigned __int128 seed_divisor = 3;' \
+      'int main(void) {' \
+      '  unsigned __int128 quotient = seed_input / seed_divisor;' \
+      '  unsigned __int128 remainder = seed_input % seed_divisor;' \
+      '  return quotient * seed_divisor + remainder != seed_input;' \
+      '}' > /tmp/seed-builtins-smoke.c; \
+    clang --rtlib=compiler-rt --unwindlib=none -fuse-ld=lld \
+      /tmp/seed-builtins-smoke.c -o /tmp/seed-builtins-smoke; \
+    /tmp/seed-builtins-smoke; \
+    printf '%s\n' 'int main(void) { return 0; }' > /tmp/seed-lto-smoke.c; \
+    clang -flto -fuse-ld=lld /tmp/seed-lto-smoke.c -o /tmp/seed-lto-smoke; \
+    /tmp/seed-lto-smoke; \
+    printf '%s\n' 'int seed_archive_value(void) { return 42; }' \
+      > /tmp/seed-archive-member.c; \
+    printf '%s\n' \
+      'int seed_archive_value(void);' \
+      'int main(void) { return seed_archive_value() != 42; }' \
+      > /tmp/seed-archive-main.c; \
+    clang -c /tmp/seed-archive-member.c -o /tmp/seed-archive-member.o; \
+    llvm-ar rc /tmp/libseed-smoke.a /tmp/seed-archive-member.o; \
+    llvm-ranlib /tmp/libseed-smoke.a; \
+    llvm-nm /tmp/libseed-smoke.a | grep -q ' T seed_archive_value'; \
+    clang -fuse-ld=lld /tmp/seed-archive-main.c /tmp/libseed-smoke.a \
+      -o /tmp/seed-archive-smoke; \
+    /tmp/seed-archive-smoke; \
     rm -f \
-      /tmp/seed-clang.ldd \
-      /tmp/seed-smoke.cc /tmp/seed-smoke \
+      /tmp/seed-clang.ldd /tmp/seed-default-driver.txt \
+      /tmp/seed-cxx-smoke.cc \
+      /tmp/seed-libstdcxx-smoke /tmp/seed-libstdcxx-smoke.ldd \
+      /tmp/seed-libcxx-smoke \
       /tmp/seed-builtins-smoke.c /tmp/seed-builtins-smoke \
-      /tmp/seed-libcxx-smoke.cc /tmp/seed-libcxx-smoke
+      /tmp/seed-lto-smoke.c /tmp/seed-lto-smoke \
+      /tmp/seed-archive-member.c /tmp/seed-archive-member.o \
+      /tmp/seed-archive-main.c /tmp/libseed-smoke.a /tmp/seed-archive-smoke
 
 WORKDIR /work
 CMD ["/bin/bash", "-l"]
