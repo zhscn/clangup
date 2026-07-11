@@ -1,21 +1,27 @@
-The seed image is a fixed GCC-hosted Clang used only to bootstrap LLVM builds.
-Its final stage contains no GCC driver. It inherits `glibc-devel` from the
-builder image, providing the libc headers and startup objects required to
-compile and link programs. Clang defaults to the bundled libstdc++ headers and
-runtime under `/opt/clangup-seed/gcc`; static libc++ and libc++abi development
-files and compiler-rt builtins are also installed so final LLVM builds can use
-the seed as a complete bootstrap runtime.
+# clangup seed image
 
-The image build verifies both the bundled GCC runtime and static libc++,
-including representative C++20 library features, compiler-rt builtins, LTO
-through lld, and the LLVM archive tools before the image is published.
+The seed image provides Clang 22.1.8 for bootstrapping LLVM toolchain builds.
+It contains:
+
+- Clang, LLD and LLVM archive tools;
+- the native GCC toolchain used by Clang's default driver;
+- static libc++, libc++abi and compiler-rt builtins;
+- the build tools inherited from `clangup-builder`.
+
+Clang and the default driver use the native GCC runtime. Programs may select
+the packaged static libc++ with `-stdlib=libc++`.
+
+The image build verifies the default driver, C++20 libc++, compiler-rt builtins,
+LTO and LLVM archive tools.
+
+## Build
 
 ```sh
 docker build \
   --network host \
-  -f docker/clangup-seed/Dockerfile \
   --build-arg BASE_IMAGE=clangup-builder:1 \
   --build-arg BASE_PROFILE=el7 \
+  -f docker/clangup-seed/Dockerfile \
   -t clangup-seed:22.1.8-1 .
 ```
 
@@ -23,12 +29,10 @@ docker build \
 docker build \
   --network host \
   --platform linux/arm64 \
-  -f docker/clangup-seed/Dockerfile \
   --build-arg BASE_IMAGE=clangup-builder:1 \
   --build-arg BASE_PROFILE=el8 \
+  -f docker/clangup-seed/Dockerfile \
   -t clangup-seed:22.1.8-1 .
 ```
 
-The published `clangup-seed:22.1.8-1` tag is a multi-architecture image.
-Docker selects its `linux/amd64` or `linux/arm64` manifest automatically. The
-moving `clangup-seed:latest` tag points to the most recently published release.
+Published tags are `22.1.8-1` and `latest`.

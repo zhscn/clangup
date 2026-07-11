@@ -99,7 +99,7 @@ RUN set -eux; \
     fi
 
 # -----------------------------------------------------------------------------
-# Compiler-free base inherited by the final image
+# Builder base with the platform GCC toolchain
 # -----------------------------------------------------------------------------
 
 FROM repo-base AS builder-base
@@ -146,6 +146,18 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 RUN set -eux; \
     package_manager="$(command -v dnf || command -v yum)"; \
+    case "${BASE_PROFILE}" in \
+      el7) \
+        "${package_manager}" install -y gcc gcc-c++; \
+        ;; \
+      el8) \
+        "${package_manager}" install -y gcc gcc-c++ libstdc++-static; \
+        ;; \
+      *) \
+        echo "unsupported BASE_PROFILE=${BASE_PROFILE}" >&2; \
+        exit 2; \
+        ;; \
+    esac; \
     "${package_manager}" install -y \
       autoconf \
       automake \
@@ -178,28 +190,20 @@ RUN set -eux; \
     "${package_manager}" clean all; \
     rm -rf /var/cache/yum /var/cache/dnf; \
     mkdir -p "${PREFIX}"; \
-    test -f /lib64/libgcc_s.so.1; \
-    mkdir -p "${PREFIX}/lib"; \
-    ln -s ../../../lib64/libgcc_s.so.1 "${PREFIX}/lib/libgcc_s.so"; \
-    for compiler in gcc g++ cc c++ cpp; do \
-      if command -v "${compiler}"; then \
-        echo "unexpected compiler in builder base: ${compiler}" >&2; \
-        exit 1; \
-      fi; \
-    done
+    gcc --version; \
+    g++ --version; \
+    test -f "$(gcc -print-file-name=libgcc_s.so.1)"; \
+    test -f "$(g++ -print-file-name=libstdc++.so.6)"
 
 # -----------------------------------------------------------------------------
-# Dependency build stage; the system compiler remains confined to this stage
+# Dependency build stage
 # -----------------------------------------------------------------------------
 
 FROM builder-base AS deps-builder
 
 RUN set -eux; \
     package_manager="$(command -v dnf || command -v yum)"; \
-    "${package_manager}" install -y gcc gcc-c++ libtool; \
-    if [ "${BASE_PROFILE}" = "el8" ]; then \
-      "${package_manager}" install -y libstdc++-static; \
-    fi; \
+    "${package_manager}" install -y libtool; \
     "${package_manager}" clean all; \
     rm -rf /var/cache/yum /var/cache/dnf; \
     mkdir -p /tmp/clangup-src
@@ -300,8 +304,7 @@ RUN set -eux; \
       --disable-shared \
       --enable-static \
       --disable-app \
-      --disable-examples \
-      --disable-python-bindings; \
+      --disable-examples; \
     make; \
     make install; \
     rm -f "${PREFIX}/lib/libnghttp2.so" "${PREFIX}/lib/libnghttp2.so."*; \
@@ -482,7 +485,7 @@ RUN set -eux; \
     ! test -e "${PREFIX}/lib/libzstd.so"
 
 # -----------------------------------------------------------------------------
-# Final compiler-free builder image
+# Final builder image
 # -----------------------------------------------------------------------------
 
 FROM builder-base AS final

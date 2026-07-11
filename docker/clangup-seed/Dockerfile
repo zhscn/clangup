@@ -7,23 +7,14 @@ ARG BASE_IMAGE=clangup-builder:1
 ARG LLVM_VERSION=22.1.8
 ARG LLVM_SHA256=922f1817a0df7b1489272d18134ee0087a8b068828f87ac63b9861b1a9965888
 ARG SEED_PREFIX=/opt/clangup-seed
-ARG GCC_PREFIX=/opt/clangup-seed/gcc
 
 # -----------------------------------------------------------------------------
-# GCC-hosted seed build
+# Seed platform toolchain
 # -----------------------------------------------------------------------------
 
-FROM ${BASE_IMAGE} AS seed-builder
+FROM ${BASE_IMAGE} AS seed-base
 
 ARG BASE_PROFILE=el7
-ARG LLVM_VERSION
-ARG LLVM_SHA256
-ARG SEED_PREFIX
-ARG GCC_PREFIX
-ARG NINJA_JOBS=4
-ARG LLVM_PARALLEL_LINK_JOBS=1
-
-ENV CLANGUP_BUILDER_PREFIX=/opt/clangup-builder
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -35,12 +26,10 @@ RUN set -eux; \
         "${package_manager}" "${package_manager_opts[@]}" install -y \
           devtoolset-11-binutils devtoolset-11-gcc devtoolset-11-gcc-c++; \
         source /opt/rh/devtoolset-11/enable; \
-        gcc_root=/opt/rh/devtoolset-11/root/usr; \
         ;; \
       el8) \
         "${package_manager}" "${package_manager_opts[@]}" install -y \
           gcc gcc-c++ libstdc++-static; \
-        gcc_root=/usr; \
         ;; \
       *) \
         echo "unsupported BASE_PROFILE=${BASE_PROFILE}" >&2; \
@@ -49,32 +38,35 @@ RUN set -eux; \
     esac; \
     "${package_manager}" clean all; \
     rm -rf /var/cache/yum /var/cache/dnf; \
-    gcc_triple="$(gcc -dumpmachine)"; \
-    gcc_install_dir="$(dirname "$(gcc -print-libgcc-file-name)")"; \
-    gcc_version="$(basename "${gcc_install_dir}")"; \
-    libstdcpp="$(gcc -print-file-name=libstdc++.so.6)"; \
-    libgcc_s="$(gcc -print-file-name=libgcc_s.so.1)"; \
-    test -d "${gcc_install_dir}"; \
-    test -f "${libstdcpp}"; \
-    test -f "${libgcc_s}"; \
-    mkdir -p \
-      "${GCC_PREFIX}/include" \
-      "${GCC_PREFIX}/lib/gcc/${gcc_triple}" \
-      "${GCC_PREFIX}/lib64"; \
-    cp -a "${gcc_root}/include/c++" "${GCC_PREFIX}/include/"; \
-    cp -a "${gcc_install_dir}" "${GCC_PREFIX}/lib/gcc/${gcc_triple}/"; \
-    cp -L "${libstdcpp}" "${GCC_PREFIX}/lib64/libstdc++.so.6"; \
-    cp -L "${libgcc_s}" "${GCC_PREFIX}/lib64/libgcc_s.so.1"; \
-    printf '%s\n' "${gcc_triple}" > "${GCC_PREFIX}/triple"; \
-    printf '%s\n' "${gcc_version}" > "${GCC_PREFIX}/version"
+    gcc --version; \
+    g++ --version; \
+    test -f "$(gcc -print-file-name=libgcc_s.so.1)"; \
+    test -f "$(g++ -print-file-name=libstdc++.so.6)"
+
+# -----------------------------------------------------------------------------
+# GCC-hosted seed build
+# -----------------------------------------------------------------------------
+
+FROM seed-base AS seed-builder
+
+ARG BASE_PROFILE=el7
+ARG LLVM_VERSION
+ARG LLVM_SHA256
+ARG SEED_PREFIX
+ARG NINJA_JOBS=4
+ARG LLVM_PARALLEL_LINK_JOBS=1
+
+ENV CLANGUP_BUILDER_PREFIX=/opt/clangup-builder
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 WORKDIR /tmp/clangup-seed-src
 
 RUN set -eux; \
     source "${CLANGUP_BUILDER_PREFIX}/env"; \
     case "${BASE_PROFILE}" in \
-      el7) source /opt/rh/devtoolset-11/enable ;; \
-      el8) ;; \
+      el7) source /opt/rh/devtoolset-11/enable; gcc_toolchain=/opt/rh/devtoolset-11/root/usr ;; \
+      el8) gcc_toolchain=/usr ;; \
     esac; \
     case "$(uname -m)" in \
       x86_64) llvm_targets=X86; seed_triple=x86_64-unknown-linux-gnu ;; \
@@ -91,8 +83,6 @@ RUN set -eux; \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_INSTALL_PREFIX="${SEED_PREFIX}" \
       -DCMAKE_PREFIX_PATH="${CLANGUP_BUILDER_PREFIX}" \
-      -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc" \
-      -DCMAKE_SHARED_LINKER_FLAGS="-static-libstdc++ -static-libgcc" \
       -DLLVM_ENABLE_PROJECTS="clang;lld" \
       -DLLVM_ENABLE_RUNTIMES="compiler-rt;libcxx;libcxxabi" \
       -DLLVM_TARGETS_TO_BUILD="${llvm_targets}" \
@@ -117,23 +107,23 @@ RUN set -eux; \
     ninja -C build -j "${NINJA_JOBS}" distribution runtimes; \
     ninja -C build install-distribution install-builtins install-runtimes; \
     mkdir -p "${SEED_PREFIX}/etc/clang"; \
-    printf '%s\n' "--gcc-toolchain=${GCC_PREFIX}" > "${SEED_PREFIX}/etc/clang/clang.cfg"; \
-    printf '%s\n' "--gcc-toolchain=${GCC_PREFIX}" > "${SEED_PREFIX}/etc/clang/clang++.cfg"; \
+    printf '%s\n' "--gcc-toolchain=${gcc_toolchain}" > "${SEED_PREFIX}/etc/clang/clang.cfg"; \
+    printf '%s\n' "--gcc-toolchain=${gcc_toolchain}" > "${SEED_PREFIX}/etc/clang/clang++.cfg"; \
     rm -rf /tmp/clangup-seed-src
 
 # -----------------------------------------------------------------------------
-# Compiler-free seed image
+# Seed image
 # -----------------------------------------------------------------------------
 
-FROM ${BASE_IMAGE} AS final
+FROM seed-base AS final
 
 ARG SEED_PREFIX
-ARG GCC_PREFIX
+ARG BASE_PROFILE=el7
 
 ENV CLANGUP_BUILDER_PREFIX=/opt/clangup-builder
 ENV CLANGUP_SEED_PREFIX=${SEED_PREFIX}
 ENV PATH=${SEED_PREFIX}/bin:/opt/clangup-builder/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-ENV LD_LIBRARY_PATH=${GCC_PREFIX}/lib64:${SEED_PREFIX}/lib64:${SEED_PREFIX}/lib:/opt/clangup-builder/lib64:/opt/clangup-builder/lib
+ENV LD_LIBRARY_PATH=${SEED_PREFIX}/lib64:${SEED_PREFIX}/lib:/opt/clangup-builder/lib64:/opt/clangup-builder/lib:/opt/rh/devtoolset-11/root/usr/lib64
 ENV CC=${SEED_PREFIX}/bin/clang
 ENV CXX=${SEED_PREFIX}/bin/clang++
 ENV AR=${SEED_PREFIX}/bin/llvm-ar
@@ -145,12 +135,6 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 COPY --from=seed-builder ${SEED_PREFIX}/ ${SEED_PREFIX}/
 
 RUN set -eux; \
-    for compiler in gcc g++ cc c++ cpp; do \
-      if command -v "${compiler}"; then \
-        echo "unexpected system compiler in seed image: ${compiler}" >&2; \
-        exit 1; \
-      fi; \
-    done; \
     clang++ --version; \
     ld.lld --version; \
     llvm-ar --version | head -1; \
@@ -158,6 +142,15 @@ RUN set -eux; \
     test -x "${SEED_PREFIX}/bin/llvm-ranlib"; \
     seed_triple="$(clang -dumpmachine)"; \
     test "${seed_triple}" = "$(uname -m)-unknown-linux-gnu"; \
+    case "${BASE_PROFILE}" in \
+      el7) gcc_toolchain=/opt/rh/devtoolset-11/root/usr ;; \
+      el8) gcc_toolchain=/usr ;; \
+      *) echo "unsupported BASE_PROFILE=${BASE_PROFILE}" >&2; exit 2 ;; \
+    esac; \
+    "${gcc_toolchain}/bin/gcc" --version; \
+    "${gcc_toolchain}/bin/g++" --version; \
+    gcc_libstdcpp="$(readlink -f "$("${gcc_toolchain}/bin/g++" -print-file-name=libstdc++.so.6)")"; \
+    test -f "${gcc_libstdcpp}"; \
     test -f "${SEED_PREFIX}/include/c++/v1/__config"; \
     test -f "${SEED_PREFIX}/include/${seed_triple}/c++/v1/__config_site"; \
     test ! -e "${SEED_PREFIX}/include/c++/v1/__config_site"; \
@@ -166,12 +159,9 @@ RUN set -eux; \
     runtime_dir="$(clang --print-runtime-dir)"; \
     test -f "${runtime_dir}/libclang_rt.builtins.a"; \
     ldd "${SEED_PREFIX}/bin/clang" | tee /tmp/seed-clang.ldd; \
-    if grep -E 'libstdc[+][+]|libgcc_s' /tmp/seed-clang.ldd; then \
-      echo "seed clang has an external GCC runtime dependency" >&2; \
-      exit 1; \
-    fi; \
+    grep -Fq "libstdc++.so.6 => ${gcc_libstdcpp}" /tmp/seed-clang.ldd; \
     clang++ -### -x c++ /dev/null 2> /tmp/seed-default-driver.txt; \
-    grep -Fq "${GCC_PREFIX}/" /tmp/seed-default-driver.txt; \
+    grep -Fq "${gcc_toolchain}/" /tmp/seed-default-driver.txt; \
     grep -q -- '-lstdc++' /tmp/seed-default-driver.txt; \
     if grep -q -- '-lc++' /tmp/seed-default-driver.txt; then \
       echo "seed default driver unexpectedly selects libc++" >&2; \
@@ -191,7 +181,7 @@ RUN set -eux; \
     clang++ -std=c++11 -pthread -fuse-ld=lld \
       /tmp/seed-cxx-smoke.cc -o /tmp/seed-libstdcxx-smoke; \
     ldd /tmp/seed-libstdcxx-smoke | tee /tmp/seed-libstdcxx-smoke.ldd; \
-    grep -q 'libstdc[+][+][.]so' /tmp/seed-libstdcxx-smoke.ldd; \
+    grep -Fq "libstdc++.so.6 => ${gcc_libstdcpp}" /tmp/seed-libstdcxx-smoke.ldd; \
     /tmp/seed-libstdcxx-smoke; \
     clang++ -std=c++11 -pthread -stdlib=libc++ -fuse-ld=lld \
       /tmp/seed-cxx-smoke.cc -o /tmp/seed-libcxx-smoke; \
