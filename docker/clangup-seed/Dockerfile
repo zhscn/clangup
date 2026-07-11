@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=clangup-builder:el7-glibc2.17-v1
+ARG BASE_IMAGE=clangup-builder:1
 
 # -----------------------------------------------------------------------------
 # Fixed seed release

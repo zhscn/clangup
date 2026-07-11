@@ -14,13 +14,13 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Version suffix appended to the image tag (e.g. v1)
+        description: Immutable multi-architecture image version
         type: string
         required: true
-        default: v1
+        default: "1"
 
 concurrency:
-  group: clangup-builder-${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref }}
+  group: clangup-builder-${{ github.event_name == 'workflow_dispatch' && 'publish' || github.ref }}
   cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 env:
@@ -57,7 +57,7 @@ jobs:
             -f docker/clangup-builder/Dockerfile .
 
   publish:
-    name: publish ${{ matrix.tag }}
+    name: build ${{ matrix.platform }}
     if: github.event_name == 'workflow_dispatch'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 240
@@ -68,14 +68,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - tag: el7-glibc2.17
-            profile: el7
+          - profile: el7
             platform: linux/amd64
+            platform_pair: linux-amd64
             runner: ubuntu-24.04
             base_image: quay.io/centos/centos@sha256:e4ca2ed0202e76be184e75fb26d14bf974193579039d5573fb2348664deef76e
-          - tag: el8-aarch64-glibc2.28
-            profile: el8
+          - profile: el8
             platform: linux/arm64
+            platform_pair: linux-arm64
             runner: ubuntu-24.04-arm
             base_image: quay.io/centos/centos@sha256:ec16f510e8cd1cceeddc6888fcb37c6d6b7c6863fbc70bdbe660a8ccad4bab6a
     steps:
@@ -83,8 +83,8 @@ jobs:
         env:
           VERSION: ${{ inputs.version }}
         run: |
-          if [[ ! "$VERSION" =~ ^v[1-9][0-9]*$ ]]; then
-            echo "version must match v[1-9][0-9]*" >&2
+          if [[ ! "$VERSION" =~ ^[1-9][0-9]*$ ]]; then
+            echo "version must be a positive integer: $VERSION" >&2
             exit 1
           fi
 
@@ -107,21 +107,19 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Resolve image ref
+      - name: Resolve image name
         id: image
-        env:
-          VERSION: ${{ inputs.version }}
-          IMAGE_TAG: ${{ matrix.tag }}
         run: |
-          ref="${REGISTRY}/${IMAGE_REPO,,}:${IMAGE_TAG}-${VERSION}"
-          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "name=${REGISTRY}/${IMAGE_REPO,,}" >> "$GITHUB_OUTPUT"
 
       - name: Refuse to overwrite an existing tag
         env:
-          IMAGE_REF: ${{ steps.image.outputs.ref }}
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
+          VERSION: ${{ inputs.version }}
         run: |
-          if docker buildx imagetools inspect "$IMAGE_REF" >/dev/null 2>&1; then
-            echo "image tag already exists: $IMAGE_REF" >&2
+          ref="${IMAGE_NAME}:${VERSION}"
+          if docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
+            echo "image tag already exists: $ref" >&2
             exit 1
           fi
 
@@ -137,13 +135,89 @@ jobs:
           build-args: |
             BASE_IMAGE=${{ matrix.base_image }}
             BASE_PROFILE=${{ matrix.profile }}
-          tags: ${{ steps.image.outputs.ref }}
-          push: true
-          cache-from: type=gha,scope=clangup-builder-${{ matrix.tag }}
-          cache-to: type=gha,mode=max,scope=clangup-builder-${{ matrix.tag }}
+          outputs: type=image,name=${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=clangup-builder-${{ matrix.platform_pair }}
+          cache-to: type=gha,mode=max,scope=clangup-builder-${{ matrix.platform_pair }}
 
-      - name: Record published digest
+      - name: Export digest
         env:
-          IMAGE_REF: ${{ steps.image.outputs.ref }}
           DIGEST: ${{ steps.build.outputs.digest }}
-        run: echo "### ${IMAGE_REF}@${DIGEST}" >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: digests-${{ matrix.platform_pair }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: publish multi-architecture image
+    if: github.event_name == 'workflow_dispatch'
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download digests
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: digests-*
+          path: /tmp/digests
+          merge-multiple: true
+
+      - name: Create image index
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          image="${REGISTRY}/${IMAGE_REPO,,}"
+          ref="${image}:${VERSION}"
+          latest="${image}:latest"
+          # Recheck after the platform builds to close the publish race.
+          if docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
+            echo "image tag already exists: $ref" >&2
+            exit 1
+          fi
+
+          refs=()
+          for file in /tmp/digests/*; do
+            refs+=("${image}@sha256:${file##*/}")
+          done
+          if [[ "${#refs[@]}" -ne 2 ]]; then
+            echo "expected two platform digests, got ${#refs[@]}" >&2
+            exit 1
+          fi
+
+          docker buildx imagetools create --tag "$ref" --tag "$latest" "${refs[@]}"
+          actual="$(docker buildx imagetools inspect "$ref" --raw |
+            jq -c '[.manifests[].platform | .os + "/" + .architecture] | sort')"
+          expected='["linux/amd64","linux/arm64"]'
+          if [[ "$actual" != "$expected" ]]; then
+            echo "unexpected platform set for $ref: $actual" >&2
+            exit 1
+          fi
+          digest="$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest}}' |
+            jq -er .digest)"
+          latest_digest="$(docker buildx imagetools inspect "$latest" --format '{{json .Manifest}}' |
+            jq -er .digest)"
+          if [[ "$latest_digest" != "$digest" ]]; then
+            echo "latest digest mismatch: $latest_digest != $digest" >&2
+            exit 1
+          fi
+          echo "### ${ref}@${digest}" >> "$GITHUB_STEP_SUMMARY"
+          echo "### ${latest}@${digest}" >> "$GITHUB_STEP_SUMMARY"

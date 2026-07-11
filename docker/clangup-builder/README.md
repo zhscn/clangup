@@ -2,7 +2,7 @@
 docker build \
   --network host \
   -f docker/clangup-builder/Dockerfile \
-  -t clangup-builder:el7-glibc2.17-v1 .
+  -t clangup-builder:1 .
 ```
 
 ```sh
@@ -12,5 +12,10 @@ docker build \
   -f docker/clangup-builder/Dockerfile \
   --build-arg BASE_IMAGE=quay.io/centos/centos:8 \
   --build-arg BASE_PROFILE=el8 \
-  -t clangup-builder:el8-aarch64-glibc2.28-v1 .
+  -t clangup-builder:1 .
 ```
+
+The published `clangup-builder:1` tag is a multi-architecture image. Its
+`linux/amd64` manifest uses the EL7 profile, while `linux/arm64` uses EL8.
+Docker selects the matching manifest for the host architecture. The moving
+`clangup-builder:latest` tag points to the most recently published version.
