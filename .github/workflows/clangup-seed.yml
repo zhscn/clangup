@@ -51,7 +51,7 @@ jobs:
       - name: Check Dockerfile
         run: |
           docker buildx build --check \
-            --build-arg BASE_IMAGE=ghcr.io/${{ github.repository_owner }}/clangup-builder:1 \
+            --build-arg BASE_IMAGE=quay.io/centos/centos:7 \
             --build-arg BASE_PROFILE=el7 \
             -f docker/clangup-seed/Dockerfile .
 
