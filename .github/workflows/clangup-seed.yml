@@ -1,0 +1,157 @@
+name: clangup-seed image
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/clangup-seed.yml
+      - docker/clangup-seed/**
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/clangup-seed.yml
+      - docker/clangup-seed/**
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Seed image revision (e.g. v1)
+        type: string
+        required: true
+        default: v1
+      builder_version:
+        description: Immutable clangup-builder revision used as the base
+        type: string
+        required: true
+        default: v1
+
+concurrency:
+  group: clangup-seed-${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+
+env:
+  REGISTRY: ghcr.io
+  BUILDER_REPO: ${{ github.repository_owner }}/clangup-builder
+  IMAGE_REPO: ${{ github.repository_owner }}/clangup-seed
+
+jobs:
+  check:
+    name: check seed Dockerfile
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Check Dockerfile
+        run: |
+          docker buildx build --check \
+            --build-arg BASE_IMAGE=quay.io/centos/centos:7 \
+            --build-arg BASE_PROFILE=el7 \
+            -f docker/clangup-seed/Dockerfile .
+
+  publish:
+    name: publish ${{ matrix.tag }}
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tag: llvm22-el7-glibc2.17
+            builder_tag: el7-glibc2.17
+            profile: el7
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - tag: llvm22-el8-aarch64-glibc2.28
+            builder_tag: el8-aarch64-glibc2.28
+            profile: el8
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Validate revisions
+        env:
+          VERSION: ${{ inputs.version }}
+          BUILDER_VERSION: ${{ inputs.builder_version }}
+        run: |
+          for value in "$VERSION" "$BUILDER_VERSION"; do
+            if [[ ! "$value" =~ ^v[1-9][0-9]*$ ]]; then
+              echo "revision must match v[1-9][0-9]*: $value" >&2
+              exit 1
+            fi
+          done
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h
+          docker system df
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve image refs
+        id: image
+        env:
+          VERSION: ${{ inputs.version }}
+          BUILDER_VERSION: ${{ inputs.builder_version }}
+          IMAGE_TAG: ${{ matrix.tag }}
+          BUILDER_TAG: ${{ matrix.builder_tag }}
+        run: |
+          registry="${REGISTRY,,}"
+          builder_repo="${BUILDER_REPO,,}"
+          image_repo="${IMAGE_REPO,,}"
+          base_tag="${registry}/${builder_repo}:${BUILDER_TAG}-${BUILDER_VERSION}"
+          base_digest="$(docker buildx imagetools inspect "$base_tag" --format '{{json .Manifest}}' | jq -er .digest)"
+          echo "base=${registry}/${builder_repo}@${base_digest}" >> "$GITHUB_OUTPUT"
+          echo "ref=${registry}/${image_repo}:${IMAGE_TAG}-${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Refuse to overwrite an existing tag
+        env:
+          IMAGE_REF: ${{ steps.image.outputs.ref }}
+        run: |
+          if docker buildx imagetools inspect "$IMAGE_REF" >/dev/null 2>&1; then
+            echo "image tag already exists: $IMAGE_REF" >&2
+            exit 1
+          fi
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: docker/clangup-seed/Dockerfile
+          platforms: ${{ matrix.platform }}
+          network: host
+          provenance: false
+          build-args: |
+            BASE_IMAGE=${{ steps.image.outputs.base }}
+            BASE_PROFILE=${{ matrix.profile }}
+          tags: ${{ steps.image.outputs.ref }}
+          push: true
+          cache-from: type=gha,scope=clangup-seed-${{ matrix.tag }}
+          cache-to: type=gha,mode=max,scope=clangup-seed-${{ matrix.tag }}
+
+      - name: Record published digest
+        env:
+          IMAGE_REF: ${{ steps.image.outputs.ref }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: echo "### ${IMAGE_REF}@${DIGEST}" >> "$GITHUB_STEP_SUMMARY"
