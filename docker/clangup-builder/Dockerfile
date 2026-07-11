@@ -178,6 +178,9 @@ RUN set -eux; \
     "${package_manager}" clean all; \
     rm -rf /var/cache/yum /var/cache/dnf; \
     mkdir -p "${PREFIX}"; \
+    test -f /lib64/libgcc_s.so.1; \
+    mkdir -p "${PREFIX}/lib"; \
+    ln -s ../../../lib64/libgcc_s.so.1 "${PREFIX}/lib/libgcc_s.so"; \
     for compiler in gcc g++ cc c++ cpp; do \
       if command -v "${compiler}"; then \
         echo "unexpected compiler in builder base: ${compiler}" >&2; \

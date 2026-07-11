@@ -15,9 +15,9 @@ docker build \
   -t clangup-builder:1 .
 ```
 
-The builder contains the glibc development headers and startup objects needed
-by Clang, but no system compiler. The published `clangup-builder:1` tag is a
-multi-architecture image. Its `linux/amd64` manifest uses the EL7 profile,
-while `linux/arm64` uses EL8.
+The builder contains the glibc development headers, startup objects, and the
+`libgcc_s` linker name needed by Clang, but no system compiler. The published
+`clangup-builder:1` tag is a multi-architecture image. Its `linux/amd64`
+manifest uses the EL7 profile, while `linux/arm64` uses EL8.
 Docker selects the matching manifest for the host architecture. The moving
 `clangup-builder:latest` tag points to the most recently published version.

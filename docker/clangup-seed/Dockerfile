@@ -116,7 +116,15 @@ RUN set -eux; \
       cmake -G Ninja -S "${src}/runtimes" -B runtimes-build \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX="${SEED_PREFIX}" \
-        -DLLVM_ENABLE_RUNTIMES="libcxx;libcxxabi" \
+        -DLLVM_ENABLE_RUNTIMES="compiler-rt;libcxx;libcxxabi" \
+        -DCOMPILER_RT_BUILD_BUILTINS=ON \
+        -DCOMPILER_RT_BUILD_CRT=OFF \
+        -DCOMPILER_RT_BUILD_SANITIZERS=OFF \
+        -DCOMPILER_RT_BUILD_LIBFUZZER=OFF \
+        -DCOMPILER_RT_BUILD_PROFILE=OFF \
+        -DCOMPILER_RT_BUILD_MEMPROF=OFF \
+        -DCOMPILER_RT_BUILD_ORC=OFF \
+        -DCOMPILER_RT_INCLUDE_TESTS=OFF \
         -DLIBCXX_ENABLE_SHARED=OFF \
         -DLIBCXX_ENABLE_STATIC=ON \
         -DLIBCXX_ENABLE_STATIC_ABI_LIBRARY=ON \
@@ -126,8 +134,8 @@ RUN set -eux; \
         -DLIBCXXABI_ENABLE_STATIC=ON \
         -DLIBCXXABI_INCLUDE_TESTS=OFF \
         -DLIBCXXABI_USE_LLVM_UNWINDER=OFF; \
-    ninja -C runtimes-build -j "${NINJA_JOBS}" cxx cxxabi; \
-    ninja -C runtimes-build install-cxx install-cxxabi; \
+    ninja -C runtimes-build -j "${NINJA_JOBS}" builtins cxx cxxabi; \
+    ninja -C runtimes-build install-builtins install-cxx install-cxxabi; \
     mkdir -p "${SEED_PREFIX}/etc/clang"; \
     printf '%s\n' "--gcc-toolchain=${GCC_PREFIX}" > "${SEED_PREFIX}/etc/clang/clang.cfg"; \
     printf '%s\n' "--gcc-toolchain=${GCC_PREFIX}" > "${SEED_PREFIX}/etc/clang/clang++.cfg"; \
@@ -173,6 +181,7 @@ RUN set -eux; \
     test -f "${SEED_PREFIX}/include/c++/v1/__config"; \
     test -f "${SEED_PREFIX}/lib/libc++.a"; \
     test -f "${SEED_PREFIX}/lib/libc++abi.a"; \
+    find "${SEED_PREFIX}/lib/clang" -name 'libclang_rt.builtins*.a' -print -quit | grep -q .; \
     ldd "${SEED_PREFIX}/bin/clang" | tee /tmp/seed-clang.ldd; \
     if grep -E 'libstdc[+][+]|libgcc_s' /tmp/seed-clang.ldd; then \
       echo "seed clang has an external GCC runtime dependency" >&2; \
