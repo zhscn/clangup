@@ -160,6 +160,7 @@ RUN set -eux; \
       file \
       findutils \
       gettext-devel \
+      glibc-devel \
       gperf \
       groff \
       libffi-devel \

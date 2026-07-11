@@ -1,7 +1,9 @@
 The seed image is a fixed GCC-hosted Clang used only to bootstrap LLVM builds.
-Its final stage contains no GCC driver. Clang defaults to the bundled libstdc++
-headers and runtime under `/opt/clangup-seed/gcc`; static libc++ and libc++abi
-development files are also installed so final LLVM builds can explicitly use
+Its final stage contains no GCC driver. It inherits `glibc-devel` from the
+builder image, providing the libc headers and startup objects required to
+compile and link programs. Clang defaults to the bundled libstdc++ headers and
+runtime under `/opt/clangup-seed/gcc`; static libc++ and libc++abi development
+files are also installed so final LLVM builds can explicitly use
 `-stdlib=libc++`.
 
 ```sh
