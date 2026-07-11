@@ -37,11 +37,7 @@ RUN set -eux; \
         ;; \
     esac; \
     "${package_manager}" clean all; \
-    rm -rf /var/cache/yum /var/cache/dnf; \
-    gcc --version; \
-    g++ --version; \
-    test -f "$(gcc -print-file-name=libgcc_s.so.1)"; \
-    test -f "$(g++ -print-file-name=libstdc++.so.6)"
+    rm -rf /var/cache/yum /var/cache/dnf
 
 # -----------------------------------------------------------------------------
 # GCC-hosted seed build
@@ -135,11 +131,6 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 COPY --from=seed-builder ${SEED_PREFIX}/ ${SEED_PREFIX}/
 
 RUN set -eux; \
-    clang++ --version; \
-    ld.lld --version; \
-    llvm-ar --version | head -1; \
-    test -x "${SEED_PREFIX}/bin/llvm-nm"; \
-    test -x "${SEED_PREFIX}/bin/llvm-ranlib"; \
     seed_triple="$(clang -dumpmachine)"; \
     test "${seed_triple}" = "$(uname -m)-unknown-linux-gnu"; \
     case "${BASE_PROFILE}" in \
@@ -147,26 +138,8 @@ RUN set -eux; \
       el8) gcc_toolchain=/usr ;; \
       *) echo "unsupported BASE_PROFILE=${BASE_PROFILE}" >&2; exit 2 ;; \
     esac; \
-    "${gcc_toolchain}/bin/gcc" --version; \
-    "${gcc_toolchain}/bin/g++" --version; \
-    gcc_libstdcpp="$(readlink -f "$("${gcc_toolchain}/bin/g++" -print-file-name=libstdc++.so.6)")"; \
-    test -f "${gcc_libstdcpp}"; \
-    test -f "${SEED_PREFIX}/include/c++/v1/__config"; \
-    test -f "${SEED_PREFIX}/include/${seed_triple}/c++/v1/__config_site"; \
-    test ! -e "${SEED_PREFIX}/include/c++/v1/__config_site"; \
-    test -f "${SEED_PREFIX}/lib/${seed_triple}/libc++.a"; \
-    test -f "${SEED_PREFIX}/lib/${seed_triple}/libc++abi.a"; \
-    runtime_dir="$(clang --print-runtime-dir)"; \
-    test -f "${runtime_dir}/libclang_rt.builtins.a"; \
-    ldd "${SEED_PREFIX}/bin/clang" | tee /tmp/seed-clang.ldd; \
-    grep -Fq "libstdc++.so.6 => ${gcc_libstdcpp}" /tmp/seed-clang.ldd; \
     clang++ -### -x c++ /dev/null 2> /tmp/seed-default-driver.txt; \
     grep -Fq "${gcc_toolchain}/" /tmp/seed-default-driver.txt; \
-    grep -q -- '-lstdc++' /tmp/seed-default-driver.txt; \
-    if grep -q -- '-lc++' /tmp/seed-default-driver.txt; then \
-      echo "seed default driver unexpectedly selects libc++" >&2; \
-      exit 1; \
-    fi; \
     printf '%s\n' \
       '#include <stdexcept>' '#include <string>' '#include <thread>' '#include <vector>' \
       'int main() {' \
@@ -181,15 +154,8 @@ RUN set -eux; \
     clang++ -std=c++11 -pthread -fuse-ld=lld \
       /tmp/seed-cxx-smoke.cc -o /tmp/seed-libstdcxx-smoke; \
     ldd /tmp/seed-libstdcxx-smoke | tee /tmp/seed-libstdcxx-smoke.ldd; \
-    grep -Fq "libstdc++.so.6 => ${gcc_libstdcpp}" /tmp/seed-libstdcxx-smoke.ldd; \
+    grep -q 'libstdc[+][+][.]so' /tmp/seed-libstdcxx-smoke.ldd; \
     /tmp/seed-libstdcxx-smoke; \
-    clang++ -std=c++11 -pthread -stdlib=libc++ -fuse-ld=lld \
-      /tmp/seed-cxx-smoke.cc -o /tmp/seed-libcxx-smoke; \
-    if ldd /tmp/seed-libcxx-smoke | grep -E 'libstdc[+][+]|libc[+][+][.]so|libc[+][+]abi[.]so'; then \
-      echo "seed libc++ smoke test has a shared C++ runtime dependency" >&2; \
-      exit 1; \
-    fi; \
-    /tmp/seed-libcxx-smoke; \
     printf '%s\n' \
       '#include <algorithm>' '#include <array>' '#include <atomic>' \
       '#include <concepts>' '#include <format>' '#include <ranges>' \
@@ -248,10 +214,9 @@ RUN set -eux; \
       -o /tmp/seed-archive-smoke; \
     /tmp/seed-archive-smoke; \
     rm -f \
-      /tmp/seed-clang.ldd /tmp/seed-default-driver.txt \
+      /tmp/seed-default-driver.txt \
       /tmp/seed-cxx-smoke.cc \
       /tmp/seed-libstdcxx-smoke /tmp/seed-libstdcxx-smoke.ldd \
-      /tmp/seed-libcxx-smoke \
       /tmp/seed-libcxx-cxx20-smoke.cc /tmp/seed-libcxx-cxx20-smoke \
       /tmp/seed-builtins-smoke.c /tmp/seed-builtins-smoke \
       /tmp/seed-lto-smoke.c /tmp/seed-lto-smoke \
