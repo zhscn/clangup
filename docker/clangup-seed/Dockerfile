@@ -222,6 +222,36 @@ RUN set -eux; \
     fi; \
     /tmp/seed-libcxx-smoke; \
     printf '%s\n' \
+      '#include <algorithm>' '#include <array>' '#include <atomic>' \
+      '#include <concepts>' '#include <format>' '#include <ranges>' \
+      '#include <span>' '#include <string>' '#include <thread>' '#include <vector>' \
+      'template <std::integral T>' \
+      'T sum(std::span<const T> values) {' \
+      '  T result{};' \
+      '  for (T value : values | std::views::filter([](T value) { return value > 1; }))' \
+      '    result += value;' \
+      '  return result;' \
+      '}' \
+      'int main() {' \
+      '  std::vector<int> values{3, 1, 2};' \
+      '  std::ranges::sort(values);' \
+      '  std::atomic<int> thread_value{0};' \
+      '  std::jthread worker([&](std::stop_token token) {' \
+      '    if (!token.stop_requested()) thread_value.store(42);' \
+      '  });' \
+      '  worker.join();' \
+      '  std::span<const int> view(values);' \
+      '  std::string text = std::format("{}:{}", "seed", sum(view));' \
+      '  return text != "seed:5" || thread_value.load() != 42;' \
+      '}' > /tmp/seed-libcxx-cxx20-smoke.cc; \
+    clang++ -std=c++20 -pthread -stdlib=libc++ -fuse-ld=lld \
+      /tmp/seed-libcxx-cxx20-smoke.cc -o /tmp/seed-libcxx-cxx20-smoke; \
+    if ldd /tmp/seed-libcxx-cxx20-smoke | grep -E 'libstdc[+][+]|libc[+][+][.]so|libc[+][+]abi[.]so'; then \
+      echo "seed libc++ C++20 smoke test has a shared C++ runtime dependency" >&2; \
+      exit 1; \
+    fi; \
+    /tmp/seed-libcxx-cxx20-smoke; \
+    printf '%s\n' \
       'volatile unsigned __int128 seed_input = ((unsigned __int128)1 << 100) + 17;' \
       'volatile unsigned __int128 seed_divisor = 3;' \
       'int main(void) {' \
@@ -253,6 +283,7 @@ RUN set -eux; \
       /tmp/seed-cxx-smoke.cc \
       /tmp/seed-libstdcxx-smoke /tmp/seed-libstdcxx-smoke.ldd \
       /tmp/seed-libcxx-smoke \
+      /tmp/seed-libcxx-cxx20-smoke.cc /tmp/seed-libcxx-cxx20-smoke \
       /tmp/seed-builtins-smoke.c /tmp/seed-builtins-smoke \
       /tmp/seed-lto-smoke.c /tmp/seed-lto-smoke \
       /tmp/seed-archive-member.c /tmp/seed-archive-member.o \

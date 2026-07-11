@@ -7,8 +7,8 @@ files and compiler-rt builtins are also installed so final LLVM builds can use
 the seed as a complete bootstrap runtime.
 
 The image build verifies both the bundled GCC runtime and static libc++,
-compiler-rt builtins, LTO through lld, and the LLVM archive tools before the
-image is published.
+including representative C++20 library features, compiler-rt builtins, LTO
+through lld, and the LLVM archive tools before the image is published.
 
 ```sh
 docker build \
