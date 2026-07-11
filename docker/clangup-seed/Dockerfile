@@ -81,6 +81,7 @@ RUN set -eux; \
       aarch64) llvm_targets=AArch64 ;; \
       *) echo "unsupported seed clang arch: $(uname -m)" >&2; exit 2 ;; \
     esac; \
+    resource_version="${LLVM_VERSION%%.*}"; \
     archive="llvm-project-${LLVM_VERSION}.src.tar.xz"; \
     curl --retry 5 --connect-timeout 30 -fsSL -o "${archive}" \
       "https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVM_VERSION}/${archive}"; \
@@ -125,6 +126,8 @@ RUN set -eux; \
         -DCOMPILER_RT_BUILD_MEMPROF=OFF \
         -DCOMPILER_RT_BUILD_ORC=OFF \
         -DCOMPILER_RT_INCLUDE_TESTS=OFF \
+        -DCOMPILER_RT_INSTALL_PATH:PATH="lib/clang/${resource_version}" \
+        -DLLVM_ENABLE_PER_TARGET_RUNTIME_DIR=ON \
         -DLIBCXX_ENABLE_SHARED=OFF \
         -DLIBCXX_ENABLE_STATIC=ON \
         -DLIBCXX_ENABLE_STATIC_ABI_LIBRARY=ON \
@@ -181,7 +184,8 @@ RUN set -eux; \
     test -f "${SEED_PREFIX}/include/c++/v1/__config"; \
     test -f "${SEED_PREFIX}/lib/libc++.a"; \
     test -f "${SEED_PREFIX}/lib/libc++abi.a"; \
-    find "${SEED_PREFIX}/lib/clang" -name 'libclang_rt.builtins*.a' -print -quit | grep -q .; \
+    runtime_dir="$(clang --print-runtime-dir)"; \
+    test -f "${runtime_dir}/libclang_rt.builtins.a"; \
     ldd "${SEED_PREFIX}/bin/clang" | tee /tmp/seed-clang.ldd; \
     if grep -E 'libstdc[+][+]|libgcc_s' /tmp/seed-clang.ldd; then \
       echo "seed clang has an external GCC runtime dependency" >&2; \
@@ -191,6 +195,10 @@ RUN set -eux; \
       > /tmp/seed-smoke.cc; \
     clang++ -fuse-ld=lld /tmp/seed-smoke.cc -o /tmp/seed-smoke; \
     /tmp/seed-smoke; \
+    printf '%s\n' 'int main(void) { return 0; }' > /tmp/seed-builtins-smoke.c; \
+    clang --rtlib=compiler-rt --unwindlib=none -fuse-ld=lld \
+      /tmp/seed-builtins-smoke.c -o /tmp/seed-builtins-smoke; \
+    /tmp/seed-builtins-smoke; \
     printf '%s\n' '#include <stdexcept>' '#include <string>' \
       'int main() { try { throw std::runtime_error("libc++"); } catch (const std::exception& e) { return std::string(e.what()) != "libc++"; } }' \
       > /tmp/seed-libcxx-smoke.cc; \
@@ -203,6 +211,7 @@ RUN set -eux; \
     rm -f \
       /tmp/seed-clang.ldd \
       /tmp/seed-smoke.cc /tmp/seed-smoke \
+      /tmp/seed-builtins-smoke.c /tmp/seed-builtins-smoke \
       /tmp/seed-libcxx-smoke.cc /tmp/seed-libcxx-smoke
 
 WORKDIR /work
