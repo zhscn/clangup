@@ -54,7 +54,10 @@ def main() -> None:
         artifact = destination / "toolchain.tar.zst"
         shutil.copyfile(verified(root, item["payload"], item["payload_sha256"]), artifact)
         manifest = load(verified(root, item["manifest"], item["manifest_sha256"]))
-        record = load(verified(root, item["build_record"], item["build_record_sha256"]))
+        record_path = root / "build-records" / triple / "build-record.json"
+        if not record_path.is_file():
+            raise SystemExit(f"legacy build record is missing for {triple}")
+        record = load(record_path)
         manifest["artifact"]["name"] = artifact.name
         manifest["optimization"] = {"pgo": False, "bolt": False}
         manifest["build"] = {
