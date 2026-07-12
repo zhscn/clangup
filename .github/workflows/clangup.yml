@@ -84,4 +84,6 @@ jobs:
       - name: Build static CLI
         env:
           CGO_ENABLED: "0"
-        run: go build -trimpath -o /tmp/clangup ./cmd/clangup
+        run: |
+          go build -trimpath -o /tmp/clangup ./cmd/clangup
+          go build -trimpath -o /tmp/cmk ./cmd/cmk
