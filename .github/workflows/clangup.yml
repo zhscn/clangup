@@ -5,11 +5,10 @@ on:
     paths:
       - .github/workflows/clangup.yml
       - .github/workflows/default-channel.yml
-      - .github/workflows/repository-publish.yml
       - .github/workflows/clangup-release.yml
       - cmd/**
       - internal/**
-      - specs/**
+      - channels/**
       - go.mod
       - go.sum
   push:
@@ -18,11 +17,10 @@ on:
     paths:
       - .github/workflows/clangup.yml
       - .github/workflows/default-channel.yml
-      - .github/workflows/repository-publish.yml
       - .github/workflows/clangup-release.yml
       - cmd/**
       - internal/**
-      - specs/**
+      - channels/**
       - go.mod
       - go.sum
 
@@ -57,15 +55,15 @@ jobs:
       - name: Check build scripts
         run: |
           python3 -m py_compile \
-            specs/default/build/run.py \
-            specs/default/build/stage.py \
-            specs/default/build/release.py
-          python3 -m unittest discover -s specs/default/build -p 'test_*.py'
+            channels/default/22.1.8/build/run.py \
+            channels/default/22.1.8/build/assemble.py \
+            channels/default/22.1.8/build/publish.py
+          python3 -m unittest discover -s channels/default/22.1.8/build -p 'test_*.py'
           bash -n \
-            specs/default/build/build-linux.sh \
-            specs/default/build/build-macos.sh \
-            specs/default/build/verify-linux.sh \
-            specs/default/build/verify-asan-matrix.sh
+            channels/default/22.1.8/build/build-linux.sh \
+            channels/default/22.1.8/build/build-macos.sh \
+            channels/default/22.1.8/build/verify-linux.sh \
+            channels/default/22.1.8/build/verify-asan-matrix.sh
 
       - name: Check module files
         run: go mod tidy -diff

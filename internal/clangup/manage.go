@@ -33,28 +33,22 @@ func newListCommand() *cobra.Command {
 		if !remote {
 			return writeInstalledToolchains(command, format)
 		}
-		config, err := toolchain.LoadConfig()
+		index, err := loadIndex()
 		if err != nil {
 			return invalidRepository(err)
 		}
 		var lines []string
-		for _, repository := range config.Repositories {
-			catalog, err := toolchain.LoadCatalog(repository)
-			if err != nil {
-				return invalidRepository(err)
+		for name, channel := range index.Channels {
+			if !all {
+				lines = append(lines, fmt.Sprintf("%s\t%s", name, channel.Current))
+				continue
 			}
-			for name, channel := range catalog.Channels {
-				if !all {
-					lines = append(lines, fmt.Sprintf("%s/%s\t%s", repository.Namespace, name, channel.Current))
-					continue
+			for _, release := range channel.Releases {
+				marker := "  "
+				if fmt.Sprintf("%s-%d", release.Version, release.Release) == channel.Current {
+					marker = "* "
 				}
-				for _, release := range channel.Releases {
-					marker := "  "
-					if fmt.Sprintf("%s-%d", release.Version, release.Release) == channel.Current {
-						marker = "* "
-					}
-					lines = append(lines, fmt.Sprintf("%s%s/%s@%s-%d", marker, repository.Namespace, name, release.Version, release.Release))
-				}
+				lines = append(lines, fmt.Sprintf("%s%s@%s-%d", marker, name, release.Version, release.Release))
 			}
 		}
 		sort.Strings(lines)
@@ -66,7 +60,7 @@ func newListCommand() *cobra.Command {
 		}
 		return nil
 	}}
-	command.Flags().BoolVar(&remote, "remote", false, "list releases available from cached repositories")
+	command.Flags().BoolVar(&remote, "remote", false, "list releases available from the channel index")
 	command.Flags().BoolVar(&all, "all", false, "include all indexed releases")
 	command.Flags().StringVar(&format, "format", "text", outputFormatHelp)
 	return command

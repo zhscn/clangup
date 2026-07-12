@@ -1,4 +1,4 @@
-package spec
+package channel
 
 type Spec struct {
 	Schema          string                     `yaml:"schema"`
@@ -49,6 +49,12 @@ type Target struct {
 	Required           bool          `yaml:"required"`
 	Distribution       *Distribution `yaml:"distribution"`
 	Driver             *Driver       `yaml:"driver"`
+	Optimization       Optimization  `yaml:"optimization"`
+}
+
+type Optimization struct {
+	PGO  bool `yaml:"pgo" json:"pgo"`
+	BOLT bool `yaml:"bolt" json:"bolt"`
 }
 
 type ChangelogEntry struct {
@@ -114,6 +120,7 @@ type LockedTarget struct {
 	Distribution       Distribution               `json:"distribution"`
 	RuntimeDelivery    map[string]RuntimeDelivery `json:"runtime_delivery"`
 	Driver             Driver                     `json:"driver"`
+	Optimization       Optimization               `json:"optimization"`
 }
 
 type LibcRequirement struct {

@@ -20,20 +20,15 @@ const maxJSONSize = 8 << 20
 
 var objectKeyPattern = regexp.MustCompile(`^[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~-]+)*$`)
 
-type Client struct {
-	HTTP *http.Client
-}
+type Client struct{ HTTP *http.Client }
 
 func NewClient() *Client {
-	return &Client{HTTP: &http.Client{
-		Timeout: 30 * time.Minute,
-		CheckRedirect: func(request *http.Request, _ []*http.Request) error {
-			if request.URL.Scheme != "https" {
-				return fmt.Errorf("repository redirect is not HTTPS")
-			}
-			return nil
-		},
-	}}
+	return &Client{HTTP: &http.Client{Timeout: 30 * time.Minute, CheckRedirect: func(request *http.Request, _ []*http.Request) error {
+		if request.URL.Scheme != "https" {
+			return fmt.Errorf("redirect is not HTTPS")
+		}
+		return nil
+	}}}
 }
 
 func (client *Client) JSON(location string, destination any) error {
@@ -51,39 +46,79 @@ func (client *Client) JSON(location string, destination any) error {
 		return err
 	}
 	if limited.N <= 0 {
-		return fmt.Errorf("repository JSON exceeds %d bytes", maxJSONSize)
+		return fmt.Errorf("JSON exceeds %d bytes", maxJSONSize)
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return fmt.Errorf("repository JSON has trailing data")
+		return fmt.Errorf("JSON has trailing data")
 	}
 	return nil
+}
+
+func BaseURL(indexURL string) (string, error) {
+	parsed, err := url.Parse(indexURL)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+		return "", fmt.Errorf("invalid HTTPS index URL %q", indexURL)
+	}
+	parsed.RawQuery, parsed.Fragment = "", ""
+	parsed.Path = strings.TrimSuffix(parsed.Path, pathpkg.Base(parsed.Path))
+	return parsed.String(), nil
 }
 
 func Resolve(base, relative string) (string, error) {
 	root, err := url.Parse(base)
 	if err != nil || root.Scheme != "https" || root.Host == "" {
-		return "", fmt.Errorf("invalid HTTPS repository URL %q", base)
+		return "", fmt.Errorf("invalid HTTPS base URL %q", base)
 	}
 	reference, err := url.Parse(relative)
 	if err != nil || reference.IsAbs() || reference.RawQuery != "" || reference.Fragment != "" || pathpkg.Clean(relative) != relative || !objectKeyPattern.MatchString(relative) {
-		return "", fmt.Errorf("invalid repository object key %q", relative)
+		return "", fmt.Errorf("invalid object path %q", relative)
 	}
 	resolved := root.ResolveReference(reference)
 	if resolved.Scheme != root.Scheme || resolved.Host != root.Host {
-		return "", fmt.Errorf("repository object escapes base URL")
+		return "", fmt.Errorf("object escapes base URL")
 	}
 	return resolved.String(), nil
 }
 
-func CatalogBase(catalogURL string) (string, error) {
-	parsed, err := url.Parse(catalogURL)
-	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
-		return "", fmt.Errorf("invalid HTTPS catalog URL %q", catalogURL)
+func (client *Client) SyncIndex() (*Index, error) {
+	var index Index
+	if err := client.JSON(IndexURL(), &index); err != nil {
+		return nil, err
 	}
-	parsed.RawQuery = ""
-	parsed.Fragment = ""
-	parsed.Path = strings.TrimSuffix(parsed.Path, filepath.Base(parsed.Path))
-	return parsed.String(), nil
+	if err := ValidateIndex(&index); err != nil {
+		return nil, err
+	}
+	contents, err := json.Marshal(index)
+	if err != nil {
+		return nil, err
+	}
+	path, err := IndexPath()
+	if err != nil {
+		return nil, err
+	}
+	if err := writeFileAtomic(path, append(contents, '\n')); err != nil {
+		return nil, err
+	}
+	return &index, nil
+}
+
+func LoadIndex() (*Index, error) {
+	path, err := IndexPath()
+	if err != nil {
+		return nil, err
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("channel index is not cached; run clangup update: %w", err)
+	}
+	var index Index
+	if err := json.Unmarshal(contents, &index); err != nil {
+		return nil, err
+	}
+	if err := ValidateIndex(&index); err != nil {
+		return nil, err
+	}
+	return &index, nil
 }
 
 func (client *Client) Download(location string, object Object, destination string) error {
@@ -157,117 +192,17 @@ func (client *Client) Download(location string, object Object, destination strin
 	if closeErr != nil {
 		return closeErr
 	}
-	size := offset + written
-	actual := hex.EncodeToString(digest.Sum(nil))
+	size, actual := offset+written, hex.EncodeToString(digest.Sum(nil))
 	if size != object.Size || actual != object.SHA256 {
 		return fmt.Errorf("download identity mismatch: expected %d bytes sha256:%s, got %d bytes sha256:%s", object.Size, object.SHA256, size, actual)
 	}
 	return nil
 }
 
-func (client *Client) SyncCatalog(repository Repository) (*Catalog, error) {
-	var catalog Catalog
-	if err := client.JSON(repository.URL, &catalog); err != nil {
-		return nil, err
-	}
-	if catalog.Schema != "clangup.catalog/v1" || catalog.Repository.Namespace != repository.Namespace {
-		return nil, fmt.Errorf("catalog identity mismatch for %s", repository.Namespace)
-	}
-	if err := client.CacheCatalogObjects(repository, &catalog); err != nil {
-		return nil, err
-	}
-	if err := StoreCatalog(repository, &catalog); err != nil {
-		return nil, err
-	}
-	return &catalog, nil
-}
-
-func (client *Client) CacheCatalogObjects(repository Repository, catalog *Catalog) error {
-	base, err := CatalogBase(repository.URL)
-	if err != nil {
-		return err
-	}
-	for channelName, channel := range catalog.Channels {
-		for _, catalogRelease := range channel.Releases {
-			path, err := client.Object(base, catalogRelease.Descriptor)
-			if err != nil {
-				return err
-			}
-			contents, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			var release Release
-			if err := json.Unmarshal(contents, &release); err != nil {
-				return err
-			}
-			if release.Schema != "clangup.release/v1" || release.Release.Channel != channelName || release.Release.Version != catalogRelease.Version || release.Release.Release != catalogRelease.Release {
-				return fmt.Errorf("release descriptor identity mismatch for %s@%s-%d", channelName, catalogRelease.Version, catalogRelease.Release)
-			}
-			for _, artifact := range release.Artifacts {
-				manifestPath, err := client.Object(base, artifact.Manifest)
-				if err != nil {
-					return err
-				}
-				contents, err := os.ReadFile(manifestPath)
-				if err != nil {
-					return err
-				}
-				var manifest Manifest
-				if err := json.Unmarshal(contents, &manifest); err != nil {
-					return err
-				}
-				if err := ValidateManifest(&release, &artifact, &manifest); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
-}
-
-func StoreCatalog(repository Repository, catalog *Catalog) error {
-	if catalog.Schema != "clangup.catalog/v1" || catalog.Repository.Namespace != repository.Namespace {
-		return fmt.Errorf("catalog identity mismatch for %s", repository.Namespace)
-	}
-	path, err := CatalogPath(repository)
-	if err != nil {
-		return err
-	}
-	contents, err := json.Marshal(catalog)
-	if err != nil {
-		return err
-	}
-	contents = append(contents, '\n')
-	if err := writeFileAtomic(path, contents); err != nil {
-		return err
-	}
-	return nil
-}
-
-func LoadCatalog(repository Repository) (*Catalog, error) {
-	path, err := CatalogPath(repository)
-	if err != nil {
-		return nil, err
-	}
-	contents, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("repository metadata is not cached; run clangup repo update %s: %w", repository.Namespace, err)
-	}
-	var catalog Catalog
-	if err := json.Unmarshal(contents, &catalog); err != nil {
-		return nil, err
-	}
-	if catalog.Schema != "clangup.catalog/v1" || catalog.Repository.Namespace != repository.Namespace {
-		return nil, fmt.Errorf("cached catalog identity mismatch for %s", repository.Namespace)
-	}
-	return &catalog, nil
-}
-
 func (client *Client) Object(base string, object Object) (string, error) {
 	digestBytes, digestErr := hex.DecodeString(object.SHA256)
 	if digestErr != nil || len(digestBytes) != sha256.Size || object.Size < 0 || !objectKeyPattern.MatchString(object.Key) {
-		return "", fmt.Errorf("invalid repository object identity")
+		return "", fmt.Errorf("invalid object identity")
 	}
 	root, err := CacheRoot()
 	if err != nil {
@@ -280,15 +215,15 @@ func (client *Client) Object(base string, object Object) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", err
 	}
-	temporaryPath := path + ".partial"
+	temporary := path + ".partial"
 	location, err := Resolve(base, object.Key)
 	if err != nil {
 		return "", err
 	}
-	if err := client.Download(location, object, temporaryPath); err != nil {
+	if err := client.Download(location, object, temporary); err != nil {
 		return "", err
 	}
-	if err := os.Rename(temporaryPath, path); err != nil {
+	if err := os.Rename(temporary, path); err != nil {
 		if digest, size, identityErr := fileIdentity(path); identityErr != nil || digest != object.SHA256 || size != object.Size {
 			return "", err
 		}
@@ -323,9 +258,15 @@ func writeFileAtomic(path string, contents []byte) error {
 	name := temporary.Name()
 	defer os.Remove(name)
 	if err := temporary.Chmod(0o644); err != nil {
+		temporary.Close()
 		return err
 	}
 	if _, err := temporary.Write(contents); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
 		return err
 	}
 	if err := temporary.Close(); err != nil {

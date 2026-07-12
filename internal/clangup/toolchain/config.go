@@ -1,13 +1,19 @@
 package toolchain
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 )
+
+const OfficialIndexURL = "https://dl.clangup.dev/index.json"
+
+func IndexURL() string {
+	if value := os.Getenv("CLANGUP_INDEX_URL"); value != "" {
+		return value
+	}
+	return OfficialIndexURL
+}
 
 func ConfigRoot() (string, error) {
 	if root := os.Getenv("CLANGUP_CONFIG_HOME"); root != "" {
@@ -20,32 +26,12 @@ func ConfigRoot() (string, error) {
 	return filepath.Join(root, "clangup"), nil
 }
 
-func ConfigPath() (string, error) {
+func IndexPath() (string, error) {
 	root, err := ConfigRoot()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(root, "repositories.json"), nil
-}
-
-func CatalogPath(repository Repository) (string, error) {
-	root, err := ConfigRoot()
-	if err != nil {
-		return "", err
-	}
-	digest := sha256.Sum256([]byte(repository.URL))
-	return filepath.Join(root, "repositories", hex.EncodeToString(digest[:]), "catalog-v1.json"), nil
-}
-
-func RemoveCatalog(repository Repository) error {
-	path, err := CatalogPath(repository)
-	if err != nil {
-		return err
-	}
-	if err := os.RemoveAll(filepath.Dir(path)); err != nil {
-		return err
-	}
-	return nil
+	return filepath.Join(root, "index.json"), nil
 }
 
 func CacheRoot() (string, error) {
@@ -73,55 +59,12 @@ func DataRoot() (string, error) {
 	return filepath.Join(home, ".local", "share", "clangup"), nil
 }
 
-func LoadConfig() (*RepositoryConfig, error) {
-	path, err := ConfigPath()
-	if err != nil {
-		return nil, err
+func ValidateIndex(index *Index) error {
+	if index.Schema != "clangup.index/v1" || index.DefaultChannel == "" || len(index.Channels) == 0 {
+		return fmt.Errorf("invalid clangup index")
 	}
-	contents, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return &RepositoryConfig{Schema: "clangup.config/v1"}, nil
+	if _, ok := index.Channels[index.DefaultChannel]; !ok {
+		return fmt.Errorf("default channel is absent from index")
 	}
-	if err != nil {
-		return nil, err
-	}
-	var config RepositoryConfig
-	if err := json.Unmarshal(contents, &config); err != nil {
-		return nil, err
-	}
-	if config.Schema != "clangup.config/v1" {
-		return nil, fmt.Errorf("unsupported config schema %q", config.Schema)
-	}
-	return &config, nil
-}
-
-func SaveConfig(config *RepositoryConfig) error {
-	path, err := ConfigPath()
-	if err != nil {
-		return err
-	}
-	contents, err := json.Marshal(config)
-	if err != nil {
-		return err
-	}
-	contents = append(contents, '\n')
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	temporary, err := os.CreateTemp(filepath.Dir(path), ".repositories-*")
-	if err != nil {
-		return err
-	}
-	name := temporary.Name()
-	defer os.Remove(name)
-	if err := temporary.Chmod(0o600); err != nil {
-		return err
-	}
-	if _, err := temporary.Write(contents); err != nil {
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	return os.Rename(name, path)
+	return nil
 }

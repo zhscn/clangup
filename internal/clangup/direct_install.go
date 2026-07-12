@@ -69,7 +69,7 @@ func installDirect(file, location, prefix, explicitTarget string, force bool) (*
 		return nil, fmt.Errorf("artifact identity differs from manifest")
 	}
 	manifestDigest := sha256.Sum256(manifestContents)
-	channel := "local/" + manifest.Release.Channel
+	channel := "local-" + manifest.Release.Channel
 	exact := fmt.Sprintf("%s-%d", manifest.Release.Version, manifest.Release.Release)
 	if prefix == "" {
 		root, err := toolchain.DataRoot()
@@ -98,13 +98,14 @@ func installDirect(file, location, prefix, explicitTarget string, force bool) (*
 	if err := ensureFirstDefault(prefix); err != nil {
 		return nil, err
 	}
-	release := toolchain.CatalogRelease{Version: record.Version, Release: record.Release}
+	release := toolchain.IndexRelease{Version: record.Version, Release: record.Release}
 	artifact := &toolchain.Artifact{Target: record.Target, Artifact: object, Manifest: toolchain.Object{SHA256: record.ManifestSHA256}}
-	return installationResult("local", manifest.Release.Channel, release, artifact, &manifest, prefix), nil
+	return installationResult(channel, release, artifact, &manifest, prefix), nil
 }
 
 func siblingManifestNames(value string) []string {
-	return []string{value + ".manifest.json", strings.TrimSuffix(value, ".tar.zst") + ".manifest.json"}
+	directoryManifest := strings.TrimSuffix(value, filepath.Base(value)) + "manifest.json"
+	return []string{directoryManifest, value + ".manifest.json", strings.TrimSuffix(value, ".tar.zst") + ".manifest.json"}
 }
 
 func readSiblingManifest(archive string) ([]byte, error) {

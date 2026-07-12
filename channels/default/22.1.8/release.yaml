@@ -1,4 +1,4 @@
-schema: clangup.build/v1
+schema: clangup.channel/v1
 channel: default
 version: 22.1.8
 release: 1

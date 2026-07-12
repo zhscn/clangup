@@ -1,4 +1,4 @@
-package spec
+package channel
 
 import (
 	"fmt"
@@ -18,8 +18,8 @@ var (
 )
 
 func validateSpec(authoring *Spec) error {
-	if authoring.Schema != "clangup.build/v1" {
-		return fmt.Errorf("schema must be %q", "clangup.build/v1")
+	if authoring.Schema != "clangup.channel/v1" {
+		return fmt.Errorf("schema must be %q", "clangup.channel/v1")
 	}
 	if !channelPattern.MatchString(authoring.Channel) {
 		return fmt.Errorf("channel %q is not a valid channel segment", authoring.Channel)

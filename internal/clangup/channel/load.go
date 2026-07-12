@@ -1,4 +1,4 @@
-package spec
+package channel
 
 import (
 	"crypto/sha256"
@@ -14,7 +14,7 @@ import (
 
 func Load(path string) (*Loaded, error) {
 	if filepath.Ext(path) != ".yaml" {
-		return nil, fmt.Errorf("authoring spec must use the .yaml extension")
+		return nil, fmt.Errorf("channel release must use the .yaml extension")
 	}
 	absolutePath, err := filepath.Abs(path)
 	if err != nil {

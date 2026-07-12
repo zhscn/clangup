@@ -1,4 +1,4 @@
-package spec
+package channel
 
 import (
 	"crypto/sha256"
@@ -10,7 +10,7 @@ import (
 )
 
 func TestDefaultSpecMatchesGoldenLock(t *testing.T) {
-	loaded, err := Load(filepath.Join("..", "..", "..", "..", "specs", "default", "22.1.8", "spec.yaml"))
+	loaded, err := Load(filepath.Join("..", "..", "..", "channels", "default", "22.1.8", "release.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,9 +56,9 @@ func TestLoadRejectsUnknownField(t *testing.T) {
 func TestDecodeYAMLRejectsUnsupportedSyntax(t *testing.T) {
 	tests := map[string]string{
 		"duplicate key": "schema: one\nschema: two\n",
-		"anchor":        "schema: &schema clangup.build/v1\n",
-		"alias":         "schema: &schema clangup.build/v1\ncopy: *schema\n",
-		"custom tag":    "schema: !schema clangup.build/v1\n",
+		"anchor":        "schema: &schema clangup.channel/v1\n",
+		"alias":         "schema: &schema clangup.channel/v1\ncopy: *schema\n",
+		"custom tag":    "schema: !schema clangup.channel/v1\n",
 		"multiple docs": "schema: one\n---\nschema: two\n",
 	}
 	for name, contents := range tests {
@@ -149,7 +149,7 @@ func TestLoadRejectsSymlinkedPatch(t *testing.T) {
 
 func writeTestSpec(t *testing.T, path, sourceExtra string) {
 	t.Helper()
-	contents := fmt.Sprintf(`schema: clangup.build/v1
+	contents := fmt.Sprintf(`schema: clangup.channel/v1
 channel: test
 version: 1.0.0
 release: 1

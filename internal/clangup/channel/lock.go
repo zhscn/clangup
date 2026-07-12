@@ -1,4 +1,4 @@
-package spec
+package channel
 
 import (
 	"crypto/sha256"
@@ -18,7 +18,7 @@ func Lock(loaded *Loaded) (*LockFile, error) {
 		return nil, err
 	}
 	locked := &LockFile{
-		Schema: "clangup.build-lock/v1",
+		Schema: "clangup.channel-plan/v1",
 		Release: ReleaseIdentity{
 			Channel: loaded.Spec.Channel,
 			Version: loaded.Spec.Version,
@@ -60,6 +60,7 @@ func Lock(loaded *Loaded) (*LockFile, error) {
 			Distribution:       normalizedDistribution(distribution),
 			RuntimeDelivery:    delivery,
 			Driver:             driver,
+			Optimization:       target.Optimization,
 		}
 		if target.OS == "linux" {
 			lockedTarget.Libc = &LibcRequirement{Name: target.Libc, MinVersion: target.LibcVersion}

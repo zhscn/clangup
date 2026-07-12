@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build one target from a locked default-channel specification."""
+"""Build one target from the resolved default-channel release plan."""
 
 from __future__ import annotations
 
@@ -69,8 +69,8 @@ def reset_directory(path: Path) -> None:
 
 
 def select_target(lock: dict[str, Any], triple: str) -> dict[str, Any]:
-    if lock.get("schema") != "clangup.build-lock/v1":
-        fail("unsupported locked spec schema")
+    if lock.get("schema") != "clangup.channel-plan/v1":
+        fail("unsupported channel plan schema")
     release = lock.get("release", {})
     if release.get("channel") != "default":
         fail("this runner only builds the default channel")
@@ -499,7 +499,7 @@ def package(
 
 
 def make_manifest(
-    lock: dict[str, Any], target: dict[str, Any], artifact: Path
+    lock: dict[str, Any], target: dict[str, Any], artifact: Path, build: dict[str, Any]
 ) -> dict[str, Any]:
     source = lock["source"]
     release = lock["release"]
@@ -519,7 +519,6 @@ def make_manifest(
             "name": Path(patch["path"]).name,
             "sha256": patch["sha256"],
             "strip": patch["strip"],
-            "target": f"patches/sha256/{patch['sha256']}.patch",
         }
         for patch in source["patches"]
     ]
@@ -557,13 +556,15 @@ def make_manifest(
             "rtlib": driver["rtlib"],
             "unwindlib": driver["unwindlib"],
         },
+        "optimization": target.get("optimization", {"pgo": False, "bolt": False}),
+        "build": build,
         "reproducibility": {"status": "not-claimed", "attestations": []},
     }
 
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--spec-lock", required=True, type=Path)
+    parser.add_argument("--plan", required=True, type=Path)
     parser.add_argument("--target", required=True)
     parser.add_argument("--source", required=True, type=Path)
     parser.add_argument("--bundle", required=True, type=Path)
@@ -581,7 +582,7 @@ def main() -> None:
     args = parse_arguments()
     if args.jobs < 1 or args.link_jobs < 1 or args.zstd_threads < 1:
         fail("job and thread counts must be positive")
-    lock = load_json(args.spec_lock)
+    lock = load_json(args.plan)
     target = select_target(lock, args.target)
     expected_os = (
         "linux"
@@ -614,9 +615,7 @@ def main() -> None:
     smoke(prefix, target, work)
 
     release = lock["release"]
-    artifact_name = (
-        f"clang-{release['version']}-{release['release']}-{target['triple']}.tar.zst"
-    )
+    artifact_name = "toolchain.tar.zst"
     artifact = package(
         prefix,
         output,
@@ -625,40 +624,32 @@ def main() -> None:
         args.zstd_threads,
         args.zstd_level,
     )
-    manifest = make_manifest(lock, target, artifact)
-    manifest_path = output / f"{artifact_name}.manifest.json"
-    write_json(manifest_path, manifest)
-    spec_digest = sha256_file(args.spec_lock)
-    build_record = {
-        "schema": "clangup.build-record/v1",
-        "release": release,
-        "target": target["triple"],
-        "locked_spec_sha256": spec_digest,
-        "source_identity_sha256": source_identity_digest,
-        "source_date_epoch": args.source_date_epoch,
-        "build_commit": os.environ.get("CLANGUP_BUILD_COMMIT", "unknown"),
+    build_identity = {
+        "commit": os.environ.get("CLANGUP_BUILD_COMMIT", "unknown"),
         "bootstrap": {
             "kind": os.environ.get("CLANGUP_BOOTSTRAP_KIND", "seed-image"),
             "identity": os.environ.get("CLANGUP_BOOTSTRAP_IDENTITY", "unknown"),
         },
+        "plan_sha256": sha256_file(args.plan),
+        "source_identity_sha256": source_identity_digest,
+        "source_date_epoch": args.source_date_epoch,
         "host": {"system": platform.system(), "machine": platform.machine()},
         "cmake_arguments": cmake_arguments,
         "resources": {"jobs": args.jobs, "link_jobs": args.link_jobs},
         "started_at": started.isoformat(),
         "finished_at": dt.datetime.now(dt.timezone.utc).isoformat(),
-        "artifact_sha256": manifest["artifact"]["sha256"],
     }
-    record_path = output / f"{artifact_name}.build-record.json"
-    write_json(record_path, build_record)
-    fragment = {
-        "schema": "clangup.release-fragment/v1",
+    manifest = make_manifest(lock, target, artifact, build_identity)
+    manifest_path = output / "manifest.json"
+    write_json(manifest_path, manifest)
+    target_output = {
+        "schema": "clangup.channel-target/v1",
         "release": release,
         "target": target["triple"],
         "artifact": artifact.name,
         "manifest": manifest_path.name,
-        "build_record": record_path.name,
     }
-    write_json(output / "release-fragment.json", fragment)
+    write_json(output / "target.json", target_output)
     print(f"built {artifact} (sha256:{manifest['artifact']['sha256']})")
 
 

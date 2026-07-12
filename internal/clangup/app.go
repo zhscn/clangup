@@ -107,10 +107,12 @@ func newRootCommand(version string) *cobra.Command {
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
 		return invalidRequest(err)
 	})
-	root.AddCommand(newRepoCommand())
 	root.AddCommand(newChannelCommand())
+	root.AddCommand(newUpdateCommand())
 	root.AddCommand(newInstallCommand())
 	root.AddCommand(newResolveCommand())
+	root.AddCommand(newEnsureCommand())
+	root.AddCommand(newPathCommand())
 	root.AddCommand(newToolchainCommand())
 	root.AddCommand(newEnvCommand())
 	root.AddCommand(newGCCommand())

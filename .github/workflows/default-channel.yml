@@ -1,20 +1,20 @@
-name: default channel build
+name: default channel
 
 on:
   workflow_dispatch:
     inputs:
       bootstrap_image:
-        description: Immutable seed tag used for the first rolling artifact
+        description: Bootstrap toolchain image
         type: string
         required: true
         default: ghcr.io/zhscn/clangup-seed:22.1.8-1
 
 concurrency:
-  group: default-channel-build
+  group: default-channel
   cancel-in-progress: false
 
 env:
-  SPEC: specs/default/22.1.8/spec.yaml
+  CHANNEL_ROOT: channels/default/22.1.8
 
 jobs:
   plan:
@@ -22,71 +22,35 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
-      id-token: write
     outputs:
       source_url: ${{ steps.plan.outputs.source_url }}
       source_sha256: ${{ steps.plan.outputs.source_sha256 }}
       source_date_epoch: ${{ steps.plan.outputs.source_date_epoch }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Set up Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
           cache: true
-
-      - name: Lock spec
+      - name: Resolve channel release
         run: |
-          go build -trimpath -o /tmp/clangup ./cmd/clangup
           mkdir -p out/plan
-          /tmp/clangup repo spec check "$SPEC"
-          /tmp/clangup repo spec lock "$SPEC" --output out/plan/spec.lock.json
-
-      - name: Export plan
+          go run ./cmd/channel-plan "$CHANNEL_ROOT/release.yaml" out/plan/channel-plan.json
+      - name: Export build inputs
         id: plan
         run: |
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import json
-          with open("out/plan/spec.lock.json", encoding="utf-8") as file:
-              lock = json.load(file)
-          print(f"source_url={lock['source']['url']}")
-          print(f"source_sha256={lock['source']['sha256']}")
+          with open("out/plan/channel-plan.json", encoding="utf-8") as file:
+              plan = json.load(file)
+          print(f"source_url={plan['source']['url']}")
+          print(f"source_sha256={plan['source']['sha256']}")
           PY
           echo "source_date_epoch=$(git log -1 --format=%ct)" >> "$GITHUB_OUTPUT"
-
-      - name: Download verified source
-        env:
-          SOURCE_URL: ${{ steps.plan.outputs.source_url }}
-          SOURCE_SHA256: ${{ steps.plan.outputs.source_sha256 }}
-        run: |
-          mkdir -p .cache/sources
-          curl -fsSL -o .cache/sources/llvm-project.tar.xz "$SOURCE_URL"
-          echo "$SOURCE_SHA256  .cache/sources/llvm-project.tar.xz" | sha256sum -c -
-
-      - name: Stage build inputs
-        env:
-          UPLOAD_ENDPOINT: ${{ vars.CLANGUP_UPLOAD_ENDPOINT }}
-        run: |
-          test -n "$UPLOAD_ENDPOINT"
-          token="$(curl -fsSL \
-            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=clangup-r2-uploader" |
-            python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
-          python3 specs/default/build/stage.py \
-            --endpoint "$UPLOAD_ENDPOINT" \
-            --token "$token" \
-            --output out/plan/staged-inputs.json \
-            inputs \
-            --spec-lock out/plan/spec.lock.json \
-            --source .cache/sources/llvm-project.tar.xz \
-            --bundle specs/default/22.1.8
-
-      - name: Upload locked plan
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: default-plan
-          path: out/plan/
+          path: out/plan/channel-plan.json
           if-no-files-found: error
           retention-days: 7
 
@@ -97,7 +61,6 @@ jobs:
     timeout-minutes: 360
     permissions:
       contents: read
-      id-token: write
       packages: read
     strategy:
       fail-fast: false
@@ -116,31 +79,20 @@ jobs:
     steps:
       - name: Free disk space
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-            /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
-            /usr/local/share/powershell /usr/lib/jvm /opt/microsoft || true
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/local/share/powershell /usr/lib/jvm /opt/microsoft || true
           docker image prune -af || true
-          df -h
-
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-
-      - name: Log in to GHCR
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Download locked plan
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: default-plan
           path: out/plan
-
-      - name: Download verified source
+      - name: Download source
         env:
           SOURCE_URL: ${{ needs.plan.outputs.source_url }}
           SOURCE_SHA256: ${{ needs.plan.outputs.source_sha256 }}
@@ -148,79 +100,40 @@ jobs:
           mkdir -p .cache/sources
           curl -fsSL -o .cache/sources/llvm-project.tar.xz "$SOURCE_URL"
           echo "$SOURCE_SHA256  .cache/sources/llvm-project.tar.xz" | sha256sum -c -
-
-      - name: Resolve bootstrap image
+      - name: Resolve bootstrap
         id: bootstrap
         env:
           IMAGE: ${{ inputs.bootstrap_image }}
           ARCH: ${{ matrix.arch }}
         run: |
           index_digest="$(docker buildx imagetools inspect "$IMAGE" --format '{{json .Manifest}}' | jq -er .digest)"
-          platform_digest="$(docker buildx imagetools inspect "$IMAGE" --raw |
-            jq -er --arg arch "$ARCH" '.manifests[] | select(.platform.os == "linux" and .platform.architecture == $arch) | .digest')"
-          repository="${IMAGE%:*}"
-          echo "ref=${repository}@${index_digest}" >> "$GITHUB_OUTPUT"
-          echo "identity=${repository}@${index_digest}#${platform_digest}" >> "$GITHUB_OUTPUT"
-
+          platform_digest="$(docker buildx imagetools inspect "$IMAGE" --raw | jq -er --arg arch "$ARCH" '.manifests[] | select(.platform.os == "linux" and .platform.architecture == $arch) | .digest')"
+          echo "ref=${IMAGE%:*}@${index_digest}" >> "$GITHUB_OUTPUT"
+          echo "identity=${IMAGE%:*}@${index_digest}#${platform_digest}" >> "$GITHUB_OUTPUT"
       - name: Build target
         env:
-          BOOTSTRAP_REF: ${{ steps.bootstrap.outputs.ref }}
-          BOOTSTRAP_IDENTITY: ${{ steps.bootstrap.outputs.identity }}
           SOURCE_DATE_EPOCH: ${{ needs.plan.outputs.source_date_epoch }}
+          BOOTSTRAP_IDENTITY: ${{ steps.bootstrap.outputs.identity }}
         run: |
           mkdir -p ".cache/build-${{ matrix.arch }}" "out/${{ matrix.triple }}"
           docker run --rm --network none \
             --mount type=bind,src="$PWD",dst=/workspace,readonly \
-            --mount type=bind,src="$PWD/out/plan/spec.lock.json",dst=/input/spec.lock.json,readonly \
+            --mount type=bind,src="$PWD/out/plan/channel-plan.json",dst=/input/channel-plan.json,readonly \
             --mount type=bind,src="$PWD/.cache/sources/llvm-project.tar.xz",dst=/input/llvm-project.tar.xz,readonly \
             --mount type=bind,src="$PWD/.cache/build-${{ matrix.arch }}",dst=/build \
             --mount type=bind,src="$PWD/out/${{ matrix.triple }}",dst=/out \
-            -e CLANGUP_BUILD_COMMIT=${{ github.sha }} \
-            -e CLANGUP_BOOTSTRAP_KIND=seed-image \
-            -e CLANGUP_BOOTSTRAP_IDENTITY="$BOOTSTRAP_IDENTITY" \
-            "$BOOTSTRAP_REF" \
-            python3 /workspace/specs/default/build/run.py \
-              --spec-lock /input/spec.lock.json \
-              --target "${{ matrix.triple }}" \
-              --source /input/llvm-project.tar.xz \
-              --bundle /workspace/specs/default/22.1.8 \
-              --work /build/work \
-              --output /out \
-              --jobs "$(nproc)" \
-              --link-jobs 2 \
-              --source-date-epoch "$SOURCE_DATE_EPOCH"
-
-      - name: Verify on clean baseline
+            -e CLANGUP_BUILD_COMMIT=${{ github.sha }} -e CLANGUP_BOOTSTRAP_KIND=seed-image -e CLANGUP_BOOTSTRAP_IDENTITY="$BOOTSTRAP_IDENTITY" \
+            "${{ steps.bootstrap.outputs.ref }}" \
+            python3 /workspace/$CHANNEL_ROOT/build/run.py --plan /input/channel-plan.json --target "${{ matrix.triple }}" --source /input/llvm-project.tar.xz --bundle "/workspace/$CHANNEL_ROOT" --work /build/work --output /out --jobs "$(nproc)" --link-jobs 2 --source-date-epoch "$SOURCE_DATE_EPOCH"
+      - name: Verify baseline
         run: |
           mkdir -p verify/prefix
-          tar --use-compress-program=unzstd -xf out/${{ matrix.triple }}/*.tar.zst -C verify/prefix
-          docker run --rm --network host \
-            --mount type=bind,src="$PWD/verify/prefix",dst=/opt/clangup,readonly \
-            --mount type=bind,src="$PWD",dst=/workspace,readonly \
-            "${{ matrix.verify_image }}" \
-            bash /workspace/specs/default/build/verify-linux.sh /opt/clangup "${{ matrix.profile }}"
-
-      - name: Stage target
-        env:
-          UPLOAD_ENDPOINT: ${{ vars.CLANGUP_UPLOAD_ENDPOINT }}
-        run: |
-          test -n "$UPLOAD_ENDPOINT"
-          token="$(curl -fsSL \
-            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=clangup-r2-uploader" |
-            python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
-          python3 specs/default/build/stage.py \
-            --endpoint "$UPLOAD_ENDPOINT" \
-            --token "$token" \
-            --output "out/${{ matrix.triple }}/staged-target.json" \
-            target \
-            --fragment "out/${{ matrix.triple }}/release-fragment.json"
-
-      - name: Upload staged target descriptor
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+          tar --use-compress-program=unzstd -xf out/${{ matrix.triple }}/toolchain.tar.zst -C verify/prefix
+          docker run --rm --network host --mount type=bind,src="$PWD/verify/prefix",dst=/opt/clangup,readonly --mount type=bind,src="$PWD",dst=/workspace,readonly "${{ matrix.verify_image }}" bash "/workspace/$CHANNEL_ROOT/build/verify-linux.sh" /opt/clangup "${{ matrix.profile }}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: default-stage-${{ matrix.triple }}
-          path: out/${{ matrix.triple }}/staged-target.json
+          name: default-target-${{ matrix.triple }}
+          path: out/${{ matrix.triple }}/
           if-no-files-found: error
           retention-days: 7
 
@@ -231,20 +144,14 @@ jobs:
     timeout-minutes: 360
     permissions:
       contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Install build tools
-        run: brew install cmake ninja zstd gnu-tar
-
-      - name: Download locked plan
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - run: brew install cmake ninja zstd gnu-tar
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: default-plan
           path: out/plan
-
-      - name: Download verified source
+      - name: Download source
         env:
           SOURCE_URL: ${{ needs.plan.outputs.source_url }}
           SOURCE_SHA256: ${{ needs.plan.outputs.source_sha256 }}
@@ -252,7 +159,6 @@ jobs:
           mkdir -p .cache/sources
           curl -fsSL -o .cache/sources/llvm-project.tar.xz "$SOURCE_URL"
           echo "$SOURCE_SHA256  .cache/sources/llvm-project.tar.xz" | shasum -a 256 -c -
-
       - name: Build target
         env:
           CLANGUP_BUILD_COMMIT: ${{ github.sha }}
@@ -260,75 +166,38 @@ jobs:
           SOURCE_DATE_EPOCH: ${{ needs.plan.outputs.source_date_epoch }}
         run: |
           export CLANGUP_BOOTSTRAP_IDENTITY="$(xcodebuild -version | tr '\n' ' ')"
-          python3 specs/default/build/run.py \
-            --spec-lock out/plan/spec.lock.json \
-            --target arm64-apple-darwin \
-            --source .cache/sources/llvm-project.tar.xz \
-            --bundle specs/default/22.1.8 \
-            --work .cache/build-macos/work \
-            --output out/arm64-apple-darwin \
-            --jobs "$(sysctl -n hw.ncpu)" \
-            --source-date-epoch "$SOURCE_DATE_EPOCH"
-
-      - name: Stage target
-        env:
-          UPLOAD_ENDPOINT: ${{ vars.CLANGUP_UPLOAD_ENDPOINT }}
-        run: |
-          test -n "$UPLOAD_ENDPOINT"
-          token="$(curl -fsSL \
-            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=clangup-r2-uploader" |
-            python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
-          python3 specs/default/build/stage.py \
-            --endpoint "$UPLOAD_ENDPOINT" \
-            --token "$token" \
-            --output out/arm64-apple-darwin/staged-target.json \
-            target \
-            --fragment out/arm64-apple-darwin/release-fragment.json
-
-      - name: Upload staged target descriptor
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+          python3 "$CHANNEL_ROOT/build/run.py" --plan out/plan/channel-plan.json --target arm64-apple-darwin --source .cache/sources/llvm-project.tar.xz --bundle "$CHANNEL_ROOT" --work .cache/build-macos/work --output out/arm64-apple-darwin --jobs "$(sysctl -n hw.ncpu)" --source-date-epoch "$SOURCE_DATE_EPOCH"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: default-stage-arm64-apple-darwin
-          path: out/arm64-apple-darwin/staged-target.json
+          name: default-target-arm64-apple-darwin
+          path: out/arm64-apple-darwin/
           if-no-files-found: error
           retention-days: 7
 
-  assemble:
-    name: assemble release descriptor
-    needs: [plan, linux, macos]
+  publish:
+    needs: [linux, macos]
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 90
     permissions:
       contents: read
       id-token: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Download locked plan
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: default-plan
-          path: out/plan
-
-      - name: Download target fragments
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          pattern: default-stage-*
-          path: out/fragments
-
-      - name: Assemble
+          pattern: default-target-*
+          path: out/targets
+      - name: Assemble release
+        run: python3 "$CHANNEL_ROOT/build/assemble.py" --targets out/targets --output out/release
+      - name: Publish release
+        env:
+          UPLOAD_ENDPOINT: ${{ vars.CLANGUP_UPLOAD_ENDPOINT }}
         run: |
-          python3 specs/default/build/release.py \
-            --spec-lock out/plan/spec.lock.json \
-            --inputs out/plan/staged-inputs.json \
-            --targets out/fragments \
-            --output out/release-candidate.json
-
-      - name: Upload release descriptor artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+          token="$(curl -fsSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=clangup-r2-uploader" | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+          python3 "$CHANNEL_ROOT/build/publish.py" --endpoint "$UPLOAD_ENDPOINT" --token "$token" --release out/release/release.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: default-release
-          path: out/release-candidate.json
+          path: out/release/release.json
           if-no-files-found: error
           retention-days: 14

@@ -1,51 +1,19 @@
 # clangup
 
-`clangup` installs and manages relocatable Clang toolchains.
-
-## Install
-
-Download the binary for the host from
-[GitHub Releases](https://github.com/zhscn/clangup/releases):
-
-- `clangup-linux-amd64`
-- `clangup-linux-arm64`
-- `clangup-darwin-arm64`
-
-Install it on `PATH`, for example:
+`clangup` installs and manages the LLVM toolchains published at
+`dl.clangup.dev`.
 
 ```sh
-mkdir -p ~/.local/bin
-install -m 755 clangup-linux-amd64 ~/.local/bin/clangup
-```
-
-## Usage
-
-Add a toolchain source and inspect its channels:
-
-```sh
-clangup repo add https://dl.clangup.dev/catalog-v1.json
+clangup update
 clangup channel list
-clangup channel show dl.clangup.dev/llvm/default
-```
+clangup channel show default
 
-Install the current channel release or an exact release:
+clangup install default
+clangup install default@22.1.8-1
 
-```sh
-clangup install dl.clangup.dev/llvm/default
-clangup install dl.clangup.dev/llvm/default@22.1.8-1
-```
-
-When exactly one source is configured, `clangup install` selects its default
-channel. The host target is selected automatically; `--target` selects an
-explicit target triple.
-
-Manage installed toolchains:
-
-```sh
 clangup list
-clangup default dl.clangup.dev/llvm/default
-clangup uninstall dl.clangup.dev/llvm/default
-clangup gc
+clangup default default@22.1.8-1
+clangup uninstall default@22.1.8-1
 ```
 
 The first installed toolchain becomes the default. Add its command shims to the
@@ -55,25 +23,21 @@ current shell with:
 eval "$(clangup env)"
 ```
 
-Check the host, external driver requirements, installed files and compiler
-runtime behavior:
+Build-system integrations can resolve and install an exact toolchain without
+changing the default:
 
 ```sh
-clangup doctor
-clangup doctor --full
+clangup resolve default@22.1.8-1 --format=json
+clangup ensure default@22.1.8-1 --format=json
+clangup path default@22.1.8-1
 ```
 
-Build-system integrations can resolve exact compiler paths without using the
-default toolchain:
+`CLANGUP_INDEX_URL` overrides the official index URL for development and local
+testing.
+
+Local artifacts are installable with a sibling `manifest.json`:
 
 ```sh
-clangup resolve dl.clangup.dev/llvm/default --install --format=json
-```
-
-Local or externally hosted artifacts can be installed with their sibling
-manifest:
-
-```sh
-clangup install --file ./clang-22.1.8-1-x86_64-unknown-linux-gnu.tar.zst
-clangup install --url https://example.com/clang.tar.zst
+clangup install --file ./toolchain.tar.zst
+clangup install --url https://example.com/toolchain.tar.zst
 ```
