@@ -1,0 +1,62 @@
+name: repository publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      descriptor_key:
+        description: Repository key of the uploaded release descriptor
+        type: string
+        required: true
+      descriptor_size:
+        description: Release descriptor size in bytes
+        type: string
+        required: true
+      descriptor_sha256:
+        description: Release descriptor SHA-256
+        type: string
+        required: true
+
+concurrency:
+  group: repository-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Prepare release descriptor identity
+        env:
+          DESCRIPTOR_KEY: ${{ inputs.descriptor_key }}
+          DESCRIPTOR_SIZE: ${{ inputs.descriptor_size }}
+          DESCRIPTOR_SHA256: ${{ inputs.descriptor_sha256 }}
+        run: |
+          mkdir -p out
+          jq -n \
+            --arg key "$DESCRIPTOR_KEY" \
+            --argjson size "$DESCRIPTOR_SIZE" \
+            --arg sha256 "$DESCRIPTOR_SHA256" \
+            '{schema:"clangup.staged-file/v1",object:{key:$key,size:$size,sha256:$sha256}}' \
+            > out/staged-release.json
+
+      - name: Publish release
+        env:
+          UPLOAD_ENDPOINT: ${{ vars.CLANGUP_UPLOAD_ENDPOINT }}
+        run: |
+          test -n "$UPLOAD_ENDPOINT"
+          token="$(curl -fsSL \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=clangup-r2-uploader" |
+            python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+          python3 specs/default/build/stage.py \
+            --endpoint "$UPLOAD_ENDPOINT" \
+            --token "$token" \
+            --output out/published-release.json \
+            publish \
+            --descriptor out/staged-release.json
+          cat out/published-release.json

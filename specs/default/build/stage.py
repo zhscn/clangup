@@ -67,6 +67,7 @@ def upload(endpoint: str, token: str, objects: list[dict[str, Any]]) -> None:
         headers={
             "authorization": f"Bearer {token}",
             "content-type": "application/json",
+            "user-agent": "clangup-build/1",
         },
         method="POST",
     )
@@ -93,6 +94,7 @@ def upload(endpoint: str, token: str, objects: list[dict[str, Any]]) -> None:
         headers={
             "authorization": f"Bearer {token}",
             "content-type": "application/json",
+            "user-agent": "clangup-build/1",
         },
         method="POST",
     )
@@ -175,6 +177,36 @@ def stage_file(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def publish_release(args: argparse.Namespace) -> dict[str, Any]:
+    staged = load_json(args.descriptor)
+    if staged.get("schema") != "clangup.staged-file/v1":
+        fail("invalid staged release descriptor")
+    request = urllib.request.Request(
+        args.endpoint.rstrip("/") + "/v1/releases:publish",
+        data=json.dumps(
+            {
+                "schema": "clangup.release-publish/v1",
+                "descriptor": staged.get("object"),
+            },
+            separators=(",", ":"),
+        ).encode(),
+        headers={
+            "authorization": f"Bearer {args.token}",
+            "content-type": "application/json",
+            "user-agent": "clangup-build/1",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request) as response:
+            result = json.load(response)
+    except Exception as reason:
+        fail(f"release publish request failed: {reason}")
+    if not isinstance(result, dict) or result.get("schema") != "clangup.release-publish-response/v1":
+        fail("release publish service returned an invalid response")
+    return result
+
+
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--endpoint", required=True)
@@ -191,6 +223,8 @@ def parse_arguments() -> argparse.Namespace:
     file.add_argument("--file", required=True, type=Path)
     file.add_argument("--key", required=True)
     file.add_argument("--content-type", required=True)
+    publish = commands.add_parser("publish")
+    publish.add_argument("--descriptor", required=True, type=Path)
     return parser.parse_args()
 
 
@@ -202,8 +236,10 @@ def main() -> None:
         result = stage_target(args)
     elif args.command == "inputs":
         result = stage_inputs(args)
-    else:
+    elif args.command == "file":
         result = stage_file(args)
+    else:
+        result = publish_release(args)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
         json.dumps(result, sort_keys=True, separators=(",", ":")) + "\n",

@@ -95,7 +95,7 @@ func hasJSONFormat(args []string) bool {
 func newRootCommand(version string) *cobra.Command {
 	root := &cobra.Command{
 		Use:           "clangup",
-		Short:         "Install, build, and publish Clang toolchains",
+		Short:         "Install and manage Clang toolchains",
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Args:          cobra.NoArgs,

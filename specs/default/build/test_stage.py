@@ -32,6 +32,22 @@ class UploadHandler(BaseHTTPRequestHandler):
             ]
             self.respond({"objects": objects})
             return
+        if self.path == "/v1/releases:publish":
+            self.respond(
+                {
+                    "schema": "clangup.release-publish-response/v1",
+                    "channel": "default",
+                    "exact": "1-1",
+                    "descriptor": body["descriptor"],
+                    "catalog": {
+                        "key": "catalog-v1.json",
+                        "size": 1,
+                        "sha256": "0" * 64,
+                    },
+                    "written": True,
+                }
+            )
+            return
         statuses = [
             {"key": item["key"], "status": "present"} for item in body["objects"]
         ]
@@ -109,6 +125,47 @@ class StageTest(unittest.TestCase):
             self.assertEqual(staged["schema"], "clangup.staged-target/v1")
             self.assertEqual(staged["artifact"]["sha256"], digest)
             self.assertEqual(len(UploadHandler.uploaded), 3)
+
+    def test_publishes_staged_release(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            descriptor = {
+                "key": "releases/default/1-1/release.json",
+                "size": 42,
+                "sha256": "a" * 64,
+            }
+            self.write(
+                root / "staged-release.json",
+                {"schema": "clangup.staged-file/v1", "object": descriptor},
+            )
+            server = ThreadingHTTPServer(("127.0.0.1", 0), UploadHandler)
+            thread = threading.Thread(target=server.serve_forever)
+            thread.start()
+            try:
+                output = root / "published-release.json"
+                subprocess.run(
+                    [
+                        sys.executable,
+                        str(Path(__file__).with_name("stage.py")),
+                        "--endpoint",
+                        f"http://127.0.0.1:{server.server_address[1]}",
+                        "--token",
+                        "test",
+                        "--output",
+                        str(output),
+                        "publish",
+                        "--descriptor",
+                        str(root / "staged-release.json"),
+                    ],
+                    check=True,
+                )
+            finally:
+                server.shutdown()
+                thread.join()
+                server.server_close()
+            result = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(result["schema"], "clangup.release-publish-response/v1")
+            self.assertEqual(result["descriptor"], descriptor)
 
     @staticmethod
     def write(path: Path, value: object) -> None:

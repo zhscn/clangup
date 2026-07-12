@@ -5,6 +5,7 @@ on:
     paths:
       - .github/workflows/clangup.yml
       - .github/workflows/default-channel.yml
+      - .github/workflows/repository-publish.yml
       - cmd/**
       - internal/**
       - specs/**
@@ -16,6 +17,7 @@ on:
     paths:
       - .github/workflows/clangup.yml
       - .github/workflows/default-channel.yml
+      - .github/workflows/repository-publish.yml
       - cmd/**
       - internal/**
       - specs/**
