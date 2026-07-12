@@ -11,6 +11,10 @@ import stage
 
 
 def locate(root: Path, entry: dict) -> Path:
+    if "path" in entry:
+        path = root / entry["path"]
+        if path.is_file() and stage.sha256_file(path) == entry["sha256"]:
+            return path
     candidates = [path for path in root.rglob(Path(entry["key"]).name) if path.is_file()]
     for path in candidates:
         if path.stat().st_size == entry["size"] and stage.sha256_file(path) == entry["sha256"]:
@@ -25,31 +29,35 @@ def main() -> None:
     parser.add_argument("--bundle", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
-    descriptors = [path for path in args.bundle.rglob("release.json") if stage.load_json(path).get("schema") == "clangup.release/v1"]
+    descriptors = [path for path in args.bundle.rglob("bundle.json") if stage.load_json(path).get("schema") == "clangup.release-bundle/v1"]
     if len(descriptors) != 1:
-        stage.fail("expected exactly one legacy release.json")
+        stage.fail("expected exactly one legacy bundle.json")
     old = stage.load_json(descriptors[0])
-    identity = old["release"]
+    root = descriptors[0].parent
+    identity = {key: old[key] for key in ("channel", "version", "release")}
     exact = f"{identity['version']}-{identity['release']}"
     prefix = f"releases/{identity['channel']}/{exact}"
 
     def convert(entry: dict, key: str, content_type: str) -> dict:
-        item = stage.object_entry(locate(args.bundle, entry), key, content_type)
+        item = stage.object_entry(locate(root, entry), key, content_type)
         if item["sha256"] != entry["sha256"]:
             stage.fail(f"bundle digest differs: {entry['key']}")
         return item
 
-    source = convert(old["source"], f"sources/llvm/{identity['version']}/llvm-project.tar.xz", "application/x-xz")
-    locked = convert(old["locked_spec"], f"{prefix}/inputs/spec.lock.json", "application/json")
+    source_entry = next(item for item in old["objects"] if item["kind"] == "source")
+    source = convert(source_entry, f"sources/llvm/{identity['version']}/llvm-project.tar.xz", "application/x-xz")
+    locked_entry = {"path": old["locked_spec"], "sha256": old["locked_spec_sha256"]}
+    locked = convert(locked_entry, f"{prefix}/inputs/spec.lock.json", "application/json")
     lock = stage.load_json(Path(locked["path"]))
-    patches = [convert(item, f"{prefix}/inputs/patches/{Path(item['key']).name}", "text/x-patch") for item in old["patches"]]
+    patch_entries = [item for item in old["objects"] if item["kind"] == "patch"]
+    patches = [convert(item, f"{prefix}/inputs/patches/{Path(lock_patch['path']).name}", "text/x-patch") for item, lock_patch in zip(patch_entries, lock["source"]["patches"], strict=True)]
     stage.upload(args.endpoint, args.token, [source, locked, *patches])
     artifacts = []
     for target in old["artifacts"]:
         target_prefix = f"{prefix}/targets/{target['target']}"
-        artifact = convert(target["artifact"], f"{target_prefix}/toolchain.tar.zst", "application/zstd")
-        manifest = convert(target["manifest"], f"{target_prefix}/manifest.json", "application/json")
-        record = stage.load_json(locate(args.bundle, target["build_record"]))
+        artifact = convert({"path": target["payload"], "sha256": target["payload_sha256"]}, f"{target_prefix}/toolchain.tar.zst", "application/zstd")
+        manifest = convert({"path": target["manifest"], "sha256": target["manifest_sha256"]}, f"{target_prefix}/manifest.json", "application/json")
+        record = stage.load_json(locate(root, {"path": target["build_record"], "sha256": target["build_record_sha256"]}))
         stage.upload(args.endpoint, args.token, [artifact, manifest])
         build = {
             "commit": record["build_commit"],
