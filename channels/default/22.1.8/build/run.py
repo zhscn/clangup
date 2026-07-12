@@ -539,7 +539,6 @@ def make_manifest(
                 "llvm_version": release["version"],
                 "origin_url": source["url"],
                 "sha256": source["sha256"],
-                "target": f"sources/sha256/{source['sha256']}.tar.xz",
             },
             "patches": patches,
             "patchset_sha256": source["patchset_sha256"],
