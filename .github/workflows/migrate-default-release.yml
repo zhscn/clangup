@@ -1,21 +1,16 @@
-name: repository publish
+name: migrate default release
 
 on:
   workflow_dispatch:
-    inputs:
-      build_run_id:
-        description: Successful default channel build run ID
-        type: string
-        required: true
 
 concurrency:
   group: repository-publish
   cancel-in-progress: false
 
 jobs:
-  publish:
+  migrate:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 45
     permissions:
       actions: read
       contents: read
@@ -23,15 +18,15 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Download release candidate
+      - name: Download legacy release bundle
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          run-id: ${{ inputs.build_run_id }}
-          name: default-release
-          path: out/release
+          run-id: "29181017284"
+          name: default-release-bundle
+          path: out/legacy
 
-      - name: Publish release
+      - name: Upload and publish release
         env:
           UPLOAD_ENDPOINT: ${{ vars.CLANGUP_UPLOAD_ENDPOINT }}
         run: |
@@ -40,10 +35,8 @@ jobs:
             -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=clangup-r2-uploader" |
             python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
-          python3 specs/default/build/stage.py \
+          python3 specs/default/build/migrate_bundle.py \
             --endpoint "$UPLOAD_ENDPOINT" \
             --token "$token" \
-            --output out/published-release.json \
-            publish \
-            --candidate out/release/release-candidate.json
-          cat out/published-release.json
+            --bundle out/legacy \
+            --output out/release-candidate.json

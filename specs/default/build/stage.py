@@ -32,14 +32,14 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def object_entry(path: Path, content_type: str) -> dict[str, Any]:
+def object_entry(path: Path, key: str, content_type: str) -> dict[str, Any]:
     path = path.resolve()
     if path.is_symlink() or not path.is_file():
         fail(f"object is missing or unsafe: {path}")
     digest = sha256_file(path)
     return {
         "path": str(path),
-        "key": f"objects/sha256/{digest}/{path.name}",
+        "key": key,
         "size": path.stat().st_size,
         "sha256": digest,
         "content_type": content_type,
@@ -111,51 +111,52 @@ def public_entry(item: dict[str, Any]) -> dict[str, Any]:
 def stage_target(args: argparse.Namespace) -> dict[str, Any]:
     fragment = load_json(args.fragment)
     directory = args.fragment.resolve().parent
-    artifact = object_entry(
-        fragment_file(directory, fragment["artifact"]), "application/zstd"
-    )
-    manifest = object_entry(
-        fragment_file(directory, fragment["manifest"]), "application/json"
-    )
-    build_record = object_entry(
-        fragment_file(directory, fragment["build_record"]), "application/json"
-    )
+    identity = fragment["release"]
+    prefix = f"releases/{identity['channel']}/{identity['version']}-{identity['release']}/targets/{fragment['target']}"
+    artifact = object_entry(fragment_file(directory, fragment["artifact"]), f"{prefix}/toolchain.tar.zst", "application/zstd")
+    manifest = object_entry(fragment_file(directory, fragment["manifest"]), f"{prefix}/manifest.json", "application/json")
+    build_record_path = fragment_file(directory, fragment["build_record"])
     manifest_value = load_json(Path(manifest["path"]))
     if manifest_value.get("artifact", {}).get("sha256") != artifact["sha256"]:
         fail("artifact digest does not match manifest")
-    record_value = load_json(Path(build_record["path"]))
+    record_value = load_json(build_record_path)
     if record_value.get("artifact_sha256") != artifact["sha256"]:
         fail("artifact digest does not match build record")
-    upload(args.endpoint, args.token, [artifact, manifest, build_record])
+    upload(args.endpoint, args.token, [artifact, manifest])
     return {
         "schema": "clangup.staged-target/v1",
         "release": fragment["release"],
         "target": fragment["target"],
         "artifact": public_entry(artifact),
         "manifest": public_entry(manifest),
-        "build_record": public_entry(build_record),
+        "build": {
+            "commit": record_value["build_commit"],
+            "bootstrap": record_value["bootstrap"],
+            "locked_spec_sha256": record_value["locked_spec_sha256"],
+            "source_identity_sha256": record_value["source_identity_sha256"],
+            **({"source_date_epoch": record_value["source_date_epoch"]} if "source_date_epoch" in record_value else {}),
+        },
     }
 
 
 def stage_inputs(args: argparse.Namespace) -> dict[str, Any]:
     lock_value = load_json(args.spec_lock)
-    source = object_entry(args.source, "application/x-xz")
+    identity = lock_value["release"]
+    exact = f"{identity['version']}-{identity['release']}"
+    prefix = f"releases/{identity['channel']}/{exact}"
+    source = object_entry(args.source, f"sources/llvm/{identity['version']}/llvm-project.tar.xz", "application/x-xz")
     if lock_value["source"]["sha256"] != source["sha256"]:
         fail("source digest does not match locked spec")
-    source["key"] = (
-        f"objects/sha256/{source['sha256']}/"
-        f"llvm-project-{lock_value['release']['version']}.src.tar.xz"
-    )
     objects = [source]
     patches = []
     for patch in lock_value["source"]["patches"]:
         path = args.bundle.resolve() / patch["path"]
-        item = object_entry(path, "text/x-patch")
+        item = object_entry(path, f"{prefix}/inputs/patches/{path.name}", "text/x-patch")
         if item["sha256"] != patch["sha256"]:
             fail(f"patch digest does not match locked spec: {patch['path']}")
         objects.append(item)
         patches.append(public_entry(item))
-    locked_spec = object_entry(args.spec_lock, "application/json")
+    locked_spec = object_entry(args.spec_lock, f"{prefix}/inputs/spec.lock.json", "application/json")
     objects.append(locked_spec)
     upload(args.endpoint, args.token, objects)
     return {
@@ -164,37 +165,12 @@ def stage_inputs(args: argparse.Namespace) -> dict[str, Any]:
         "locked_spec": public_entry(locked_spec),
         "source": public_entry(source),
         "patches": patches,
-    }
-
-
-def stage_release(args: argparse.Namespace) -> dict[str, Any]:
-    release = load_json(args.file)
-    if release.get("schema") != "clangup.release/v1":
-        fail("invalid release descriptor")
-    identity = release.get("release")
-    if not isinstance(identity, dict):
-        fail("release descriptor has no identity")
-    channel = identity.get("channel")
-    version = identity.get("version")
-    release_number = identity.get("release")
-    if (
-        not isinstance(channel, str)
-        or not isinstance(version, str)
-        or not isinstance(release_number, int)
-        or release_number < 1
-    ):
-        fail("release descriptor has an invalid identity")
-    item = object_entry(args.file, "application/json")
-    item["key"] = f"releases/{channel}/{version}-{release_number}/release.json"
-    upload(args.endpoint, args.token, [item])
-    return {
-        "schema": "clangup.release-candidate/v1",
-        "descriptor": public_entry(item),
+        "patchset_sha256": lock_value["source"]["patchset_sha256"],
     }
 
 
 def publish_release(args: argparse.Namespace) -> dict[str, Any]:
-    staged = load_json(args.descriptor)
+    staged = load_json(args.candidate)
     if staged.get("schema") != "clangup.release-candidate/v1":
         fail("invalid release candidate")
     request = urllib.request.Request(
@@ -202,7 +178,7 @@ def publish_release(args: argparse.Namespace) -> dict[str, Any]:
         data=json.dumps(
             {
                 "schema": "clangup.release-publish/v1",
-                "descriptor": staged.get("descriptor"),
+                "candidate": staged,
             },
             separators=(",", ":"),
         ).encode(),
@@ -235,10 +211,8 @@ def parse_arguments() -> argparse.Namespace:
     inputs.add_argument("--spec-lock", required=True, type=Path)
     inputs.add_argument("--source", required=True, type=Path)
     inputs.add_argument("--bundle", required=True, type=Path)
-    release = commands.add_parser("release")
-    release.add_argument("--file", required=True, type=Path)
     publish = commands.add_parser("publish")
-    publish.add_argument("--descriptor", required=True, type=Path)
+    publish.add_argument("--candidate", required=True, type=Path)
     return parser.parse_args()
 
 
@@ -250,8 +224,6 @@ def main() -> None:
         result = stage_target(args)
     elif args.command == "inputs":
         result = stage_inputs(args)
-    elif args.command == "release":
-        result = stage_release(args)
     else:
         result = publish_release(args)
     args.output.parent.mkdir(parents=True, exist_ok=True)

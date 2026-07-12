@@ -18,7 +18,7 @@ func ValidateManifest(release *Release, artifact *Artifact, manifest *Manifest) 
 	if manifest.Artifact.Compression != "tar.zst" || manifest.Artifact.PayloadRoot != "prefix" || !manifest.Artifact.Relocatable {
 		return fmt.Errorf("unsupported artifact payload contract for %s", artifact.Target)
 	}
-	if manifest.Source.Archive.SHA256 != release.Source.SHA256 {
+	if manifest.Source.Archive.SHA256 != release.Inputs.Source.SHA256 {
 		return fmt.Errorf("manifest source identity mismatch for %s", artifact.Target)
 	}
 	return nil

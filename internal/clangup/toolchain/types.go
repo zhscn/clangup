@@ -34,19 +34,24 @@ type CatalogRelease struct {
 }
 
 type Release struct {
-	Schema     string          `json:"schema"`
-	Release    ReleaseIdentity `json:"release"`
-	LockedSpec Object          `json:"locked_spec"`
-	Source     Object          `json:"source"`
-	Patches    []Object        `json:"patches"`
-	Artifacts  []Artifact      `json:"artifacts"`
+	Schema    string          `json:"schema"`
+	Release   ReleaseIdentity `json:"release"`
+	Inputs    ReleaseInputs   `json:"inputs"`
+	Artifacts []Artifact      `json:"artifacts"`
+}
+
+type ReleaseInputs struct {
+	LockedSpec     Object   `json:"locked_spec"`
+	Source         Object   `json:"source"`
+	Patches        []Object `json:"patches"`
+	PatchsetSHA256 string   `json:"patchset_sha256"`
 }
 
 type Artifact struct {
-	Target      string `json:"target"`
-	Artifact    Object `json:"artifact"`
-	Manifest    Object `json:"manifest"`
-	BuildRecord Object `json:"build_record"`
+	Target   string         `json:"target"`
+	Artifact Object         `json:"artifact"`
+	Manifest Object         `json:"manifest"`
+	Build    map[string]any `json:"build"`
 }
 
 type Manifest struct {

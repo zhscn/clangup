@@ -55,18 +55,21 @@ def main() -> None:
                 "target": triple,
                 "artifact": target["artifact"],
                 "manifest": target["manifest"],
-                "build_record": target["build_record"],
+                "build": target["build"],
             }
         )
     missing = sorted(required - seen)
     if missing:
         fail(f"required target matrix is incomplete: {', '.join(missing)}")
     descriptor = {
-        "schema": "clangup.release/v1",
+        "schema": "clangup.release-candidate/v1",
         "release": release,
-        "locked_spec": inputs["locked_spec"],
-        "source": inputs["source"],
-        "patches": inputs["patches"],
+        "inputs": {
+            "locked_spec": inputs["locked_spec"],
+            "source": inputs["source"],
+            "patches": inputs["patches"],
+            "patchset_sha256": inputs["patchset_sha256"],
+        },
         "artifacts": sorted(targets, key=lambda item: item["target"]),
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)

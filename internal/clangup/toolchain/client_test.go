@@ -28,7 +28,7 @@ func TestSyncCatalogCachesReleaseMetadata(t *testing.T) {
 	manifest.Source.Archive.SHA256 = source.SHA256
 	manifestContents, _ := json.Marshal(manifest)
 	manifestObject := testObject("objects/manifest.json", manifestContents)
-	releaseValue := Release{Schema: "clangup.release/v1", Release: identity, Source: source}
+	releaseValue := Release{Schema: "clangup.release/v1", Release: identity, Inputs: ReleaseInputs{Source: source}}
 	releaseValue.Artifacts = []Artifact{{Target: "x86_64-unknown-linux-gnu", Manifest: manifestObject, Artifact: payload}}
 	releaseContents, _ := json.Marshal(releaseValue)
 	releaseObject := testObject("releases/default/1-1/release.json", releaseContents)

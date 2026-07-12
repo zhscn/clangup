@@ -635,6 +635,7 @@ def main() -> None:
         "target": target["triple"],
         "locked_spec_sha256": spec_digest,
         "source_identity_sha256": source_identity_digest,
+        "source_date_epoch": args.source_date_epoch,
         "build_commit": os.environ.get("CLANGUP_BUILD_COMMIT", "unknown"),
         "bootstrap": {
             "kind": os.environ.get("CLANGUP_BOOTSTRAP_KIND", "seed-image"),
