@@ -1,0 +1,75 @@
+name: clangup
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/clangup.yml
+      - .github/workflows/default-channel.yml
+      - cmd/**
+      - internal/**
+      - specs/**
+      - go.mod
+      - go.sum
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/clangup.yml
+      - .github/workflows/default-channel.yml
+      - cmd/**
+      - internal/**
+      - specs/**
+      - go.mod
+      - go.sum
+
+concurrency:
+  group: clangup-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check formatting
+        run: |
+          unformatted="$(gofmt -l cmd internal)"
+          if [[ -n "$unformatted" ]]; then
+            echo "unformatted Go files:" >&2
+            echo "$unformatted" >&2
+            exit 1
+          fi
+
+      - name: Check build scripts
+        run: |
+          python3 -m py_compile specs/default/build/run.py specs/default/build/assemble.py
+          python3 -m unittest discover -s specs/default/build -p 'test_*.py'
+          bash -n \
+            specs/default/build/build-linux.sh \
+            specs/default/build/build-macos.sh \
+            specs/default/build/verify-linux.sh \
+            specs/default/build/verify-asan-matrix.sh
+
+      - name: Check module files
+        run: go mod tidy -diff
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race ./...
+
+      - name: Build static CLI
+        env:
+          CGO_ENABLED: "0"
+        run: go build -trimpath -o /tmp/clangup ./cmd/clangup

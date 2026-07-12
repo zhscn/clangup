@@ -1,0 +1,282 @@
+name: default channel build
+
+on:
+  workflow_dispatch:
+    inputs:
+      bootstrap_image:
+        description: Immutable seed tag used for the first rolling artifact
+        type: string
+        required: true
+        default: ghcr.io/zhscn/clangup-seed:22.1.8-1
+
+concurrency:
+  group: default-channel-build
+  cancel-in-progress: false
+
+env:
+  SPEC: specs/default/22.1.8/spec.yaml
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      source_url: ${{ steps.plan.outputs.source_url }}
+      source_sha256: ${{ steps.plan.outputs.source_sha256 }}
+      source_date_epoch: ${{ steps.plan.outputs.source_date_epoch }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Lock spec
+        run: |
+          go build -trimpath -o /tmp/clangup ./cmd/clangup
+          mkdir -p out/plan
+          /tmp/clangup repo spec check "$SPEC"
+          /tmp/clangup repo spec lock "$SPEC" --output out/plan/spec.lock.json
+
+      - name: Export plan
+        id: plan
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          with open("out/plan/spec.lock.json", encoding="utf-8") as file:
+              lock = json.load(file)
+          print(f"source_url={lock['source']['url']}")
+          print(f"source_sha256={lock['source']['sha256']}")
+          PY
+          echo "source_date_epoch=$(git log -1 --format=%ct)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload locked plan
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: default-plan
+          path: out/plan/spec.lock.json
+          if-no-files-found: error
+          retention-days: 7
+
+  linux:
+    name: build ${{ matrix.triple }}
+    needs: plan
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - triple: x86_64-unknown-linux-gnu
+            profile: el7
+            arch: amd64
+            runner: ubuntu-24.04
+            verify_image: quay.io/centos/centos:7
+          - triple: aarch64-unknown-linux-gnu
+            profile: el8
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            verify_image: quay.io/centos/centos:8
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+            /usr/local/share/powershell /usr/lib/jvm /opt/microsoft || true
+          docker image prune -af || true
+          df -h
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download locked plan
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: default-plan
+          path: out/plan
+
+      - name: Download verified source
+        env:
+          SOURCE_URL: ${{ needs.plan.outputs.source_url }}
+          SOURCE_SHA256: ${{ needs.plan.outputs.source_sha256 }}
+        run: |
+          mkdir -p .cache/sources
+          curl -fsSL -o .cache/sources/llvm-project.tar.xz "$SOURCE_URL"
+          echo "$SOURCE_SHA256  .cache/sources/llvm-project.tar.xz" | sha256sum -c -
+
+      - name: Resolve bootstrap image
+        id: bootstrap
+        env:
+          IMAGE: ${{ inputs.bootstrap_image }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          index_digest="$(docker buildx imagetools inspect "$IMAGE" --format '{{json .Manifest}}' | jq -er .digest)"
+          platform_digest="$(docker buildx imagetools inspect "$IMAGE" --raw |
+            jq -er --arg arch "$ARCH" '.manifests[] | select(.platform.os == "linux" and .platform.architecture == $arch) | .digest')"
+          repository="${IMAGE%:*}"
+          echo "ref=${repository}@${index_digest}" >> "$GITHUB_OUTPUT"
+          echo "identity=${repository}@${index_digest}#${platform_digest}" >> "$GITHUB_OUTPUT"
+
+      - name: Build target
+        env:
+          BOOTSTRAP_REF: ${{ steps.bootstrap.outputs.ref }}
+          BOOTSTRAP_IDENTITY: ${{ steps.bootstrap.outputs.identity }}
+          SOURCE_DATE_EPOCH: ${{ needs.plan.outputs.source_date_epoch }}
+        run: |
+          mkdir -p ".cache/build-${{ matrix.arch }}" "out/${{ matrix.triple }}"
+          docker run --rm --network none \
+            --mount type=bind,src="$PWD",dst=/workspace,readonly \
+            --mount type=bind,src="$PWD/out/plan/spec.lock.json",dst=/input/spec.lock.json,readonly \
+            --mount type=bind,src="$PWD/.cache/sources/llvm-project.tar.xz",dst=/input/llvm-project.tar.xz,readonly \
+            --mount type=bind,src="$PWD/.cache/build-${{ matrix.arch }}",dst=/build \
+            --mount type=bind,src="$PWD/out/${{ matrix.triple }}",dst=/out \
+            -e CLANGUP_BUILD_COMMIT=${{ github.sha }} \
+            -e CLANGUP_BOOTSTRAP_KIND=seed-image \
+            -e CLANGUP_BOOTSTRAP_IDENTITY="$BOOTSTRAP_IDENTITY" \
+            "$BOOTSTRAP_REF" \
+            python3 /workspace/specs/default/build/run.py \
+              --spec-lock /input/spec.lock.json \
+              --target "${{ matrix.triple }}" \
+              --source /input/llvm-project.tar.xz \
+              --bundle /workspace/specs/default/22.1.8 \
+              --work /build/work \
+              --output /out \
+              --jobs "$(nproc)" \
+              --link-jobs 2 \
+              --source-date-epoch "$SOURCE_DATE_EPOCH"
+
+      - name: Verify on clean baseline
+        run: |
+          mkdir -p verify/prefix
+          tar --use-compress-program=unzstd -xf out/${{ matrix.triple }}/*.tar.zst -C verify/prefix
+          docker run --rm --network host \
+            --mount type=bind,src="$PWD/verify/prefix",dst=/opt/clangup,readonly \
+            --mount type=bind,src="$PWD",dst=/workspace,readonly \
+            "${{ matrix.verify_image }}" \
+            bash /workspace/specs/default/build/verify-linux.sh /opt/clangup "${{ matrix.profile }}"
+
+      - name: Upload target fragment
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: default-${{ matrix.triple }}
+          path: out/${{ matrix.triple }}/
+          if-no-files-found: error
+          retention-days: 7
+
+  macos:
+    name: build arm64-apple-darwin
+    needs: plan
+    runs-on: macos-14
+    timeout-minutes: 360
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install build tools
+        run: brew install cmake ninja zstd gnu-tar
+
+      - name: Download locked plan
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: default-plan
+          path: out/plan
+
+      - name: Download verified source
+        env:
+          SOURCE_URL: ${{ needs.plan.outputs.source_url }}
+          SOURCE_SHA256: ${{ needs.plan.outputs.source_sha256 }}
+        run: |
+          mkdir -p .cache/sources
+          curl -fsSL -o .cache/sources/llvm-project.tar.xz "$SOURCE_URL"
+          echo "$SOURCE_SHA256  .cache/sources/llvm-project.tar.xz" | shasum -a 256 -c -
+
+      - name: Build target
+        env:
+          CLANGUP_BUILD_COMMIT: ${{ github.sha }}
+          CLANGUP_BOOTSTRAP_KIND: xcode
+          SOURCE_DATE_EPOCH: ${{ needs.plan.outputs.source_date_epoch }}
+        run: |
+          export CLANGUP_BOOTSTRAP_IDENTITY="$(xcodebuild -version | tr '\n' ' ')"
+          python3 specs/default/build/run.py \
+            --spec-lock out/plan/spec.lock.json \
+            --target arm64-apple-darwin \
+            --source .cache/sources/llvm-project.tar.xz \
+            --bundle specs/default/22.1.8 \
+            --work .cache/build-macos/work \
+            --output out/arm64-apple-darwin \
+            --jobs "$(sysctl -n hw.ncpu)" \
+            --source-date-epoch "$SOURCE_DATE_EPOCH"
+
+      - name: Upload target fragment
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: default-arm64-apple-darwin
+          path: out/arm64-apple-darwin/
+          if-no-files-found: error
+          retention-days: 7
+
+  assemble:
+    name: assemble release bundle
+    needs: [plan, linux, macos]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Download locked plan
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: default-plan
+          path: out/plan
+
+      - name: Download target fragments
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: default-*
+          path: out/fragments
+
+      - name: Download verified source
+        env:
+          SOURCE_URL: ${{ needs.plan.outputs.source_url }}
+          SOURCE_SHA256: ${{ needs.plan.outputs.source_sha256 }}
+        run: |
+          mkdir -p .cache/sources
+          curl -fsSL -o .cache/sources/llvm-project.tar.xz "$SOURCE_URL"
+          echo "$SOURCE_SHA256  .cache/sources/llvm-project.tar.xz" | sha256sum -c -
+
+      - name: Assemble
+        run: |
+          python3 specs/default/build/assemble.py \
+            --spec-lock out/plan/spec.lock.json \
+            --source .cache/sources/llvm-project.tar.xz \
+            --bundle specs/default/22.1.8 \
+            --fragments out/fragments \
+            --output out/release-bundle
+          find out/release-bundle -maxdepth 5 -type f -print
+
+      - name: Upload release bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: default-release-bundle
+          path: out/release-bundle/
+          if-no-files-found: error
+          retention-days: 14
