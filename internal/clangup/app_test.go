@@ -31,10 +31,3 @@ func TestUnknownCommandIsInvalidRequest(t *testing.T) {
 		t.Fatalf("unexpected error: %s", stdout.String())
 	}
 }
-
-func TestRepoCommandIsAbsent(t *testing.T) {
-	var stdout, stderr bytes.Buffer
-	if exitCode := Run([]string{"repo"}, &stdout, &stderr, "test"); exitCode != 2 {
-		t.Fatalf("exit code = %d", exitCode)
-	}
-}

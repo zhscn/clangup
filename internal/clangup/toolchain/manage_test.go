@@ -18,12 +18,12 @@ func TestInstallStateAndDefaultLinks(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	record := InstallRecord{Channel: "example.com/llvm/default", Version: "1", Release: 1, Target: "target", Prefix: prefix, ManifestSHA256: "manifest", ArtifactSHA256: "artifact"}
+	record := InstallRecord{Channel: "default", Version: "1", Release: 1, Target: "target", Prefix: prefix, ManifestSHA256: "manifest", ArtifactSHA256: "artifact"}
 	if err := RecordInstall(record); err != nil {
 		t.Fatal(err)
 	}
 	installed, err := ListInstalls()
-	if err != nil || len(installed) != 1 || installed[0].ID() != "example.com/llvm/default@1-1#target" {
+	if err != nil || len(installed) != 1 || installed[0].ID() != "default@1-1#target" {
 		t.Fatalf("installs = %#v, %v", installed, err)
 	}
 	if err := SetDefault(prefix); err != nil {
