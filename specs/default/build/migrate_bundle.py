@@ -25,9 +25,9 @@ def main() -> None:
     parser.add_argument("--bundle", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
-    descriptors = list(args.bundle.rglob("bundle.json"))
+    descriptors = [path for path in args.bundle.rglob("release.json") if stage.load_json(path).get("schema") == "clangup.release/v1"]
     if len(descriptors) != 1:
-        stage.fail("expected exactly one bundle.json")
+        stage.fail("expected exactly one legacy release.json")
     old = stage.load_json(descriptors[0])
     identity = old["release"]
     exact = f"{identity['version']}-{identity['release']}"
