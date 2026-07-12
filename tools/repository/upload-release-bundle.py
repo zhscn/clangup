@@ -193,6 +193,7 @@ class Presign:
             headers={
                 "authorization": f"Bearer {self.token}",
                 "content-type": "application/json",
+                "user-agent": "clangup-repository/1",
             },
             method="POST",
         )
