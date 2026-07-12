@@ -52,7 +52,10 @@ jobs:
 
       - name: Check build scripts
         run: |
-          python3 -m py_compile specs/default/build/run.py specs/default/build/assemble.py
+          python3 -m py_compile \
+            specs/default/build/run.py \
+            specs/default/build/stage.py \
+            specs/default/build/release.py
           python3 -m unittest discover -s specs/default/build -p 'test_*.py'
           bash -n \
             specs/default/build/build-linux.sh \
