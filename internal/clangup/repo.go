@@ -27,11 +27,7 @@ func newRepoCommand() *cobra.Command {
 	}
 	repo.AddCommand(newRepoSpecCommand())
 	repo.AddCommand(newRepoAddCommand(), newRepoListCommand(), newRepoRemoveCommand(), newRepoUpdateCommand())
-	repo.AddCommand(
-		newRepoInitCommand(),
-		newRepoChannelCommand(),
-		newRepoPublishCommand(),
-	)
+	repo.AddCommand(newRepoPublishCommand())
 	return repo
 }
 
