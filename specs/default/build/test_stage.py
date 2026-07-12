@@ -126,7 +126,54 @@ class StageTest(unittest.TestCase):
             self.assertEqual(staged["artifact"]["sha256"], digest)
             self.assertEqual(len(UploadHandler.uploaded), 3)
 
-    def test_publishes_staged_release(self) -> None:
+    def test_stages_release_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            release = root / "release.json"
+            self.write(
+                release,
+                {
+                    "schema": "clangup.release/v1",
+                    "release": {"channel": "default", "version": "22.1.8", "release": 1},
+                },
+            )
+            server = ThreadingHTTPServer(("127.0.0.1", 0), UploadHandler)
+            thread = threading.Thread(target=server.serve_forever)
+            thread.start()
+            try:
+                output = root / "release-candidate.json"
+                subprocess.run(
+                    [
+                        sys.executable,
+                        str(Path(__file__).with_name("stage.py")),
+                        "--endpoint",
+                        f"http://127.0.0.1:{server.server_address[1]}",
+                        "--token",
+                        "test",
+                        "--output",
+                        str(output),
+                        "release",
+                        "--file",
+                        str(release),
+                    ],
+                    check=True,
+                )
+            finally:
+                server.shutdown()
+                thread.join()
+                server.server_close()
+            candidate = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(candidate["schema"], "clangup.release-candidate/v1")
+            self.assertEqual(
+                candidate["descriptor"]["key"],
+                "releases/default/22.1.8-1/release.json",
+            )
+            self.assertEqual(
+                candidate["descriptor"]["sha256"],
+                hashlib.sha256(release.read_bytes()).hexdigest(),
+            )
+
+    def test_publishes_release_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             descriptor = {
@@ -135,8 +182,8 @@ class StageTest(unittest.TestCase):
                 "sha256": "a" * 64,
             }
             self.write(
-                root / "staged-release.json",
-                {"schema": "clangup.staged-file/v1", "object": descriptor},
+                root / "release-candidate.json",
+                {"schema": "clangup.release-candidate/v1", "descriptor": descriptor},
             )
             server = ThreadingHTTPServer(("127.0.0.1", 0), UploadHandler)
             thread = threading.Thread(target=server.serve_forever)
@@ -155,7 +202,7 @@ class StageTest(unittest.TestCase):
                         str(output),
                         "publish",
                         "--descriptor",
-                        str(root / "staged-release.json"),
+                        str(root / "release-candidate.json"),
                     ],
                     check=True,
                 )

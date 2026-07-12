@@ -3,16 +3,8 @@ name: repository publish
 on:
   workflow_dispatch:
     inputs:
-      descriptor_key:
-        description: Repository key of the uploaded release descriptor
-        type: string
-        required: true
-      descriptor_size:
-        description: Release descriptor size in bytes
-        type: string
-        required: true
-      descriptor_sha256:
-        description: Release descriptor SHA-256
+      build_run_id:
+        description: Successful default channel build run ID
         type: string
         required: true
 
@@ -25,24 +17,19 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
+      actions: read
       contents: read
       id-token: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Prepare release descriptor identity
-        env:
-          DESCRIPTOR_KEY: ${{ inputs.descriptor_key }}
-          DESCRIPTOR_SIZE: ${{ inputs.descriptor_size }}
-          DESCRIPTOR_SHA256: ${{ inputs.descriptor_sha256 }}
-        run: |
-          mkdir -p out
-          jq -n \
-            --arg key "$DESCRIPTOR_KEY" \
-            --argjson size "$DESCRIPTOR_SIZE" \
-            --arg sha256 "$DESCRIPTOR_SHA256" \
-            '{schema:"clangup.staged-file/v1",object:{key:$key,size:$size,sha256:$sha256}}' \
-            > out/staged-release.json
+      - name: Download release candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.build_run_id }}
+          name: default-release
+          path: out/release
 
       - name: Publish release
         env:
@@ -58,5 +45,5 @@ jobs:
             --token "$token" \
             --output out/published-release.json \
             publish \
-            --descriptor out/staged-release.json
+            --descriptor out/release/release-candidate.json
           cat out/published-release.json

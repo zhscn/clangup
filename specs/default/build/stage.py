@@ -167,26 +167,42 @@ def stage_inputs(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
-def stage_file(args: argparse.Namespace) -> dict[str, Any]:
-    item = object_entry(args.file, args.content_type)
-    item["key"] = args.key
+def stage_release(args: argparse.Namespace) -> dict[str, Any]:
+    release = load_json(args.file)
+    if release.get("schema") != "clangup.release/v1":
+        fail("invalid release descriptor")
+    identity = release.get("release")
+    if not isinstance(identity, dict):
+        fail("release descriptor has no identity")
+    channel = identity.get("channel")
+    version = identity.get("version")
+    release_number = identity.get("release")
+    if (
+        not isinstance(channel, str)
+        or not isinstance(version, str)
+        or not isinstance(release_number, int)
+        or release_number < 1
+    ):
+        fail("release descriptor has an invalid identity")
+    item = object_entry(args.file, "application/json")
+    item["key"] = f"releases/{channel}/{version}-{release_number}/release.json"
     upload(args.endpoint, args.token, [item])
     return {
-        "schema": "clangup.staged-file/v1",
-        "object": public_entry(item),
+        "schema": "clangup.release-candidate/v1",
+        "descriptor": public_entry(item),
     }
 
 
 def publish_release(args: argparse.Namespace) -> dict[str, Any]:
     staged = load_json(args.descriptor)
-    if staged.get("schema") != "clangup.staged-file/v1":
-        fail("invalid staged release descriptor")
+    if staged.get("schema") != "clangup.release-candidate/v1":
+        fail("invalid release candidate")
     request = urllib.request.Request(
         args.endpoint.rstrip("/") + "/v1/releases:publish",
         data=json.dumps(
             {
                 "schema": "clangup.release-publish/v1",
-                "descriptor": staged.get("object"),
+                "descriptor": staged.get("descriptor"),
             },
             separators=(",", ":"),
         ).encode(),
@@ -219,10 +235,8 @@ def parse_arguments() -> argparse.Namespace:
     inputs.add_argument("--spec-lock", required=True, type=Path)
     inputs.add_argument("--source", required=True, type=Path)
     inputs.add_argument("--bundle", required=True, type=Path)
-    file = commands.add_parser("file")
-    file.add_argument("--file", required=True, type=Path)
-    file.add_argument("--key", required=True)
-    file.add_argument("--content-type", required=True)
+    release = commands.add_parser("release")
+    release.add_argument("--file", required=True, type=Path)
     publish = commands.add_parser("publish")
     publish.add_argument("--descriptor", required=True, type=Path)
     return parser.parse_args()
@@ -236,8 +250,8 @@ def main() -> None:
         result = stage_target(args)
     elif args.command == "inputs":
         result = stage_inputs(args)
-    elif args.command == "file":
-        result = stage_file(args)
+    elif args.command == "release":
+        result = stage_release(args)
     else:
         result = publish_release(args)
     args.output.parent.mkdir(parents=True, exist_ok=True)

@@ -337,11 +337,9 @@ jobs:
           python3 specs/default/build/stage.py \
             --endpoint "$UPLOAD_ENDPOINT" \
             --token "$token" \
-            --output out/staged-release.json \
-            file \
-            --file out/release.json \
-            --key releases/default/22.1.8-1/release.json \
-            --content-type application/json
+            --output out/release-candidate.json \
+            release \
+            --file out/release.json
 
       - name: Upload release descriptor artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -349,6 +347,6 @@ jobs:
           name: default-release
           path: |
             out/release.json
-            out/staged-release.json
+            out/release-candidate.json
           if-no-files-found: error
           retention-days: 14
