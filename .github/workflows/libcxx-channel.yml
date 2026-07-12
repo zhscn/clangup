@@ -1,15 +1,18 @@
-name: default channel
+name: libcxx channel
 
 on:
   workflow_dispatch:
 
 concurrency:
-  group: default-channel
+  group: libcxx-channel
   cancel-in-progress: false
 
 env:
-  CHANNEL_ROOT: channels/default/22.1.8
-  BOOTSTRAP_IMAGE: ghcr.io/zhscn/clangup-seed:22.1.8-1
+  CHANNEL_ROOT: channels/libcxx/22.1.8
+  DOWNLOAD_ROOT: https://dl.clangup.dev
+  BUILDER_IMAGE: ghcr.io/zhscn/clangup-builder:1
+  BOOTSTRAP_CHANNEL: default
+  BOOTSTRAP_EXACT: 22.1.8-1
 
 jobs:
   plan:
@@ -44,7 +47,7 @@ jobs:
           echo "source_date_epoch=$(git log -1 --format=%ct)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: default-plan
+          name: libcxx-plan
           path: out/plan/channel-plan.json
           if-no-files-found: error
           retention-days: 7
@@ -85,7 +88,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: default-plan
+          name: libcxx-plan
           path: out/plan
       - name: Download source
         env:
@@ -95,30 +98,49 @@ jobs:
           mkdir -p .cache/sources
           curl -fsSL -o .cache/sources/llvm-project.tar.xz "$SOURCE_URL"
           echo "$SOURCE_SHA256  .cache/sources/llvm-project.tar.xz" | sha256sum -c -
-      - name: Resolve bootstrap
-        id: bootstrap
+      - name: Download bootstrap toolchain
+        id: toolchain
         env:
-          IMAGE: ${{ env.BOOTSTRAP_IMAGE }}
+          TARGET: ${{ matrix.triple }}
+        run: |
+          release_url="$DOWNLOAD_ROOT/releases/$BOOTSTRAP_CHANNEL/$BOOTSTRAP_EXACT/release.json"
+          mkdir -p .cache/bootstrap
+          curl -fsSL -o .cache/bootstrap-release.json "$release_url"
+          artifact_key="$(jq -er --arg target "$TARGET" '.artifacts[] | select(.target == $target) | .artifact.key' .cache/bootstrap-release.json)"
+          artifact_sha256="$(jq -er --arg target "$TARGET" '.artifacts[] | select(.target == $target) | .artifact.sha256' .cache/bootstrap-release.json)"
+          curl -fsSL -o .cache/bootstrap.tar.zst "$DOWNLOAD_ROOT/$artifact_key"
+          echo "$artifact_sha256  .cache/bootstrap.tar.zst" | sha256sum -c -
+          tar --use-compress-program=unzstd -xf .cache/bootstrap.tar.zst -C .cache/bootstrap
+          echo "identity=$BOOTSTRAP_CHANNEL@$BOOTSTRAP_EXACT#$TARGET:sha256:$artifact_sha256" >> "$GITHUB_OUTPUT"
+      - name: Resolve builder image
+        id: builder
+        env:
+          IMAGE: ${{ env.BUILDER_IMAGE }}
           ARCH: ${{ matrix.arch }}
         run: |
           index_digest="$(docker buildx imagetools inspect "$IMAGE" --format '{{json .Manifest}}' | jq -er .digest)"
           platform_digest="$(docker buildx imagetools inspect "$IMAGE" --raw | jq -er --arg arch "$ARCH" '.manifests[] | select(.platform.os == "linux" and .platform.architecture == $arch) | .digest')"
-          echo "ref=${IMAGE%:*}@${index_digest}" >> "$GITHUB_OUTPUT"
-          echo "identity=${IMAGE%:*}@${index_digest}#${platform_digest}" >> "$GITHUB_OUTPUT"
+          echo "ref=${IMAGE%:*}@$index_digest" >> "$GITHUB_OUTPUT"
+          echo "identity=${IMAGE%:*}@$index_digest#$platform_digest" >> "$GITHUB_OUTPUT"
       - name: Build target
         env:
           SOURCE_DATE_EPOCH: ${{ needs.plan.outputs.source_date_epoch }}
-          BOOTSTRAP_IDENTITY: ${{ steps.bootstrap.outputs.identity }}
+          BOOTSTRAP_IDENTITY: ${{ steps.toolchain.outputs.identity }}
+          BUILD_ENVIRONMENT_IDENTITY: ${{ steps.builder.outputs.identity }}
         run: |
           mkdir -p ".cache/build-${{ matrix.arch }}" "out/${{ matrix.triple }}"
           docker run --rm --network none \
             --mount type=bind,src="$PWD",dst=/workspace,readonly \
             --mount type=bind,src="$PWD/out/plan/channel-plan.json",dst=/input/channel-plan.json,readonly \
             --mount type=bind,src="$PWD/.cache/sources/llvm-project.tar.xz",dst=/input/llvm-project.tar.xz,readonly \
+            --mount type=bind,src="$PWD/.cache/bootstrap",dst=/opt/clangup-bootstrap,readonly \
             --mount type=bind,src="$PWD/.cache/build-${{ matrix.arch }}",dst=/build \
             --mount type=bind,src="$PWD/out/${{ matrix.triple }}",dst=/out \
-            -e CLANGUP_BUILD_COMMIT=${{ github.sha }} -e CLANGUP_BUILD_ENVIRONMENT_IDENTITY="$BOOTSTRAP_IDENTITY" -e CLANGUP_BOOTSTRAP_KIND=seed-image -e CLANGUP_BOOTSTRAP_IDENTITY="$BOOTSTRAP_IDENTITY" \
-            "${{ steps.bootstrap.outputs.ref }}" \
+            -e CLANGUP_BUILD_COMMIT=${{ github.sha }} \
+            -e CLANGUP_BUILD_ENVIRONMENT_IDENTITY="$BUILD_ENVIRONMENT_IDENTITY" \
+            -e CLANGUP_BOOTSTRAP_KIND=channel-artifact \
+            -e CLANGUP_BOOTSTRAP_IDENTITY="$BOOTSTRAP_IDENTITY" \
+            "${{ steps.builder.outputs.ref }}" \
             python3 /workspace/channels/build/run.py --plan /input/channel-plan.json --target "${{ matrix.triple }}" --source /input/llvm-project.tar.xz --channel-root "/workspace/$CHANNEL_ROOT" --config-dir "/workspace/$CHANNEL_ROOT/build" --work /build/work --output /out --jobs "$(nproc)" --link-jobs 2 --source-date-epoch "$SOURCE_DATE_EPOCH"
       - name: Verify baseline
         run: |
@@ -127,51 +149,13 @@ jobs:
           docker run --rm --network host --mount type=bind,src="$PWD/verify/prefix",dst=/opt/clangup,readonly --mount type=bind,src="$PWD",dst=/workspace,readonly "${{ matrix.verify_image }}" bash "/workspace/$CHANNEL_ROOT/build/verify-linux.sh" /opt/clangup "${{ matrix.profile }}"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: default-target-${{ matrix.triple }}
+          name: libcxx-target-${{ matrix.triple }}
           path: out/${{ matrix.triple }}/
           if-no-files-found: error
           retention-days: 7
 
-  macos:
-    name: build arm64-apple-darwin
-    needs: plan
-    runs-on: macos-14
-    timeout-minutes: 360
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - run: brew install cmake ninja zstd gnu-tar
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: default-plan
-          path: out/plan
-      - name: Download source
-        env:
-          SOURCE_URL: ${{ needs.plan.outputs.source_url }}
-          SOURCE_SHA256: ${{ needs.plan.outputs.source_sha256 }}
-        run: |
-          mkdir -p .cache/sources
-          curl -fsSL -o .cache/sources/llvm-project.tar.xz "$SOURCE_URL"
-          echo "$SOURCE_SHA256  .cache/sources/llvm-project.tar.xz" | shasum -a 256 -c -
-      - name: Build target
-        env:
-          CLANGUP_BUILD_COMMIT: ${{ github.sha }}
-          CLANGUP_BOOTSTRAP_KIND: xcode
-          SOURCE_DATE_EPOCH: ${{ needs.plan.outputs.source_date_epoch }}
-        run: |
-          export CLANGUP_BOOTSTRAP_IDENTITY="$(xcodebuild -version | tr '\n' ' ')"
-          export CLANGUP_BUILD_ENVIRONMENT_IDENTITY="$CLANGUP_BOOTSTRAP_IDENTITY"
-          python3 channels/build/run.py --plan out/plan/channel-plan.json --target arm64-apple-darwin --source .cache/sources/llvm-project.tar.xz --channel-root "$CHANNEL_ROOT" --config-dir "$CHANNEL_ROOT/build" --work .cache/build-macos/work --output out/arm64-apple-darwin --jobs "$(sysctl -n hw.ncpu)" --source-date-epoch "$SOURCE_DATE_EPOCH"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: default-target-arm64-apple-darwin
-          path: out/arm64-apple-darwin/
-          if-no-files-found: error
-          retention-days: 7
-
   publish:
-    needs: [linux, macos]
+    needs: linux
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
@@ -181,7 +165,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          pattern: default-target-*
+          pattern: libcxx-target-*
           path: out/targets
       - name: Assemble release
         run: python3 channels/build/assemble.py --targets out/targets --output out/release
@@ -193,7 +177,7 @@ jobs:
           python3 channels/build/publish.py --endpoint "$UPLOAD_ENDPOINT" --token "$token" --release out/release/release.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: default-release
+          name: libcxx-release
           path: out/release/release.json
           if-no-files-found: error
           retention-days: 14

@@ -26,6 +26,27 @@ func TestDefaultReleasePlan(t *testing.T) {
 	}
 }
 
+func TestLibcxxReleasePlan(t *testing.T) {
+	loaded, err := Load(filepath.Join("..", "..", "..", "channels", "libcxx", "22.1.8", "release.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := Lock(loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Release.Channel != "libcxx" || len(plan.Targets) != 2 || len(plan.Source.Patches) != 1 {
+		t.Fatalf("unexpected libcxx plan: %#v", plan)
+	}
+	for _, target := range plan.Targets {
+		if target.OS != "linux" || target.Driver.CXXStdlib != "libc++" ||
+			target.Driver.CXXStdlibLinkage != "static" || target.Driver.Linker != "lld" ||
+			target.Driver.RTLib != "compiler-rt" || target.Driver.UnwindLib != "libgcc" {
+			t.Fatalf("unexpected libcxx target contract: %#v", target)
+		}
+	}
+}
+
 func TestLoadRejectsUnknownField(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "release.yaml")
 	writeTestRelease(t, path, "mystery: true\n")

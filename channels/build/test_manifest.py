@@ -5,7 +5,7 @@ import unittest
 
 
 MODULE_PATH = Path(__file__).with_name("run.py")
-SPEC = importlib.util.spec_from_file_location("default_channel_run", MODULE_PATH)
+SPEC = importlib.util.spec_from_file_location("channel_build_run", MODULE_PATH)
 RUN = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 SPEC.loader.exec_module(RUN)

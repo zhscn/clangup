@@ -6,7 +6,7 @@ profile="${2:?usage: verify-linux.sh <prefix> <profile>}"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export BASE_PROFILE="${profile}"
 
-bash "${script_dir}/../../../docker/scripts/fix-el-repos.sh"
+bash "${script_dir}/../../../../docker/scripts/fix-el-repos.sh"
 package_manager="$(command -v dnf || command -v yum)"
 "${package_manager}" install -y gcc gcc-c++ glibc-devel binutils
 

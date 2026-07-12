@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build one target from the resolved default-channel release plan."""
+"""Build one target from a resolved channel release plan."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from typing import Any
 
 
 def fail(message: str) -> None:
-    raise SystemExit(f"clangup default build: {message}")
+    raise SystemExit(f"clangup channel build: {message}")
 
 
 def run(arguments: list[str], *, env: dict[str, str] | None = None) -> None:
@@ -72,8 +72,8 @@ def select_target(lock: dict[str, Any], triple: str) -> dict[str, Any]:
     if lock.get("schema") != "clangup.channel-plan/v1":
         fail("unsupported channel plan schema")
     release = lock.get("release", {})
-    if release.get("channel") != "default":
-        fail("this runner only builds the default channel")
+    if not release.get("channel"):
+        fail("channel plan has no release identity")
     matches = [
         target for target in lock.get("targets", []) if target.get("triple") == triple
     ]
@@ -82,22 +82,22 @@ def select_target(lock: dict[str, Any], triple: str) -> dict[str, Any]:
     return matches[0]
 
 
-def safe_bundle_file(bundle: Path, relative: str) -> Path:
+def safe_channel_file(channel_root: Path, relative: str) -> Path:
     candidate = Path(relative)
     if candidate.is_absolute() or ".." in candidate.parts or "" in candidate.parts:
-        fail(f"unsafe bundle path {relative!r}")
-    current = bundle
+        fail(f"unsafe channel path {relative!r}")
+    current = channel_root
     for part in candidate.parts:
         current = current / part
         if current.is_symlink():
-            fail(f"bundle path contains a symlink: {relative}")
+            fail(f"channel path contains a symlink: {relative}")
     if not current.is_file():
-        fail(f"bundle file is missing: {relative}")
+        fail(f"channel file is missing: {relative}")
     return current
 
 
 def prepare_source(
-    lock: dict[str, Any], archive: Path, bundle: Path, work: Path
+    lock: dict[str, Any], archive: Path, channel_root: Path, work: Path
 ) -> tuple[Path, str]:
     source = lock["source"]
     actual = sha256_file(archive)
@@ -118,7 +118,7 @@ def prepare_source(
         run(["git", "-C", str(tree), "init", "-q"])
         run(["git", "-C", str(tree), "add", "-A"])
         for patch in patches:
-            path = safe_bundle_file(bundle, patch["path"])
+            path = safe_channel_file(channel_root, patch["path"])
             digest = sha256_file(path)
             if digest != patch["sha256"]:
                 fail(f"patch sha256 mismatch for {patch['path']}")
@@ -140,9 +140,12 @@ def build_toolchain(
     target: dict[str, Any],
     jobs: int,
     link_jobs: int,
+    config_dir: Path,
 ) -> tuple[Path, list[str]]:
     name = "build-linux.sh" if target["os"] == "linux" else "build-macos.sh"
-    script = Path(__file__).with_name(name)
+    script = config_dir / name
+    if not script.is_file():
+        fail(f"channel build script is missing: {script}")
     env = os.environ.copy()
     env.update(
         {
@@ -317,7 +320,7 @@ def validate_payload(prefix: Path) -> None:
                 fail(f"payload symlink escapes prefix: {relative} -> {value}")
 
 
-def smoke(prefix: Path, target: dict[str, Any], work: Path) -> None:
+def smoke(prefix: Path, target: dict[str, Any], work: Path, channel: str) -> None:
     clang = prefix / "bin" / "clang"
     clangxx = prefix / "bin" / "clang++"
     for path in (clang, clangxx):
@@ -344,15 +347,20 @@ def smoke(prefix: Path, target: dict[str, Any], work: Path) -> None:
             fail("default driver unexpectedly selects libc++")
         if "-lstdc++" not in driver_dump:
             fail("default Linux driver does not select system libstdc++")
+    elif target["os"] == "linux":
+        for expected in ("-lc++", "clang_rt", "ld.lld", "-lgcc_s"):
+            if expected not in driver_dump:
+                fail(f"libc++ driver dump does not contain {expected}")
+        if "-lstdc++" in driver_dump:
+            fail("libc++ driver unexpectedly selects libstdc++")
     if target["os"] == "macos" and "-lc++" not in driver_dump:
         fail("default macOS driver does not select system libc++")
     if target["os"] == "linux":
-        required_tools = (
+        required_tools = [
             "clangd",
             "clang-tidy",
             "ld.lld",
             "llvm-ar",
-            "llvm-bolt",
             "llvm-cov",
             "llvm-dwp",
             "llvm-nm",
@@ -363,9 +371,9 @@ def smoke(prefix: Path, target: dict[str, Any], work: Path) -> None:
             "llvm-readobj",
             "llvm-strip",
             "llvm-symbolizer",
-            "merge-fdata",
-            "perf2bolt",
-        )
+        ]
+        if "bolt" in target["distribution"]["projects"]:
+            required_tools.extend(("llvm-bolt", "merge-fdata", "perf2bolt"))
         for name in required_tools:
             executable = prefix / "bin" / name
             if not executable.exists():
@@ -423,27 +431,20 @@ def smoke(prefix: Path, target: dict[str, Any], work: Path) -> None:
             "int main() {\n"
             "  std::vector<int> values{3, 1, 2};\n"
             "  std::ranges::sort(values);\n"
-            '  return std::format("{}:{}", "default", '
+            f'  return std::format("{{}}:{{}}", "{channel}", '
             "sum<int>(std::span<const int>(values))) "
-            '!= "default:5";\n'
+            f'!= "{channel}:5";\n'
             "}\n",
             encoding="utf-8",
         )
         libcxx_executable = work / "libcxx-cxx20-smoke"
-        run(
-            [
-                str(clangxx),
-                "-std=c++20",
-                "-stdlib=libc++",
-                "--rtlib=compiler-rt",
-                "--unwindlib=none",
-                "-fuse-ld=lld",
-                str(libcxx_source),
-                "-Wl,--no-as-needed,-l:libgcc_s.so.1,--as-needed",
-                "-o",
-                str(libcxx_executable),
-            ]
-        )
+        command = [str(clangxx), "-std=c++20"]
+        if target["driver"]["cxx_stdlib"] == "system":
+            command.extend(("-stdlib=libc++", "--rtlib=compiler-rt", "--unwindlib=none", "-fuse-ld=lld"))
+        command.extend((str(libcxx_source), "-o", str(libcxx_executable)))
+        if target["driver"]["cxx_stdlib"] == "system":
+            command.insert(-2, "-Wl,--no-as-needed,-l:libgcc_s.so.1,--as-needed")
+        run(command)
         output = subprocess.check_output(["ldd", str(libcxx_executable)], text=True)
         forbidden = ("libstdc++", "libc++.so", "libc++abi.so")
         if any(name in output for name in forbidden):
@@ -566,7 +567,8 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--plan", required=True, type=Path)
     parser.add_argument("--target", required=True)
     parser.add_argument("--source", required=True, type=Path)
-    parser.add_argument("--bundle", required=True, type=Path)
+    parser.add_argument("--channel-root", required=True, type=Path)
+    parser.add_argument("--config-dir", required=True, type=Path)
     parser.add_argument("--work", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--jobs", type=int, default=max(1, os.cpu_count() or 1))
@@ -601,17 +603,23 @@ def main() -> None:
     prefix = work / "prefix"
     prefix.mkdir()
     source, source_identity_digest = prepare_source(
-        lock, args.source.resolve(), args.bundle.resolve(), work
+        lock, args.source.resolve(), args.channel_root.resolve(), work
     )
     started = dt.datetime.now(dt.timezone.utc)
     build, cmake_arguments = build_toolchain(
-        source, work, prefix, target, args.jobs, args.link_jobs
+        source,
+        work,
+        prefix,
+        target,
+        args.jobs,
+        args.link_jobs,
+        args.config_dir.resolve(),
     )
     rewrite_python_shebangs(prefix)
     strip_and_sign(prefix, build, target["os"])
     write_integration_files(prefix, target)
     validate_payload(prefix)
-    smoke(prefix, target, work)
+    smoke(prefix, target, work, lock["release"]["channel"])
 
     release = lock["release"]
     artifact_name = "toolchain.tar.zst"
@@ -625,6 +633,11 @@ def main() -> None:
     )
     build_identity = {
         "commit": os.environ.get("CLANGUP_BUILD_COMMIT", "unknown"),
+        "environment": {
+            "identity": os.environ.get(
+                "CLANGUP_BUILD_ENVIRONMENT_IDENTITY", "unknown"
+            )
+        },
         "bootstrap": {
             "kind": os.environ.get("CLANGUP_BOOTSTRAP_KIND", "seed-image"),
             "identity": os.environ.get("CLANGUP_BOOTSTRAP_IDENTITY", "unknown"),

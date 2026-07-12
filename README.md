@@ -7,9 +7,11 @@
 clangup update
 clangup channel list
 clangup channel show default
+clangup channel show libcxx
 
 clangup install default
 clangup install default@22.1.8-1
+clangup install libcxx
 
 clangup list
 clangup default default@22.1.8-1

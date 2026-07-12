@@ -1,0 +1,61 @@
+schema: clangup.channel/v1
+channel: libcxx
+version: 22.1.8
+release: 1
+
+source:
+  url: https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/llvm-project-22.1.8.src.tar.xz
+  sha256: 922f1817a0df7b1489272d18134ee0087a8b068828f87ac63b9861b1a9965888
+  patch_series: patches/series.yaml
+
+distribution:
+  projects:
+    - clang
+    - lld
+    - clang-tools-extra
+  runtimes:
+    - compiler-rt
+    - libcxx
+    - libcxxabi
+
+runtime_delivery:
+  libcxx:
+    linkage: static
+  libcxxabi:
+    linkage: static
+
+driver:
+  libc: system
+  cxx_stdlib: libc++
+  cxx_stdlib_linkage: static
+  linker: lld
+  rtlib: compiler-rt
+  unwindlib: libgcc
+
+targets:
+  - os: linux
+    arch: x86_64
+    triple: x86_64-unknown-linux-gnu
+    libc: glibc
+    libc_version: "2.17"
+    cpu_isa: x86-64
+    driver_requirements:
+      - gcc-toolchain
+      - glibc-devel
+    required: true
+
+  - os: linux
+    arch: aarch64
+    triple: aarch64-unknown-linux-gnu
+    libc: glibc
+    libc_version: "2.28"
+    cpu_isa: armv8-a
+    driver_requirements:
+      - gcc-toolchain
+      - glibc-devel
+    required: true
+
+changelog:
+  - release: 1
+    date: "2026-07-12"
+    summary: Initial LLVM 22.1.8 libcxx channel contract

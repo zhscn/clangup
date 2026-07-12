@@ -5,6 +5,7 @@ on:
     paths:
       - .github/workflows/clangup.yml
       - .github/workflows/default-channel.yml
+      - .github/workflows/libcxx-channel.yml
       - .github/workflows/clangup-release.yml
       - cmd/**
       - internal/**
@@ -17,6 +18,7 @@ on:
     paths:
       - .github/workflows/clangup.yml
       - .github/workflows/default-channel.yml
+      - .github/workflows/libcxx-channel.yml
       - .github/workflows/clangup-release.yml
       - cmd/**
       - internal/**
@@ -55,15 +57,20 @@ jobs:
       - name: Check build scripts
         run: |
           python3 -m py_compile \
-            channels/default/22.1.8/build/run.py \
-            channels/default/22.1.8/build/assemble.py \
-            channels/default/22.1.8/build/publish.py
+            channels/build/run.py \
+            channels/build/assemble.py \
+            channels/build/publish.py
+          python3 -m unittest discover -s channels/build -p 'test_*.py'
           python3 -m unittest discover -s channels/default/22.1.8/build -p 'test_*.py'
+          python3 -m unittest discover -s channels/libcxx/22.1.8/build -p 'test_*.py'
           bash -n \
             channels/default/22.1.8/build/build-linux.sh \
             channels/default/22.1.8/build/build-macos.sh \
             channels/default/22.1.8/build/verify-linux.sh \
-            channels/default/22.1.8/build/verify-asan-matrix.sh
+            channels/default/22.1.8/build/verify-asan-matrix.sh \
+            channels/libcxx/22.1.8/build/build-linux.sh \
+            channels/libcxx/22.1.8/build/verify-linux.sh \
+            channels/libcxx/22.1.8/build/verify-asan-matrix.sh
 
       - name: Check module files
         run: go mod tidy -diff

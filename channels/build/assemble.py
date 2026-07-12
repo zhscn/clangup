@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Assemble target outputs into one default-channel release."""
+"""Assemble target outputs into one channel release."""
 
 from __future__ import annotations
 
