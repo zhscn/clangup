@@ -19,16 +19,16 @@ const outputFormatHelp = "output format: text or json"
 func newRepoCommand() *cobra.Command {
 	repo := &cobra.Command{
 		Use:   "repo",
-		Short: "Author and publish toolchain repositories",
+		Short: "Manage toolchain repositories",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
 			return command.Help()
 		},
 	}
 	repo.AddCommand(newRepoSpecCommand())
+	repo.AddCommand(newRepoAddCommand(), newRepoListCommand(), newRepoRemoveCommand(), newRepoUpdateCommand())
 	repo.AddCommand(
 		newRepoInitCommand(),
-		newRepoReleaseCommand(),
 		newRepoChannelCommand(),
 		newRepoPublishCommand(),
 	)

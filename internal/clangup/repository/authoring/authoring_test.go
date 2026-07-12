@@ -21,17 +21,7 @@ func TestFilesystemPublishEndToEnd(t *testing.T) {
 	if err := Init(workspace, "example.com/llvm", "Example LLVM", true); err != nil {
 		t.Fatal(err)
 	}
-	bundle := makeTestBundle(t, filepath.Join(root, "bundle"))
-	release, err := ImportBundle(workspace, bundle)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(release.Artifacts) != 1 || len(release.Objects) != 1 {
-		t.Fatalf("unexpected imported release: %#v", release)
-	}
-	if _, err := ImportBundle(workspace, bundle); err != nil {
-		t.Fatalf("idempotent import failed: %v", err)
-	}
+	makeTestRelease(t, workspace)
 	if err := SetCurrent(workspace, "default", "22.1.8-1"); err != nil {
 		t.Fatal(err)
 	}
@@ -111,42 +101,23 @@ func TestFilesystemPublishEndToEnd(t *testing.T) {
 	}
 }
 
-func TestImportRejectsSymlinkedBundleInput(t *testing.T) {
-	root := t.TempDir()
-	workspace := filepath.Join(root, "workspace")
-	if err := Init(workspace, "example.com/llvm", "", false); err != nil {
-		t.Fatal(err)
-	}
-	descriptor := makeTestBundle(t, filepath.Join(root, "bundle"))
-	payload := filepath.Join(root, "bundle", "artifacts", "clang.tar.zst")
-	real := filepath.Join(root, "real-artifact")
-	if err := os.Rename(payload, real); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(real, payload); err != nil {
-		t.Skip(err)
-	}
-	if _, err := ImportBundle(workspace, descriptor); err == nil {
-		t.Fatal("symlinked artifact was accepted")
-	}
-}
-
-func makeTestBundle(t *testing.T, root string) string {
+func makeTestRelease(t *testing.T, workspace string) {
 	t.Helper()
-	write := func(relative string, contents []byte) string {
-		path := filepath.Join(root, relative)
+	writeObject := func(contents []byte) string {
+		digest := digest(contents)
+		path := filepath.Join(workspace, "objects", "sha256", digest)
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(path, contents, 0o644); err != nil {
 			t.Fatal(err)
 		}
-		return digest(contents)
+		return digest
 	}
 	source := []byte("llvm source")
-	sourceDigest := write("objects/sources/source.tar.xz", source)
+	sourceDigest := writeObject(source)
 	payload := []byte("toolchain payload")
-	payloadDigest := write("artifacts/clang.tar.zst", payload)
+	payloadDigest := writeObject(payload)
 	manifestValue := map[string]any{
 		"schema":               "clangup.artifact/v1",
 		"release":              map[string]any{"channel": "default", "version": "22.1.8", "release": 1},
@@ -159,7 +130,7 @@ func makeTestBundle(t *testing.T, root string) string {
 	}
 	manifest, _ := json.Marshal(manifestValue)
 	manifest = append(manifest, '\n')
-	manifestDigest := write("manifests/x86_64-unknown-linux-gnu/manifest.json", manifest)
+	manifestDigest := writeObject(manifest)
 	lockValue := map[string]any{
 		"schema":    "clangup.build-lock/v1",
 		"release":   map[string]any{"channel": "default", "version": "22.1.8", "release": 1},
@@ -169,27 +140,39 @@ func makeTestBundle(t *testing.T, root string) string {
 	}
 	lock, _ := json.Marshal(lockValue)
 	lock = append(lock, '\n')
-	lockDigest := write("spec.lock.json", lock)
+	lockDigest := writeObject(lock)
 	buildRecordValue := map[string]any{
 		"schema": "clangup.build-record/v1", "release": map[string]any{"channel": "default", "version": "22.1.8", "release": 1},
 		"target": "x86_64-unknown-linux-gnu", "locked_spec_sha256": lockDigest, "artifact_sha256": payloadDigest,
 	}
 	buildRecord, _ := json.Marshal(buildRecordValue)
 	buildRecord = append(buildRecord, '\n')
-	buildRecordDigest := write("build-records/x86_64-unknown-linux-gnu/build-record.json", buildRecord)
-	descriptorValue := map[string]any{
-		"schema": "clangup.release-bundle/v1", "channel": "default", "version": "22.1.8", "release": 1,
-		"locked_spec": "spec.lock.json", "locked_spec_sha256": lockDigest,
-		"artifacts": []any{map[string]any{
-			"target": "x86_64-unknown-linux-gnu", "manifest": "manifests/x86_64-unknown-linux-gnu/manifest.json",
-			"manifest_sha256": manifestDigest, "payload": "artifacts/clang.tar.zst", "payload_sha256": payloadDigest,
-			"build_record": "build-records/x86_64-unknown-linux-gnu/build-record.json", "build_record_sha256": buildRecordDigest,
+	buildRecordDigest := writeObject(buildRecord)
+	release := ImportedRelease{
+		Schema: ReleaseSchema,
+		Release: ReleaseIdentity{
+			Channel: "default", Version: "22.1.8", Release: 1,
+		},
+		LockedSpecSHA256: lockDigest,
+		Artifacts: []ImportedArtifact{{
+			Target: "x86_64-unknown-linux-gnu", Name: "clang.tar.zst",
+			PayloadSHA256: payloadDigest, ManifestSHA256: manifestDigest,
+			BuildRecordSHA256: buildRecordDigest,
 		}},
-		"objects": []any{map[string]any{"kind": "source", "path": "objects/sources/source.tar.xz", "sha256": sourceDigest}},
+		Objects:    []ImportedObject{{Kind: "source", SHA256: sourceDigest, Name: "source.tar.xz"}},
+		Changelog:  "initial",
+		ReleasedAt: "2026-07-11T00:00:00Z",
 	}
-	descriptor, _ := json.Marshal(descriptorValue)
-	write("bundle.json", append(descriptor, '\n'))
-	return filepath.Join(root, "bundle.json")
+	releaseDirectory := filepath.Join(workspace, "releases", "default", "22.1.8-1")
+	if err := writeTOML(filepath.Join(releaseDirectory, "release.toml"), release); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(releaseDirectory, "manifests"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(releaseDirectory, "manifests", "x86_64-unknown-linux-gnu.json"), manifest, 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func digest(contents []byte) string {

@@ -32,6 +32,10 @@ func invalidRepository(err error) error {
 	return &commandError{code: "invalid_repository", exitCode: 3, err: err}
 }
 
+func installFailure(err error) error {
+	return &commandError{code: "install_failure", exitCode: 5, err: err}
+}
+
 func Run(args []string, stdout, stderr io.Writer, version string) int {
 	root := newRootCommand(version)
 	root.SetArgs(args)
@@ -103,6 +107,9 @@ func newRootCommand(version string) *cobra.Command {
 		return invalidRequest(err)
 	})
 	root.AddCommand(newRepoCommand())
+	root.AddCommand(newChannelCommand())
+	root.AddCommand(newInstallCommand())
+	root.AddCommand(newResolveCommand())
 	root.AddCommand(&cobra.Command{
 		Use:   "version",
 		Short: "Print the clangup version",

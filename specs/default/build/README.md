@@ -26,13 +26,26 @@ Linux runs inside a bootstrap environment supplied through
 toolchain. macOS runs natively with Xcode.
 
 Each target emits an artifact, detached manifest, build record, and
-`release-fragment.json`. Once every required target exists:
+`release-fragment.json`. `stage.py` uploads these files as immutable,
+content-addressed objects through the repository presign service and emits a
+small `staged-target.json` reference.
 
 ```sh
-python3 specs/default/build/assemble.py \
+python3 specs/default/build/stage.py \
+  --endpoint "$CLANGUP_UPLOAD_ENDPOINT" \
+  --output out/default/x86_64/staged-target.json \
+  target \
+  --fragment out/default/x86_64/release-fragment.json
+```
+
+The source archive, patch series, and locked spec use the same upload path and
+produce `staged-inputs.json`. Once every required target reference exists,
+`release.py` validates the matrix and writes the immutable release descriptor:
+
+```sh
+python3 specs/default/build/release.py \
   --spec-lock out/spec.lock.json \
-  --source .cache/sources/llvm-project-22.1.8.src.tar.xz \
-  --bundle specs/default/22.1.8 \
-  --fragments out/default \
-  --output out/release-bundle
+  --inputs out/staged-inputs.json \
+  --targets out/default \
+  --output out/release.json
 ```

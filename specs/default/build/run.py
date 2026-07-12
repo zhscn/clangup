@@ -141,9 +141,7 @@ def build_toolchain(
     jobs: int,
     link_jobs: int,
 ) -> tuple[Path, list[str]]:
-    name = (
-        "build-linux.sh" if target["os"] == "linux" else "build-macos.sh"
-    )
+    name = "build-linux.sh" if target["os"] == "linux" else "build-macos.sh"
     script = Path(__file__).with_name(name)
     env = os.environ.copy()
     env.update(

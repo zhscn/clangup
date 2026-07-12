@@ -22,6 +22,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+      id-token: write
     outputs:
       source_url: ${{ steps.plan.outputs.source_url }}
       source_sha256: ${{ steps.plan.outputs.source_sha256 }}
@@ -54,11 +55,38 @@ jobs:
           PY
           echo "source_date_epoch=$(git log -1 --format=%ct)" >> "$GITHUB_OUTPUT"
 
+      - name: Download verified source
+        env:
+          SOURCE_URL: ${{ steps.plan.outputs.source_url }}
+          SOURCE_SHA256: ${{ steps.plan.outputs.source_sha256 }}
+        run: |
+          mkdir -p .cache/sources
+          curl -fsSL -o .cache/sources/llvm-project.tar.xz "$SOURCE_URL"
+          echo "$SOURCE_SHA256  .cache/sources/llvm-project.tar.xz" | sha256sum -c -
+
+      - name: Stage build inputs
+        env:
+          UPLOAD_ENDPOINT: ${{ vars.CLANGUP_UPLOAD_ENDPOINT }}
+        run: |
+          test -n "$UPLOAD_ENDPOINT"
+          token="$(curl -fsSL \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=clangup-r2-uploader" |
+            python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+          python3 specs/default/build/stage.py \
+            --endpoint "$UPLOAD_ENDPOINT" \
+            --token "$token" \
+            --output out/plan/staged-inputs.json \
+            inputs \
+            --spec-lock out/plan/spec.lock.json \
+            --source .cache/sources/llvm-project.tar.xz \
+            --bundle specs/default/22.1.8
+
       - name: Upload locked plan
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: default-plan
-          path: out/plan/spec.lock.json
+          path: out/plan/
           if-no-files-found: error
           retention-days: 7
 
@@ -69,6 +97,7 @@ jobs:
     timeout-minutes: 360
     permissions:
       contents: read
+      id-token: write
       packages: read
     strategy:
       fail-fast: false
@@ -171,11 +200,27 @@ jobs:
             "${{ matrix.verify_image }}" \
             bash /workspace/specs/default/build/verify-linux.sh /opt/clangup "${{ matrix.profile }}"
 
-      - name: Upload target fragment
+      - name: Stage target
+        env:
+          UPLOAD_ENDPOINT: ${{ vars.CLANGUP_UPLOAD_ENDPOINT }}
+        run: |
+          test -n "$UPLOAD_ENDPOINT"
+          token="$(curl -fsSL \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=clangup-r2-uploader" |
+            python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+          python3 specs/default/build/stage.py \
+            --endpoint "$UPLOAD_ENDPOINT" \
+            --token "$token" \
+            --output "out/${{ matrix.triple }}/staged-target.json" \
+            target \
+            --fragment "out/${{ matrix.triple }}/release-fragment.json"
+
+      - name: Upload staged target descriptor
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: default-${{ matrix.triple }}
-          path: out/${{ matrix.triple }}/
+          name: default-stage-${{ matrix.triple }}
+          path: out/${{ matrix.triple }}/staged-target.json
           if-no-files-found: error
           retention-days: 7
 
@@ -186,6 +231,7 @@ jobs:
     timeout-minutes: 360
     permissions:
       contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
@@ -224,29 +270,40 @@ jobs:
             --jobs "$(sysctl -n hw.ncpu)" \
             --source-date-epoch "$SOURCE_DATE_EPOCH"
 
-      - name: Upload target fragment
+      - name: Stage target
+        env:
+          UPLOAD_ENDPOINT: ${{ vars.CLANGUP_UPLOAD_ENDPOINT }}
+        run: |
+          test -n "$UPLOAD_ENDPOINT"
+          token="$(curl -fsSL \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=clangup-r2-uploader" |
+            python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+          python3 specs/default/build/stage.py \
+            --endpoint "$UPLOAD_ENDPOINT" \
+            --token "$token" \
+            --output out/arm64-apple-darwin/staged-target.json \
+            target \
+            --fragment out/arm64-apple-darwin/release-fragment.json
+
+      - name: Upload staged target descriptor
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: default-arm64-apple-darwin
-          path: out/arm64-apple-darwin/
+          name: default-stage-arm64-apple-darwin
+          path: out/arm64-apple-darwin/staged-target.json
           if-no-files-found: error
           retention-days: 7
 
   assemble:
-    name: assemble release bundle
+    name: assemble release descriptor
     needs: [plan, linux, macos]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Set up Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        with:
-          go-version-file: go.mod
-          cache: true
 
       - name: Download locked plan
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -257,40 +314,41 @@ jobs:
       - name: Download target fragments
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          pattern: default-*
+          pattern: default-stage-*
           path: out/fragments
-
-      - name: Download verified source
-        env:
-          SOURCE_URL: ${{ needs.plan.outputs.source_url }}
-          SOURCE_SHA256: ${{ needs.plan.outputs.source_sha256 }}
-        run: |
-          mkdir -p .cache/sources
-          curl -fsSL -o .cache/sources/llvm-project.tar.xz "$SOURCE_URL"
-          echo "$SOURCE_SHA256  .cache/sources/llvm-project.tar.xz" | sha256sum -c -
 
       - name: Assemble
         run: |
-          python3 specs/default/build/assemble.py \
+          python3 specs/default/build/release.py \
             --spec-lock out/plan/spec.lock.json \
-            --source .cache/sources/llvm-project.tar.xz \
-            --bundle specs/default/22.1.8 \
-            --fragments out/fragments \
-            --output out/release-bundle
-          find out/release-bundle -maxdepth 5 -type f -print
+            --inputs out/plan/staged-inputs.json \
+            --targets out/fragments \
+            --output out/release.json
 
-      - name: Verify repository import
+      - name: Upload release descriptor
+        env:
+          UPLOAD_ENDPOINT: ${{ vars.CLANGUP_UPLOAD_ENDPOINT }}
         run: |
-          go build -trimpath -o /tmp/clangup ./cmd/clangup
-          /tmp/clangup repo init /tmp/clangup-repository \
-            --namespace ci.clangup.dev/default
-          /tmp/clangup repo release import out/release-bundle/bundle.json \
-            --workspace /tmp/clangup-repository
+          test -n "$UPLOAD_ENDPOINT"
+          token="$(curl -fsSL \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=clangup-r2-uploader" |
+            python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+          python3 specs/default/build/stage.py \
+            --endpoint "$UPLOAD_ENDPOINT" \
+            --token "$token" \
+            --output out/staged-release.json \
+            file \
+            --file out/release.json \
+            --key releases/default/22.1.8-1/release.json \
+            --content-type application/json
 
-      - name: Upload release bundle
+      - name: Upload release descriptor artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: default-release-bundle
-          path: out/release-bundle/
+          name: default-release
+          path: |
+            out/release.json
+            out/staged-release.json
           if-no-files-found: error
           retention-days: 14

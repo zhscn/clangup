@@ -45,41 +45,6 @@ func newRepoInitCommand() *cobra.Command {
 	return command
 }
 
-func newRepoReleaseCommand() *cobra.Command {
-	command := &cobra.Command{Use: "release", Short: "Manage repository releases", Args: cobra.NoArgs, RunE: func(command *cobra.Command, _ []string) error { return command.Help() }}
-	command.AddCommand(newRepoReleaseImportCommand())
-	return command
-}
-
-func newRepoReleaseImportCommand() *cobra.Command {
-	var workspace, format string
-	command := &cobra.Command{
-		Use: "import <bundle.json>", Short: "Import and verify a release bundle", Args: cobra.ExactArgs(1),
-		RunE: func(command *cobra.Command, args []string) error {
-			if err := validateOutputFormat(format); err != nil {
-				return invalidRequest(err)
-			}
-			workspacePath, err := filepath.Abs(workspace)
-			if err != nil {
-				return invalidRequest(err)
-			}
-			release, err := authoring.ImportBundle(workspacePath, args[0])
-			if err != nil {
-				return invalidRepository(err)
-			}
-			result := map[string]any{"schema": "clangup.repo.release-import/v1", "release": release.Release, "artifacts": len(release.Artifacts), "objects": len(release.Objects)}
-			if format == "json" {
-				return writeJSON(command, result)
-			}
-			fmt.Fprintf(command.OutOrStdout(), "imported: %s@%s-%d (%d artifacts)\n", release.Release.Channel, release.Release.Version, release.Release.Release, len(release.Artifacts))
-			return nil
-		},
-	}
-	command.Flags().StringVar(&workspace, "workspace", ".", "repository authoring workspace")
-	command.Flags().StringVar(&format, "format", "text", outputFormatHelp)
-	return command
-}
-
 func newRepoChannelCommand() *cobra.Command {
 	command := &cobra.Command{Use: "channel", Short: "Manage repository channels", Args: cobra.NoArgs, RunE: func(command *cobra.Command, _ []string) error { return command.Help() }}
 	var workspace, format string

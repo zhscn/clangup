@@ -16,9 +16,7 @@ import (
 
 var (
 	channelPattern   = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
-	targetPattern    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]*$`)
 	namespacePattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?:/[A-Za-z0-9._~-]+)*$`)
-	digestPattern    = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
 
 func Init(path, namespace, displayName string, localKeys bool) error {
@@ -171,82 +169,4 @@ func sha256File(path string) (string, int64, error) {
 		return "", 0, err
 	}
 	return hex.EncodeToString(digest.Sum(nil)), size, nil
-}
-
-func safeBundlePath(root, relative string) (string, error) {
-	if relative == "" || filepath.IsAbs(relative) || filepath.Clean(relative) != relative || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("unsafe bundle path %q", relative)
-	}
-	path := filepath.Join(root, relative)
-	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		return "", err
-	}
-	absolutePath, err := filepath.Abs(path)
-	if err != nil {
-		return "", err
-	}
-	absoluteResolved, err := filepath.Abs(resolved)
-	if err != nil {
-		return "", err
-	}
-	if absolutePath != absoluteResolved {
-		return "", fmt.Errorf("bundle path contains a symlink: %s", path)
-	}
-	info, err := os.Lstat(path)
-	if err != nil {
-		return "", err
-	}
-	if !info.Mode().IsRegular() {
-		return "", fmt.Errorf("bundle path is not a regular file: %s", path)
-	}
-	return path, nil
-}
-
-func copyObject(source, workspace, digest string) error {
-	if !digestPattern.MatchString(digest) {
-		return fmt.Errorf("invalid sha256 %q", digest)
-	}
-	actual, _, err := sha256File(source)
-	if err != nil {
-		return err
-	}
-	if actual != digest {
-		return fmt.Errorf("sha256 mismatch for %s: expected %s, got %s", source, digest, actual)
-	}
-	destination := filepath.Join(workspace, "objects", "sha256", digest)
-	if existing, _, err := sha256File(destination); err == nil {
-		if existing != digest {
-			return fmt.Errorf("corrupt object already exists: %s", destination)
-		}
-		return nil
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	input, err := os.Open(source)
-	if err != nil {
-		return err
-	}
-	defer input.Close()
-	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
-		return err
-	}
-	temporary, err := os.CreateTemp(filepath.Dir(destination), ".object-*")
-	if err != nil {
-		return err
-	}
-	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
-	if _, err := io.Copy(temporary, input); err != nil {
-		temporary.Close()
-		return err
-	}
-	if err := temporary.Chmod(0o644); err != nil {
-		temporary.Close()
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	return os.Rename(temporaryPath, destination)
 }

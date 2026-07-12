@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/zhscn/clangup/internal/clangup/toolchain"
 )
 
 func TestRepoSpecCheckJSON(t *testing.T) {
@@ -23,6 +25,35 @@ func TestRepoSpecCheckJSON(t *testing.T) {
 	}
 	if result.Schema != "clangup.repo.spec-check/v1" || result.Channel != "default" || len(result.Targets) != 3 {
 		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestMatchSelectorUsesLongestNamespace(t *testing.T) {
+	repositories := []toolchain.Repository{
+		{Namespace: "example.com", URL: "https://example.com/catalog-v1.json"},
+		{Namespace: "example.com/llvm", URL: "https://example.com/llvm/catalog-v1.json"},
+	}
+	repository, channel, exact, err := matchSelector(repositories, "example.com/llvm/default@22.1.8-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repository.Namespace != "example.com/llvm" || channel != "default" || exact != "22.1.8-1" {
+		t.Fatalf("unexpected match: %#v, %q, %q", repository, channel, exact)
+	}
+}
+
+func TestCompareNumericVersion(t *testing.T) {
+	for _, test := range []struct {
+		left, right string
+		want        int
+	}{
+		{left: "2.28", right: "2.17", want: 1},
+		{left: "2.17", right: "2.17.0", want: 0},
+		{left: "11.0", right: "12.0", want: -1},
+	} {
+		if got := compareNumericVersion(test.left, test.right); got != test.want {
+			t.Fatalf("compareNumericVersion(%q, %q) = %d, want %d", test.left, test.right, got, test.want)
+		}
 	}
 }
 

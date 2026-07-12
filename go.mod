@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/BurntSushi/toml v1.6.0
+	github.com/klauspost/compress v1.19.0
 	github.com/sigstore/sigstore v1.10.4
 	github.com/spf13/cobra v1.10.2
 	github.com/theupdateframework/go-tuf/v2 v2.4.1
