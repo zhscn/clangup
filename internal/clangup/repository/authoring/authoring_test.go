@@ -160,7 +160,6 @@ func makeTestBundle(t *testing.T, root string) string {
 	manifest, _ := json.Marshal(manifestValue)
 	manifest = append(manifest, '\n')
 	manifestDigest := write("manifests/x86_64-unknown-linux-gnu/manifest.json", manifest)
-	write("build-records/x86_64-unknown-linux-gnu/build-record.json", []byte("{\"schema\":\"clangup.build-record/v1\"}\n"))
 	lockValue := map[string]any{
 		"schema":    "clangup.build-lock/v1",
 		"release":   map[string]any{"channel": "default", "version": "22.1.8", "release": 1},
@@ -171,12 +170,20 @@ func makeTestBundle(t *testing.T, root string) string {
 	lock, _ := json.Marshal(lockValue)
 	lock = append(lock, '\n')
 	lockDigest := write("spec.lock.json", lock)
+	buildRecordValue := map[string]any{
+		"schema": "clangup.build-record/v1", "release": map[string]any{"channel": "default", "version": "22.1.8", "release": 1},
+		"target": "x86_64-unknown-linux-gnu", "locked_spec_sha256": lockDigest, "artifact_sha256": payloadDigest,
+	}
+	buildRecord, _ := json.Marshal(buildRecordValue)
+	buildRecord = append(buildRecord, '\n')
+	buildRecordDigest := write("build-records/x86_64-unknown-linux-gnu/build-record.json", buildRecord)
 	descriptorValue := map[string]any{
 		"schema": "clangup.release-bundle/v1", "channel": "default", "version": "22.1.8", "release": 1,
 		"locked_spec": "spec.lock.json", "locked_spec_sha256": lockDigest,
 		"artifacts": []any{map[string]any{
 			"target": "x86_64-unknown-linux-gnu", "manifest": "manifests/x86_64-unknown-linux-gnu/manifest.json",
 			"manifest_sha256": manifestDigest, "payload": "artifacts/clang.tar.zst", "payload_sha256": payloadDigest,
+			"build_record": "build-records/x86_64-unknown-linux-gnu/build-record.json", "build_record_sha256": buildRecordDigest,
 		}},
 		"objects": []any{map[string]any{"kind": "source", "path": "objects/sources/source.tar.xz", "sha256": sourceDigest}},
 	}

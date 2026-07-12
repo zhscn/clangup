@@ -50,7 +50,15 @@ class AssembleTest(unittest.TestCase):
             self.write_json(fragment_dir / "manifest.json", manifest)
             self.write_json(
                 fragment_dir / "build-record.json",
-                {"schema": "clangup.build-record/v1"},
+                {
+                    "schema": "clangup.build-record/v1",
+                    "release": lock["release"],
+                    "target": "x86_64-unknown-linux-gnu",
+                    "locked_spec_sha256": hashlib.sha256(
+                        lock_path.read_bytes()
+                    ).hexdigest(),
+                    "artifact_sha256": artifact_digest,
+                },
             )
             self.write_json(
                 fragment_dir / "release-fragment.json",
@@ -91,6 +99,19 @@ class AssembleTest(unittest.TestCase):
             )
             self.assertEqual(
                 descriptor["artifacts"][0]["payload_sha256"], artifact_digest
+            )
+            self.assertEqual(
+                descriptor["artifacts"][0]["build_record"],
+                "build-records/x86_64-unknown-linux-gnu/build-record.json",
+            )
+            self.assertEqual(
+                descriptor["artifacts"][0]["build_record_sha256"],
+                hashlib.sha256(
+                    (
+                        output
+                        / "build-records/x86_64-unknown-linux-gnu/build-record.json"
+                    ).read_bytes()
+                ).hexdigest(),
             )
 
     @staticmethod

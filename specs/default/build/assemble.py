@@ -115,9 +115,16 @@ def main() -> None:
         )
         manifest_destination = output / "manifests" / triple / "manifest.json"
         manifest_digest = copy_verified(manifest_source, manifest_destination)
-        copy_verified(
-            record_source, output / "build-records" / triple / "build-record.json"
-        )
+        record = load_json(record_source)
+        if (
+            record.get("schema") != "clangup.build-record/v1"
+            or record.get("release") != release
+            or record.get("target") != triple
+            or record.get("artifact_sha256") != artifact_digest
+        ):
+            fail(f"invalid build record for {triple}")
+        record_destination = output / "build-records" / triple / "build-record.json"
+        record_digest = copy_verified(record_source, record_destination)
         artifacts.append(
             {
                 "target": triple,
@@ -125,6 +132,8 @@ def main() -> None:
                 "manifest_sha256": manifest_digest,
                 "payload": str((Path("artifacts") / artifact_source.name)),
                 "payload_sha256": artifact_digest,
+                "build_record": str(record_destination.relative_to(output)),
+                "build_record_sha256": record_digest,
             }
         )
 
@@ -165,13 +174,18 @@ def main() -> None:
 
     lock_destination = output / "spec.lock.json"
     copy_verified(args.spec_lock.resolve(), lock_destination)
+    lock_digest = sha256_file(lock_destination)
+    for artifact in artifacts:
+        record = load_json(output / artifact["build_record"])
+        if record.get("locked_spec_sha256") != lock_digest:
+            fail(f"build record locked spec mismatch for {artifact['target']}")
     descriptor = {
         "schema": "clangup.release-bundle/v1",
         "channel": release["channel"],
         "version": release["version"],
         "release": release["release"],
         "locked_spec": "spec.lock.json",
-        "locked_spec_sha256": sha256_file(lock_destination),
+        "locked_spec_sha256": lock_digest,
         "artifacts": sorted(artifacts, key=lambda item: item["target"]),
         "objects": objects,
     }

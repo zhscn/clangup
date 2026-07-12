@@ -61,11 +61,21 @@ type Bundle struct {
 }
 
 type BundleArtifact struct {
-	Target         string `json:"target"`
-	Manifest       string `json:"manifest"`
-	ManifestSHA256 string `json:"manifest_sha256"`
-	Payload        string `json:"payload"`
-	PayloadSHA256  string `json:"payload_sha256"`
+	Target            string `json:"target"`
+	Manifest          string `json:"manifest"`
+	ManifestSHA256    string `json:"manifest_sha256"`
+	Payload           string `json:"payload"`
+	PayloadSHA256     string `json:"payload_sha256"`
+	BuildRecord       string `json:"build_record"`
+	BuildRecordSHA256 string `json:"build_record_sha256"`
+}
+
+type BuildRecord struct {
+	Schema           string          `json:"schema"`
+	Release          ReleaseIdentity `json:"release"`
+	Target           string          `json:"target"`
+	LockedSpecSHA256 string          `json:"locked_spec_sha256"`
+	ArtifactSHA256   string          `json:"artifact_sha256"`
 }
 
 type BundleObject struct {

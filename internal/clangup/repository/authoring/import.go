@@ -90,6 +90,10 @@ func ImportBundle(workspace, descriptorPath string) (*ImportedRelease, error) {
 		if err != nil {
 			return nil, err
 		}
+		buildRecordPath, err := safeBundlePath(bundleRoot, artifact.BuildRecord)
+		if err != nil {
+			return nil, err
+		}
 		var manifest ArtifactManifest
 		if err := readJSONLoose(manifestPath, &manifest); err != nil {
 			return nil, err
@@ -124,14 +128,16 @@ func ImportBundle(workspace, descriptorPath string) (*ImportedRelease, error) {
 				return nil, fmt.Errorf("manifest patch identity mismatch for target %q", artifact.Target)
 			}
 		}
-		buildRecordRelative := filepath.Join("build-records", artifact.Target, "build-record.json")
-		buildRecordPath, err := safeBundlePath(bundleRoot, buildRecordRelative)
-		if err != nil {
-			return nil, fmt.Errorf("missing build record for target %q: %w", artifact.Target, err)
+		var buildRecord BuildRecord
+		if err := readJSONLoose(buildRecordPath, &buildRecord); err != nil {
+			return nil, err
+		}
+		if buildRecord.Schema != "clangup.build-record/v1" || buildRecord.Release != identity || buildRecord.Target != artifact.Target || buildRecord.LockedSpecSHA256 != lockDigest || buildRecord.ArtifactSHA256 != payloadDigest {
+			return nil, fmt.Errorf("build record identity mismatch for target %q", artifact.Target)
 		}
 		buildRecordDigest, _, err := sha256File(buildRecordPath)
-		if err != nil {
-			return nil, err
+		if err != nil || buildRecordDigest != artifact.BuildRecordSHA256 {
+			return nil, fmt.Errorf("build record sha256 mismatch for target %q", artifact.Target)
 		}
 		for path, digest := range map[string]string{manifestPath: manifestDigest, payloadPath: payloadDigest, buildRecordPath: buildRecordDigest} {
 			if err := copyObject(path, workspace, digest); err != nil {
