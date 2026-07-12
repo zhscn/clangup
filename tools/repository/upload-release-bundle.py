@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import subprocess
 from typing import Any
+import urllib.error
 import urllib.request
 
 
@@ -195,8 +196,12 @@ class Presign:
             },
             method="POST",
         )
-        with urllib.request.urlopen(request) as response:
-            result = json.load(response)
+        try:
+            with urllib.request.urlopen(request) as response:
+                result = json.load(response)
+        except urllib.error.HTTPError as error:
+            body = error.read().decode(errors="replace")
+            fail(f"presign service returned HTTP {error.code}: {body}")
         if not isinstance(result, dict):
             fail("presign service returned an invalid response")
         return result
