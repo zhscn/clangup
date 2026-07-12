@@ -215,16 +215,86 @@ func newChannelCommand() *cobra.Command {
 		Use: "channel", Short: "Inspect toolchain channels", Args: cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error { return command.Help() },
 	}
-	command.AddCommand(newChannelListCommand())
+	command.AddCommand(newChannelListCommand(), newChannelShowCommand())
+	return command
+}
+
+func newChannelShowCommand() *cobra.Command {
+	var format string
+	command := &cobra.Command{
+		Use: "show <channel-selector>", Short: "Show channel releases", Args: cobra.ExactArgs(1),
+		RunE: func(command *cobra.Command, args []string) error {
+			if err := validateOutputFormat(format); err != nil {
+				return invalidRequest(err)
+			}
+			config, err := toolchain.LoadConfig()
+			if err != nil {
+				return invalidRepository(err)
+			}
+			repository, channelName, _, err := matchSelector(config.Repositories, args[0])
+			if err != nil {
+				return invalidRequest(err)
+			}
+			catalog, err := toolchain.LoadCatalog(repository)
+			if err != nil {
+				return invalidRepository(err)
+			}
+			channel, found := catalog.Channels[channelName]
+			if !found {
+				return invalidRequest(fmt.Errorf("channel not found: %s", channelName))
+			}
+			if format == "json" {
+				return writeJSON(command, map[string]any{"schema": "clangup.channel-show/v1", "channel": repository.Namespace + "/" + channelName, "current": channel.Current, "releases": channel.Releases})
+			}
+			fmt.Fprintf(command.OutOrStdout(), "%s/%s\tcurrent %s\n", repository.Namespace, channelName, channel.Current)
+			for _, release := range channel.Releases {
+				marker := "  "
+				if fmt.Sprintf("%s-%d", release.Version, release.Release) == channel.Current {
+					marker = "* "
+				}
+				fmt.Fprintf(command.OutOrStdout(), "%s%s-%d\n", marker, release.Version, release.Release)
+			}
+			return nil
+		},
+	}
+	command.Flags().StringVar(&format, "format", "text", outputFormatHelp)
 	return command
 }
 
 func newInstallCommand() *cobra.Command {
-	var prefix, target, format string
+	var prefix, target, format, file, location string
+	var force bool
 	command := &cobra.Command{
-		Use: "install <channel-selector>", Short: "Install a toolchain release", Args: cobra.ExactArgs(1),
+		Use: "install [channel-selector]", Short: "Install a toolchain release", Args: cobra.MaximumNArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
-			result, err := installSelector(args[0], prefix, target)
+			if file != "" && location != "" {
+				return invalidRequest(fmt.Errorf("--file and --url are mutually exclusive"))
+			}
+			if (file != "" || location != "") && len(args) != 0 {
+				return invalidRequest(fmt.Errorf("--file and --url do not accept a channel selector"))
+			}
+			if file != "" || location != "" {
+				result, err := installDirect(file, location, prefix, target, force)
+				if err != nil {
+					return installFailure(err)
+				}
+				if format == "json" {
+					return writeJSON(command, result)
+				}
+				fmt.Fprintf(command.OutOrStdout(), "installed: %s@%s-%d (%s) -> %s\n", result.Channel, result.Version, result.Release, result.Target, result.Prefix)
+				return nil
+			}
+			selector := ""
+			if len(args) == 1 {
+				selector = args[0]
+			} else {
+				var err error
+				selector, err = defaultChannelSelector()
+				if err != nil {
+					return invalidRequest(err)
+				}
+			}
+			result, err := installSelector(selector, prefix, target, force)
 			if err != nil {
 				return installFailure(err)
 			}
@@ -237,8 +307,30 @@ func newInstallCommand() *cobra.Command {
 	}
 	command.Flags().StringVar(&prefix, "prefix", "", "installation prefix")
 	command.Flags().StringVar(&target, "target", "", "explicit target triple")
+	command.Flags().BoolVar(&force, "force", false, "replace an existing installation")
+	command.Flags().StringVar(&file, "file", "", "install a local tar.zst artifact with its sibling manifest")
+	command.Flags().StringVar(&location, "url", "", "install a tar.zst artifact URL with its sibling manifest")
 	command.Flags().StringVar(&format, "format", "text", outputFormatHelp)
 	return command
+}
+
+func defaultChannelSelector() (string, error) {
+	config, err := toolchain.LoadConfig()
+	if err != nil {
+		return "", err
+	}
+	if len(config.Repositories) != 1 {
+		return "", fmt.Errorf("a channel selector is required unless exactly one repository is configured")
+	}
+	repository := config.Repositories[0]
+	catalog, err := toolchain.LoadCatalog(repository)
+	if err != nil {
+		return "", err
+	}
+	if catalog.Repository.DefaultChannel == "" {
+		return "", fmt.Errorf("repository %s has no default channel", repository.Namespace)
+	}
+	return repository.Namespace + "/" + catalog.Repository.DefaultChannel, nil
 }
 
 func newResolveCommand() *cobra.Command {
@@ -262,7 +354,7 @@ func newResolveCommand() *cobra.Command {
 				PatchsetSHA256:     selected.manifest.Source.PatchsetSHA256,
 			}
 			if ensureInstalled {
-				installed, err := installSelector(args[0], prefix, target)
+				installed, err := installSelector(args[0], prefix, target, false)
 				if err != nil {
 					return installFailure(err)
 				}
@@ -325,7 +417,7 @@ type selection struct {
 	base       string
 }
 
-func installSelector(selector, prefix, explicitTarget string) (*installResult, error) {
+func installSelector(selector, prefix, explicitTarget string, force bool) (*installResult, error) {
 	selected, err := resolveSelector(selector, explicitTarget)
 	if err != nil {
 		return nil, err
@@ -342,18 +434,34 @@ func installSelector(selector, prefix, explicitTarget string) (*installResult, e
 	if err != nil {
 		return nil, err
 	}
-	if toolchain.IsInstalled(prefix, selected.artifact.Manifest.SHA256, selected.artifact.Artifact.SHA256) {
+	record := toolchain.InstallRecord{
+		Channel: selected.repository.Namespace + "/" + selected.channel,
+		Version: selected.release.Version, Release: selected.release.Release,
+		Target: selected.artifact.Target, Prefix: prefix,
+		ManifestSHA256: selected.artifact.Manifest.SHA256, ArtifactSHA256: selected.artifact.Artifact.SHA256,
+		DriverRequirements: selected.manifest.DriverRequirements.ExternalComponents,
+	}
+	if !force && toolchain.IsInstalled(prefix, selected.artifact.Manifest.SHA256, selected.artifact.Artifact.SHA256) {
+		if err := toolchain.RecordInstall(record); err != nil {
+			return nil, err
+		}
+		if err := ensureFirstDefault(prefix); err != nil {
+			return nil, err
+		}
 		return installationResult(selected.repository.Namespace, selected.channel, selected.release, selected.artifact, selected.manifest, prefix), nil
 	}
 	cachedArchive, err := client.Object(selected.base, selected.artifact.Artifact)
 	if err != nil {
 		return nil, err
 	}
-	if err := toolchain.InstallArchive(cachedArchive, prefix); err != nil {
+	if err := toolchain.InstallArchive(cachedArchive, prefix, force); err != nil {
 		return nil, err
 	}
-	if err := toolchain.RecordInstall(prefix, selected.artifact.Manifest.SHA256, selected.artifact.Artifact.SHA256); err != nil {
+	if err := toolchain.RecordInstall(record); err != nil {
 		_ = os.RemoveAll(prefix)
+		return nil, err
+	}
+	if err := ensureFirstDefault(prefix); err != nil {
 		return nil, err
 	}
 	return installationResult(selected.repository.Namespace, selected.channel, selected.release, selected.artifact, selected.manifest, prefix), nil

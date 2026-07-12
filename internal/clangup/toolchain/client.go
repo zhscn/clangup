@@ -310,6 +310,8 @@ func fileIdentity(path string) (string, int64, error) {
 	return hex.EncodeToString(digest.Sum(nil)), size, nil
 }
 
+func FileIdentity(path string) (string, int64, error) { return fileIdentity(path) }
+
 func writeFileAtomic(path string, contents []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err

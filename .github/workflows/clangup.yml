@@ -6,6 +6,7 @@ on:
       - .github/workflows/clangup.yml
       - .github/workflows/default-channel.yml
       - .github/workflows/repository-publish.yml
+      - .github/workflows/clangup-release.yml
       - cmd/**
       - internal/**
       - specs/**
@@ -18,6 +19,7 @@ on:
       - .github/workflows/clangup.yml
       - .github/workflows/default-channel.yml
       - .github/workflows/repository-publish.yml
+      - .github/workflows/clangup-release.yml
       - cmd/**
       - internal/**
       - specs/**

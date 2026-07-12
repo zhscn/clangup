@@ -11,9 +11,9 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
-func InstallArchive(archive, destination string) error {
+func InstallArchive(archive, destination string, replace bool) error {
 	destinationExists := false
-	if entries, err := os.ReadDir(destination); err == nil && len(entries) != 0 {
+	if entries, err := os.ReadDir(destination); err == nil && len(entries) != 0 && !replace {
 		return fmt.Errorf("installation prefix is not empty: %s", destination)
 	} else if err == nil {
 		destinationExists = true
@@ -37,6 +37,12 @@ func InstallArchive(archive, destination string) error {
 		if err != nil || !info.Mode().IsRegular() {
 			return fmt.Errorf("artifact is missing %s", required)
 		}
+	}
+	if replace {
+		if err := os.RemoveAll(destination); err != nil {
+			return err
+		}
+		destinationExists = false
 	}
 	if destinationExists {
 		if err := os.Remove(destination); err != nil {

@@ -103,6 +103,7 @@ func newRootCommand(version string) *cobra.Command {
 			return command.Help()
 		},
 	}
+	root.Version = version
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
 		return invalidRequest(err)
 	})
@@ -110,6 +111,13 @@ func newRootCommand(version string) *cobra.Command {
 	root.AddCommand(newChannelCommand())
 	root.AddCommand(newInstallCommand())
 	root.AddCommand(newResolveCommand())
+	root.AddCommand(newToolchainCommand())
+	root.AddCommand(newEnvCommand())
+	root.AddCommand(newGCCommand())
+	root.AddCommand(newDoctorCommand())
+	root.AddCommand(newListCommand())
+	root.AddCommand(newDefaultCommand())
+	root.AddCommand(newUninstallCommand())
 	root.AddCommand(&cobra.Command{
 		Use:   "version",
 		Short: "Print the clangup version",
