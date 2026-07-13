@@ -14,15 +14,19 @@ import (
 )
 
 type InstallRecord struct {
-	Schema             string   `json:"schema"`
-	Channel            string   `json:"channel"`
-	Version            string   `json:"version"`
-	Release            int      `json:"release"`
-	Target             string   `json:"target"`
-	Prefix             string   `json:"prefix"`
-	ManifestSHA256     string   `json:"manifest_sha256"`
-	ArtifactSHA256     string   `json:"artifact_sha256"`
-	DriverRequirements []string `json:"driver_requirements,omitempty"`
+	Schema             string         `json:"schema"`
+	Channel            string         `json:"channel"`
+	Version            string         `json:"version"`
+	Release            int            `json:"release"`
+	Target             string         `json:"target"`
+	Prefix             string         `json:"prefix"`
+	ManifestSHA256     string         `json:"manifest_sha256"`
+	ArtifactSHA256     string         `json:"artifact_sha256"`
+	DriverRequirements []string       `json:"driver_requirements,omitempty"`
+	ArchiveSHA256      string         `json:"archive_sha256,omitempty"`
+	PatchsetSHA256     string         `json:"patchset_sha256,omitempty"`
+	Driver             map[string]any `json:"driver,omitempty"`
+	Optimization       map[string]any `json:"optimization,omitempty"`
 }
 
 func (record InstallRecord) Exact() string {

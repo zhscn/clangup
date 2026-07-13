@@ -154,6 +154,27 @@ func newEnsureCommand() *cobra.Command { return newConsumerCommand("ensure", tru
 func newConsumerCommand(name string, ensure bool) *cobra.Command {
 	var prefix, target, format string
 	command := &cobra.Command{Use: name + " <channel[@version-release]>", Short: "Resolve an exact toolchain for build-system consumers", Args: cobra.ExactArgs(1), RunE: func(command *cobra.Command, args []string) error {
+		if prefix == "" {
+			record, err := installedExact(args[0], target)
+			if err != nil {
+				return installFailure(err)
+			}
+			if record != nil {
+				result := resolveResultForInstalled(args[0], record)
+				if ensure {
+					result.Install = installationResultForRecord(record)
+				}
+				if format == "json" {
+					return writeJSON(command, result)
+				}
+				if result.Install != nil {
+					fmt.Fprintln(command.OutOrStdout(), result.Install.Prefix)
+				} else {
+					fmt.Fprintf(command.OutOrStdout(), "%s@%s-%d\t%s\n", result.Channel, result.Version, result.Release, result.Target)
+				}
+				return nil
+			}
+		}
 		selected, err := resolveSelector(args[0], target)
 		if err != nil {
 			return installFailure(err)
@@ -185,6 +206,15 @@ func newConsumerCommand(name string, ensure bool) *cobra.Command {
 func newPathCommand() *cobra.Command {
 	var target, format string
 	command := &cobra.Command{Use: "path <channel[@version-release]>", Short: "Print an installed toolchain path", Args: cobra.ExactArgs(1), RunE: func(command *cobra.Command, args []string) error {
+		if record, err := installedExact(args[0], target); err != nil {
+			return installFailure(err)
+		} else if record != nil {
+			if format == "json" {
+				return writeJSON(command, map[string]any{"schema": "clangup.path/v1", "prefix": record.Prefix, "channel": record.Channel, "version": record.Version, "release": record.Release, "target": record.Target})
+			}
+			fmt.Fprintln(command.OutOrStdout(), record.Prefix)
+			return nil
+		}
 		selected, err := resolveSelector(args[0], target)
 		if err != nil {
 			return installFailure(err)
@@ -253,6 +283,63 @@ func resolveResultFor(selector string, selected *selection) *resolveResult {
 	return &resolveResult{Schema: "clangup.resolve/v1", Selector: selector, Channel: selected.channel, Version: selected.release.Version, Release: selected.release.Release, Target: selected.artifact.Target, ManifestSHA256: selected.artifact.Manifest.SHA256, ArtifactSHA256: selected.artifact.Artifact.SHA256, DriverRequirements: selected.manifest.DriverRequirements.ExternalComponents, ArchiveSHA256: selected.manifest.Source.Archive.SHA256, PatchsetSHA256: selected.manifest.Source.PatchsetSHA256, Driver: selected.manifest.Driver, Optimization: selected.manifest.Optimization}
 }
 
+func installedExact(selector, target string) (*toolchain.InstallRecord, error) {
+	channel, exact, found := strings.Cut(selector, "@")
+	if !found || channel == "" || exact == "" {
+		return nil, nil
+	}
+	records, err := toolchain.ListInstalls()
+	if err != nil {
+		return nil, err
+	}
+	var match *toolchain.InstallRecord
+	for index := range records {
+		record := &records[index]
+		if record.Channel != channel || record.Exact() != exact || (target != "" && record.Target != target) {
+			continue
+		}
+		if !toolchain.IsInstalled(record.Prefix, record.ManifestSHA256, record.ArtifactSHA256) {
+			continue
+		}
+		if match != nil {
+			return nil, fmt.Errorf("multiple installed targets match %s; specify --target", selector)
+		}
+		match = record
+	}
+	return match, nil
+}
+
+func resolveResultForInstalled(selector string, record *toolchain.InstallRecord) *resolveResult {
+	return &resolveResult{
+		Schema: "clangup.resolve/v1", Selector: selector,
+		Channel: record.Channel, Version: record.Version, Release: record.Release, Target: record.Target,
+		ManifestSHA256: record.ManifestSHA256, ArtifactSHA256: record.ArtifactSHA256,
+		DriverRequirements: record.DriverRequirements, ArchiveSHA256: record.ArchiveSHA256,
+		PatchsetSHA256: record.PatchsetSHA256, Driver: record.Driver, Optimization: record.Optimization,
+	}
+}
+
+func installationResultForRecord(record *toolchain.InstallRecord) *installResult {
+	result := &installResult{
+		Schema: "clangup.install/v1", Channel: record.Channel, Version: record.Version,
+		Release: record.Release, Target: record.Target, ManifestSHA256: record.ManifestSHA256,
+		ArtifactSHA256: record.ArtifactSHA256, DriverRequirements: record.DriverRequirements,
+		Prefix: record.Prefix, CC: filepath.Join(record.Prefix, "bin", "clang"),
+		CXX: filepath.Join(record.Prefix, "bin", "clang++"), Driver: record.Driver,
+		Tools: map[string]string{},
+	}
+	for name, executable := range map[string]string{"ar": "llvm-ar", "nm": "llvm-nm", "ranlib": "llvm-ranlib"} {
+		path := filepath.Join(record.Prefix, "bin", executable)
+		if _, err := os.Stat(path); err == nil {
+			result.Tools[name] = path
+		}
+	}
+	if path := filepath.Join(record.Prefix, "toolchain.cmake"); func() bool { _, err := os.Stat(path); return err == nil }() {
+		result.ToolchainFile = path
+	}
+	return result
+}
+
 func resolveSelector(selector, explicitTarget string) (*selection, error) {
 	index, err := loadIndex()
 	if err != nil {
@@ -318,7 +405,7 @@ func installSelector(selector, prefix, explicitTarget string, force bool) (*inst
 	if err != nil {
 		return nil, err
 	}
-	record := toolchain.InstallRecord{Channel: selected.channel, Version: selected.release.Version, Release: selected.release.Release, Target: selected.artifact.Target, Prefix: prefix, ManifestSHA256: selected.artifact.Manifest.SHA256, ArtifactSHA256: selected.artifact.Artifact.SHA256, DriverRequirements: selected.manifest.DriverRequirements.ExternalComponents}
+	record := toolchain.InstallRecord{Channel: selected.channel, Version: selected.release.Version, Release: selected.release.Release, Target: selected.artifact.Target, Prefix: prefix, ManifestSHA256: selected.artifact.Manifest.SHA256, ArtifactSHA256: selected.artifact.Artifact.SHA256, DriverRequirements: selected.manifest.DriverRequirements.ExternalComponents, ArchiveSHA256: selected.manifest.Source.Archive.SHA256, PatchsetSHA256: selected.manifest.Source.PatchsetSHA256, Driver: selected.manifest.Driver, Optimization: selected.manifest.Optimization}
 	if !force && toolchain.IsInstalled(prefix, record.ManifestSHA256, record.ArtifactSHA256) {
 		if err := toolchain.RecordInstall(record); err != nil {
 			return nil, err

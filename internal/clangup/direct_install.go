@@ -69,14 +69,14 @@ func installDirect(file, location, prefix, explicitTarget string, force bool) (*
 		return nil, fmt.Errorf("artifact identity differs from manifest")
 	}
 	manifestDigest := sha256.Sum256(manifestContents)
-	channel := "local-" + manifest.Release.Channel
+	channel := manifest.Release.Channel
 	exact := fmt.Sprintf("%s-%d", manifest.Release.Version, manifest.Release.Release)
 	if prefix == "" {
 		root, err := toolchain.DataRoot()
 		if err != nil {
 			return nil, err
 		}
-		prefix = filepath.Join(root, "toolchains", "local", manifest.Release.Channel, exact, manifest.RuntimeRequirements.Triple)
+		prefix = filepath.Join(root, "toolchains", channel, exact, manifest.RuntimeRequirements.Triple)
 	}
 	prefix, err = filepath.Abs(prefix)
 	if err != nil {
@@ -90,6 +90,8 @@ func installDirect(file, location, prefix, explicitTarget string, force bool) (*
 		Target: manifest.RuntimeRequirements.Triple, Prefix: prefix,
 		ManifestSHA256: hex.EncodeToString(manifestDigest[:]), ArtifactSHA256: object.SHA256,
 		DriverRequirements: manifest.DriverRequirements.ExternalComponents,
+		ArchiveSHA256:      manifest.Source.Archive.SHA256, PatchsetSHA256: manifest.Source.PatchsetSHA256,
+		Driver: manifest.Driver, Optimization: manifest.Optimization,
 	}
 	if err := toolchain.RecordInstall(record); err != nil {
 		_ = os.RemoveAll(prefix)
