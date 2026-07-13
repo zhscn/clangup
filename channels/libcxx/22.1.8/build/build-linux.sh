@@ -51,6 +51,10 @@ ninja -C "${CLANGUP_BUILD}" -j "${CLANGUP_JOBS}"
 ninja -C "${CLANGUP_BUILD}" install
 ninja -C "${CLANGUP_BUILD}" install-builtins install-runtimes
 
+mkdir -p "${CLANGUP_PREFIX}/etc/clang"
+printf '%s\n' '-L<CFGDIR>/../../lib' >"${CLANGUP_PREFIX}/etc/clang/clang.cfg"
+printf '%s\n' '-L<CFGDIR>/../../lib' >"${CLANGUP_PREFIX}/etc/clang/clang++.cfg"
+
 export CLANGUP_RESOURCE_DIR="$("${CLANGUP_PREFIX}/bin/clang" --print-resource-dir)"
 case "${CLANGUP_RESOURCE_DIR}" in
   "${CLANGUP_PREFIX}"/*) ;;
