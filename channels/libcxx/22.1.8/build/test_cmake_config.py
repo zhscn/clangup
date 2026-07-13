@@ -25,6 +25,15 @@ class CMakeConfigTest(unittest.TestCase):
         overlap = common & self.cache_entries("linux.cmake")
         self.assertEqual(set(), overlap)
 
+    def test_linux_cxx_runtimes_use_fat_lto_objects(self) -> None:
+        contents = (ROOT / "linux-runtimes.cmake").read_text(encoding="utf-8")
+        for entry in (
+            "set(LIBCXX_ADDITIONAL_COMPILE_FLAGS",
+            "set(LIBCXXABI_ADDITIONAL_COMPILE_FLAGS",
+        ):
+            self.assertIn(entry, contents)
+        self.assertEqual(2, contents.count('"-flto;-ffat-lto-objects"'))
+
     def test_driver_defaults_match_channel_contract(self) -> None:
         contents = (ROOT / "linux.cmake").read_text(encoding="utf-8")
         for entry in (

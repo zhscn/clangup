@@ -80,6 +80,15 @@ test "$("${prefix}/bin/clang" --target="${compatible_triple}" --print-runtime-di
   /tmp/clangup-libcxx-smoke.cc -o /tmp/clangup-libcxx-compatible-triple
 /tmp/clangup-libcxx-compatible-triple
 
+"${prefix}/bin/clang++" -std=c++20 -flto -ffat-lto-objects -fuse-ld=lld \
+  /tmp/clangup-libcxx-smoke.cc -o /tmp/clangup-libcxx-lto
+/tmp/clangup-libcxx-lto
+for archive in libc++.a libc++abi.a; do
+  "${prefix}/bin/llvm-readelf" -S "${prefix}/lib/${archive}" \
+    >"/tmp/clangup-libcxx-${archive}.sections"
+  grep -Fq '.llvm.lto' "/tmp/clangup-libcxx-${archive}.sections"
+done
+
 clang_ldd="$(ldd "${prefix}/bin/clang")"
 grep -Fq "=> ${prefix}/lib/libclang-cpp.so" <<<"${clang_ldd}"
 ldd "${prefix}/bin/llvm-ar" | grep -Fq "=> ${prefix}/lib/libLLVM.so"
