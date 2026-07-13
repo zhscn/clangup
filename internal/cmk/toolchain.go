@@ -51,18 +51,18 @@ func exactSelector(result *clangupResolveResult) string {
 	return fmt.Sprintf("%s@%s-%d", result.Channel, result.Version, result.Release)
 }
 
-func effectiveSelector(selector string, lock *Lock) string {
-	if lock == nil || lock.Toolchain.Selector == "" {
+func effectiveSelector(selector string, pin *LockToolchain) string {
+	if pin == nil || pin.Selector == "" {
 		return selector
 	}
 	if strings.Contains(selector, "@") {
-		if selector == lock.Toolchain.Selector {
+		if selector == pin.Selector {
 			return selector
 		}
 		return selector
 	}
-	if strings.HasPrefix(lock.Toolchain.Selector, selector+"@") {
-		return lock.Toolchain.Selector
+	if strings.HasPrefix(pin.Selector, selector+"@") {
+		return pin.Selector
 	}
 	return selector
 }
@@ -100,7 +100,9 @@ func resolveToolchain(selector string, lock *Lock) (tc *Toolchain, lockDirty boo
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		return nil, false, fmt.Errorf("clangup toolchains are unavailable on %s", runtime.GOOS)
 	}
-	requested := effectiveSelector(selector, lock)
+	lockDirty = lock.dirty
+	pin := lock.toolchainFor(runtime.GOOS, runtime.GOARCH)
+	requested := effectiveSelector(selector, pin)
 	var result clangupResolveResult
 	if err := runClangupJSON("ensure", requested, &result); err != nil {
 		if !strings.Contains(err.Error(), "channel index is not cached") {
@@ -117,11 +119,11 @@ func resolveToolchain(selector string, lock *Lock) (tc *Toolchain, lockDirty boo
 	if err != nil {
 		return nil, false, err
 	}
-	if lock.Toolchain.Selector != tc.Selector ||
-		lock.Toolchain.Target != result.Target ||
-		lock.Toolchain.ManifestSHA256 != result.ManifestSHA256 ||
-		lock.Toolchain.ArtifactSHA256 != result.ArtifactSHA256 {
-		lock.Toolchain = LockToolchain{
+	if pin.Selector != tc.Selector ||
+		pin.Target != result.Target ||
+		pin.ManifestSHA256 != result.ManifestSHA256 ||
+		pin.ArtifactSHA256 != result.ArtifactSHA256 {
+		*pin = LockToolchain{
 			Selector:       tc.Selector,
 			Target:         result.Target,
 			ManifestSHA256: result.ManifestSHA256,
@@ -138,7 +140,7 @@ func locateToolchain(selector string, lock *Lock) (*Toolchain, error) {
 	if selector == "" {
 		return systemToolchain()
 	}
-	requested := effectiveSelector(selector, lock)
+	requested := effectiveSelector(selector, lock.toolchainFor(runtime.GOOS, runtime.GOARCH))
 	var resolved clangupResolveResult
 	if err := runClangupJSON("resolve", requested, &resolved); err != nil {
 		return nil, err

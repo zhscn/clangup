@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"syscall"
@@ -53,10 +54,11 @@ const completeMarker = ".cmk-complete"
 // cmk.lock, so build/run/env never have to recompute stamps.
 func (p *Project) depEntry(name string) (string, error) {
 	ld := p.Lock.Deps[name]
-	if ld == nil || ld.Stamp == "" {
+	stamp := ld.stampFor(runtime.GOOS, runtime.GOARCH)
+	if stamp == "" {
 		return "", fmt.Errorf("dep %s is not synced (run `cmk sync`)", name)
 	}
-	return entryDir(name, ld.Stamp), nil
+	return entryDir(name, stamp), nil
 }
 
 func (p *Project) depPrefix(name string) (string, error) {
@@ -538,8 +540,8 @@ func buildDep(p *Project, name string, tc *Toolchain, needStamps map[string]stri
 		ld = &LockDep{}
 		lk.Deps[name] = ld
 	}
-	if ld.Stamp != stamp {
-		ld.Stamp = stamp
+	if ld.stampFor(runtime.GOOS, runtime.GOARCH) != stamp {
+		ld.setStampFor(runtime.GOOS, runtime.GOARCH, stamp)
 		lockDirty = true
 	}
 

@@ -25,12 +25,25 @@ type Config struct {
 	Lint      LintCfg                      `toml:"lint"`
 }
 
-type ToolchainCfg struct {
-	// Selector is a clangup channel selector such as "default",
-	// "libcxx", or the exact "libcxx@22.1.8-1".
-	// Empty leaves an existing CMake build directory in charge of its
-	// compiler and uses the system compiler when cmk configures a new tree.
-	Selector string `toml:"selector"`
+// ToolchainCfg maps platform names to clangup selectors. Exact OS-architecture
+// keys override OS keys; selector is the optional fallback.
+type ToolchainCfg map[string]string
+
+func (cfg ToolchainCfg) selectorFor(goos, goarch string) string {
+	if selector := cfg[hostPlatform(goos, goarch)]; selector != "" {
+		return selector
+	}
+	switch goos {
+	case "linux":
+		if cfg["linux"] != "" {
+			return cfg["linux"]
+		}
+	case "darwin":
+		if cfg["macos"] != "" {
+			return cfg["macos"]
+		}
+	}
+	return cfg["selector"]
 }
 
 type SourceCfg struct {
@@ -167,6 +180,7 @@ type LintCfg struct {
 }
 
 var depNameRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+var toolchainPlatformRe = regexp.MustCompile(`^(linux|macos)-(x86_64|aarch64)$`)
 
 func loadConfig(root string) (*Config, error) {
 	cfg := &Config{}
@@ -184,6 +198,14 @@ func loadConfig(root string) (*Config, error) {
 	}
 	if un := md.Undecoded(); len(un) > 0 {
 		fmt.Fprintf(os.Stderr, "cmk: warning: unknown keys in %s: %v\n", configFileName, un)
+	}
+	for platform, selector := range cfg.Toolchain {
+		if platform != "selector" && platform != "linux" && platform != "macos" && !toolchainPlatformRe.MatchString(platform) {
+			return nil, fmt.Errorf("[toolchain].%s: unsupported platform", platform)
+		}
+		if selector == "" {
+			return nil, fmt.Errorf("[toolchain].%s: selector is empty", platform)
+		}
 	}
 	for name, d := range cfg.Deps {
 		if !depNameRe.MatchString(name) {

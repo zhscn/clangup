@@ -28,7 +28,7 @@ func cmdBuild(positionalTargets, passthrough []string, options buildOptions) err
 	if err != nil {
 		return err
 	}
-	passThrough := p.Cfg.Toolchain.Selector == "" && loadInjectionStamp(dir) == nil
+	passThrough := p.toolchainSelector() == "" && loadInjectionStamp(dir) == nil
 	if !passThrough {
 		if err := ensureConfigured(p, dir, policy); err != nil {
 			return err

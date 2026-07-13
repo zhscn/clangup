@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -33,7 +34,7 @@ func (p *Project) toolchain() (*Toolchain, error) {
 	if p.tc != nil {
 		return p.tc, nil
 	}
-	tc, dirty, err := resolveToolchain(p.Cfg.Toolchain.Selector, p.Lock)
+	tc, dirty, err := resolveToolchain(p.toolchainSelector(), p.Lock)
 	if err != nil {
 		return nil, err
 	}
@@ -44,6 +45,10 @@ func (p *Project) toolchain() (*Toolchain, error) {
 	}
 	p.tc = tc
 	return tc, nil
+}
+
+func (p *Project) toolchainSelector() string {
+	return p.Cfg.Toolchain.selectorFor(runtime.GOOS, runtime.GOARCH)
 }
 
 func openProject() (*Project, error) {

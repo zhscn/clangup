@@ -65,7 +65,7 @@ func ensureConfigured(p *Project, dir string, policy configurePolicy) error {
 	if policy == configureLocked {
 		// Bypass the memoized save: a lock pin that would change is
 		// exactly what --locked exists to catch.
-		tc, dirty, err := resolveToolchain(p.Cfg.Toolchain.Selector, p.Lock)
+		tc, dirty, err := resolveToolchain(p.toolchainSelector(), p.Lock)
 		if err != nil {
 			return err
 		}

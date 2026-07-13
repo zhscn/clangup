@@ -62,7 +62,9 @@ const cmkTomlTemplate = `# cmk project configuration. See https://github.com/zhs
 # Uncomment to build with a clangup channel. cmk installs it on the first
 # configure and records the exact channel release in cmk.lock.
 # [toolchain]
-# selector = "libcxx@22.1.8-1"
+# linux = "libcxx@22.1.8-1"
+# macos = "default@22.1.8-1"
+# linux-aarch64 = "libcxx-pgo@22.1.8-1"
 
 # External deps built by bash recipes outside CMake. Standard CMake deps
 # belong in your CMakeLists (FetchContent); this is for the awkward ones.

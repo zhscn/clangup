@@ -110,14 +110,14 @@ func cmdDoctor() error {
 // doctorStaleToolchain resolves the toolchain for staleness assessment
 // without installing anything (doctor's contract). nil when unavailable.
 func doctorStaleToolchain(p *Project) *Toolchain {
-	if p.Cfg.Toolchain.Selector == "" {
+	if p.toolchainSelector() == "" {
 		tc, err := systemToolchain()
 		if err != nil {
 			return nil
 		}
 		return tc
 	}
-	tc, err := locateToolchain(p.Cfg.Toolchain.Selector, p.Lock)
+	tc, err := locateToolchain(p.toolchainSelector(), p.Lock)
 	if err != nil {
 		return nil
 	}
@@ -133,7 +133,7 @@ func checkTool(c *doctorChecker, name string) {
 }
 
 func doctorToolchain(c *doctorChecker, p *Project) {
-	selector := p.Cfg.Toolchain.Selector
+	selector := p.toolchainSelector()
 	if selector == "" {
 		tc, err := systemToolchain()
 		if err != nil {
@@ -219,11 +219,12 @@ func doctorLauncher(c *doctorChecker, p *Project, launcher string) {
 func doctorDeps(c *doctorChecker, p *Project) {
 	for _, name := range sortedDepNames(p.Cfg.Deps) {
 		ld := p.Lock.Deps[name]
-		if ld == nil || ld.Stamp == "" {
+		stamp := ld.stampFor(runtime.GOOS, runtime.GOARCH)
+		if stamp == "" {
 			c.warn("%s not synced (run cmk sync)", name)
 			continue
 		}
-		entry := entryDir(name, ld.Stamp)
+		entry := entryDir(name, stamp)
 		if fileExists(filepath.Join(entry, completeMarker)) {
 			c.ok("%s (%s)", name, filepath.Base(entry))
 		} else {

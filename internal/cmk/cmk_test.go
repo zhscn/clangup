@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -301,15 +302,23 @@ func TestAddDefines(t *testing.T) {
 func TestLockRoundTrip(t *testing.T) {
 	root := t.TempDir()
 	lk := &Lock{
-		Toolchain: LockToolchain{
-			Selector:       "libcxx@22.1.8-1",
-			Target:         "x86_64-unknown-linux-gnu",
-			ManifestSHA256: strings.Repeat("a", 64),
-			ArtifactSHA256: strings.Repeat("b", 64),
+		Toolchains: map[string]*LockToolchain{
+			"linux-x86_64": {
+				Selector:       "libcxx@22.1.8-1",
+				Target:         "x86_64-unknown-linux-gnu",
+				ManifestSHA256: strings.Repeat("a", 64),
+				ArtifactSHA256: strings.Repeat("b", 64),
+			},
+			"macos-aarch64": {
+				Selector:       "default@22.1.8-1",
+				Target:         "arm64-apple-darwin",
+				ManifestSHA256: strings.Repeat("c", 64),
+				ArtifactSHA256: strings.Repeat("d", 64),
+			},
 		},
 		Deps: map[string]*LockDep{
-			"fdb":  {Git: "https://x/y.git", Ref: "release-7.4", Commit: "0123456789012345678901234567890123456789", Stamp: "aabbccdd"},
-			"zlib": {Stamp: "deadbeef00112233"}, // url dep: stamp only
+			"fdb":  {Git: "https://x/y.git", Ref: "release-7.4", Commit: "0123456789012345678901234567890123456789", Stamps: map[string]string{"linux-x86_64": "aabbccdd", "macos-aarch64": "eeff0011"}},
+			"zlib": {Stamps: map[string]string{"linux-x86_64": "deadbeef00112233"}}, // url dep: stamp only
 		},
 	}
 	if err := saveLock(root, lk); err != nil {
@@ -319,11 +328,47 @@ func TestLockRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Toolchain.Selector != "libcxx@22.1.8-1" || got.Toolchain.Target != "x86_64-unknown-linux-gnu" || got.Deps["fdb"] == nil || got.Deps["fdb"].Commit != lk.Deps["fdb"].Commit {
+	if got.Toolchains["linux-x86_64"].Selector != "libcxx@22.1.8-1" || got.Toolchains["linux-x86_64"].Target != "x86_64-unknown-linux-gnu" || got.Toolchains["macos-aarch64"].Selector != "default@22.1.8-1" || got.Deps["fdb"] == nil || got.Deps["fdb"].Commit != lk.Deps["fdb"].Commit {
 		t.Errorf("round trip mismatch: %+v", got)
 	}
-	if got.Deps["fdb"].Stamp != "aabbccdd" || got.Deps["zlib"] == nil || got.Deps["zlib"].Stamp != "deadbeef00112233" {
+	if got.Deps["fdb"].Stamps["linux-x86_64"] != "aabbccdd" || got.Deps["fdb"].Stamps["macos-aarch64"] != "eeff0011" || got.Deps["zlib"] == nil || got.Deps["zlib"].Stamps["linux-x86_64"] != "deadbeef00112233" {
 		t.Errorf("stamp round trip mismatch: %+v", got)
+	}
+}
+
+func TestLegacyToolchainLockMigratesByTargetPlatform(t *testing.T) {
+	root := t.TempDir()
+	legacy := `schema = 1
+
+[toolchain]
+selector = "default@22.1.8-1"
+target = "arm64-apple-darwin"
+manifest_sha256 = "manifest"
+artifact_sha256 = "artifact"
+
+[deps.fmt]
+stamp = "legacy-stamp"
+`
+	if err := os.WriteFile(filepath.Join(root, lockFileName), []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lk, err := loadLock(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !lk.dirty || lk.Toolchains["macos-aarch64"] == nil || lk.Toolchains["macos-aarch64"].Selector != "default@22.1.8-1" || lk.Deps["fmt"].Stamps["macos-aarch64"] != "legacy-stamp" {
+		t.Fatalf("legacy lock was not migrated: %#v", lk)
+	}
+	if err := saveLock(root, lk); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(filepath.Join(root, lockFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(contents)
+	if !strings.Contains(text, "schema = 2") || !strings.Contains(text, "[toolchains.macos-aarch64]") || !strings.Contains(text, "[deps.fmt.stamps]") || strings.Contains(text, "\n[toolchain]\n") || strings.Contains(text, "stamp = \"legacy-stamp\"") {
+		t.Fatalf("unexpected migrated lock:\n%s", text)
 	}
 }
 
@@ -333,7 +378,7 @@ func TestStorePaths(t *testing.T) {
 	if got := entryDir("fmt", stamp); got != "/store/fmt-abababababababab" {
 		t.Errorf("entryDir: %q", got)
 	}
-	p := &Project{Lock: &Lock{Deps: map[string]*LockDep{"fmt": {Stamp: stamp}}}}
+	p := &Project{Lock: &Lock{Deps: map[string]*LockDep{"fmt": {Stamps: map[string]string{hostPlatform(runtime.GOOS, runtime.GOARCH): stamp}}}}}
 	pfx, err := p.depPrefix("fmt")
 	if err != nil || pfx != "/store/fmt-abababababababab/prefix" {
 		t.Errorf("depPrefix: %q, %v", pfx, err)

@@ -203,8 +203,10 @@ func cmdClean(all, prune bool) error {
 	}
 	referenced := map[string]bool{}
 	for name, ld := range p.Lock.Deps {
-		if ld.Stamp != "" {
-			referenced[filepath.Base(entryDir(name, ld.Stamp))] = true
+		for _, stamp := range ld.Stamps {
+			if stamp != "" {
+				referenced[filepath.Base(entryDir(name, stamp))] = true
+			}
 		}
 	}
 

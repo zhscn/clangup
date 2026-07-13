@@ -3,6 +3,7 @@ package cmk
 import (
 	"fmt"
 	"os"
+	"runtime"
 )
 
 // cmdSync builds the named deps (default: all) and their needs.
@@ -51,17 +52,18 @@ func cmdUpdate(names []string) error {
 
 	dirty := false
 	if all || containsExact(names, "toolchain") {
-		if lk.Toolchain.Selector != "" {
-			lk.Toolchain = LockToolchain{}
+		pin := lk.toolchainFor(runtime.GOOS, runtime.GOARCH)
+		if !pin.empty() {
+			*pin = LockToolchain{}
 			dirty = true
 		}
-		if p.Cfg.Toolchain.Selector != "" {
-			_, tcDirty, err := resolveToolchain(p.Cfg.Toolchain.Selector, lk)
+		if p.toolchainSelector() != "" {
+			_, tcDirty, err := resolveToolchain(p.toolchainSelector(), lk)
 			if err != nil {
 				return err
 			}
 			dirty = dirty || tcDirty
-			fmt.Fprintf(os.Stderr, "cmk: toolchain pinned to %s\n", lk.Toolchain.Selector)
+			fmt.Fprintf(os.Stderr, "cmk: toolchain pinned to %s\n", pin.Selector)
 		}
 	}
 
