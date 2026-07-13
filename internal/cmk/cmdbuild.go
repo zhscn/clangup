@@ -10,38 +10,21 @@ import (
 
 // cmdBuild builds target(s), or everything when no target is selected, in the
 // resolved build dir.
-func cmdBuild(args []string) error {
-	var buildDir, config string
-	var targetFlags []string
-	var cleanFirst, interactive, verbose, locked, noConfig bool
-	jobs := defaultJobs()
-	a := newArgSpec()
-	a.strFlag(&buildDir, "-b", "--build")
-	a.strFlag(&config, "-c", "--config")
-	a.strListFlag(&targetFlags, "-t", "--target")
-	a.boolFlag(&cleanFirst, "--clean-first")
-	a.boolFlag(&interactive, "-i", "--interactive")
-	a.boolFlag(&verbose, "-v", "--verbose")
-	a.boolFlag(&locked, "--locked")
-	a.boolFlag(&noConfig, "--no-config")
-	a.intFlag(&jobs, "-j", "--jobs")
-	if err := a.parse(args); err != nil {
-		return err
-	}
-	policy, err := configurePolicyFromFlags(locked, noConfig)
+func cmdBuild(positionalTargets, passthrough []string, options buildOptions) error {
+	policy, err := configurePolicyFromFlags(options.Locked, options.NoConfig)
 	if err != nil {
 		return err
 	}
-	targets := cleanArgs(append(targetFlags, a.Pos...))
+	targets := cleanArgs(append(append([]string(nil), options.TargetFlags...), positionalTargets...))
 
 	p, err := openProject()
 	if err != nil {
 		return err
 	}
-	if err := bootstrapIfUnconfigured(p, buildDir, config, policy); err != nil {
+	if err := bootstrapIfUnconfigured(p, options.BuildDir, options.Config, policy); err != nil {
 		return err
 	}
-	dir, cfgName, err := p.resolveVariant(buildDir, config)
+	dir, cfgName, err := p.resolveVariant(options.BuildDir, options.Config)
 	if err != nil {
 		return err
 	}
@@ -52,7 +35,7 @@ func cmdBuild(args []string) error {
 		}
 	}
 
-	if len(targets) == 0 && interactive {
+	if len(targets) == 0 && options.Interactive {
 		allTargets, err := p.collectTargets(dir, cfgName)
 		if err != nil {
 			return err
@@ -71,7 +54,7 @@ func cmdBuild(args []string) error {
 		targets = []string{target}
 	}
 
-	cmakeArgs := cmakeBuildArgs(dir, cfgName, jobs, targets, cleanFirst, verbose, a.Rest)
+	cmakeArgs := cmakeBuildArgs(dir, cfgName, options.Jobs, targets, options.CleanFirst, options.Verbose, passthrough)
 	cmd := exec.Command("cmake", cmakeArgs...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -92,51 +75,26 @@ func cmdBuild(args []string) error {
 
 // cmdRun builds and runs an executable target; args after "--" go to
 // the program.
-func cmdRun(args []string) error {
-	var buildDir, config, flagTarget string
-	var noBuild, verbose, locked, noConfig bool
-	jobs := defaultJobs()
-	a := newArgSpec()
-	a.strFlag(&buildDir, "-b", "--build")
-	a.strFlag(&config, "-c", "--config")
-	a.strFlag(&flagTarget, "-t", "--target")
-	a.boolFlag(&noBuild, "--no-build")
-	a.boolFlag(&verbose, "-v", "--verbose")
-	a.boolFlag(&locked, "--locked")
-	a.boolFlag(&noConfig, "--no-config")
-	a.intFlag(&jobs, "-j", "--jobs")
-	if err := a.parse(args); err != nil {
-		return err
-	}
-	policy, err := configurePolicyFromFlags(locked, noConfig)
+func cmdRun(targetName string, options runOptions) error {
+	policy, err := configurePolicyFromFlags(options.Locked, options.NoConfig)
 	if err != nil {
 		return err
-	}
-	targetName, err := a.atMostOnePos("run")
-	if err != nil {
-		return err
-	}
-	if flagTarget != "" {
-		if targetName != "" {
-			return fmt.Errorf("pass either a positional target or --target, not both")
-		}
-		targetName = flagTarget
 	}
 
 	p, err := openProject()
 	if err != nil {
 		return err
 	}
-	if !noBuild {
-		if err := bootstrapIfUnconfigured(p, buildDir, config, policy); err != nil {
+	if !options.NoBuild {
+		if err := bootstrapIfUnconfigured(p, options.BuildDir, options.Config, policy); err != nil {
 			return err
 		}
 	}
-	dir, cfgName, err := p.resolveVariant(buildDir, config)
+	dir, cfgName, err := p.resolveVariant(options.BuildDir, options.Config)
 	if err != nil {
 		return err
 	}
-	if !noBuild {
+	if !options.NoBuild {
 		if err := ensureConfigured(p, dir, policy); err != nil {
 			return err
 		}
@@ -183,8 +141,8 @@ func cmdRun(args []string) error {
 		}
 	}
 
-	if !noBuild {
-		buildArgs := cmakeBuildArgs(dir, cfgName, jobs, []string{target.Name}, false, verbose, nil)
+	if !options.NoBuild {
+		buildArgs := cmakeBuildArgs(dir, cfgName, options.Jobs, []string{target.Name}, false, options.Verbose, nil)
 		build := exec.Command("cmake", buildArgs...)
 		build.Stdout = os.Stdout
 		build.Stderr = os.Stderr
@@ -199,7 +157,7 @@ func cmdRun(args []string) error {
 	}
 
 	bin := filepath.Join(dir, target.Artifacts[0].Path)
-	run := exec.Command(bin, a.Rest...)
+	run := exec.Command(bin, options.ProgramArgs...)
 	run.Stdout = os.Stdout
 	run.Stderr = os.Stderr
 	run.Stdin = os.Stdin
@@ -214,33 +172,21 @@ func cmdRun(args []string) error {
 }
 
 // cmdTU builds a single translation unit via ninja.
-func cmdTU(args []string) error {
-	var buildDir, config string
-	var locked, noConfig bool
-	jobs := defaultJobs()
-	a := newArgSpec()
-	a.strFlag(&buildDir, "-b", "--build")
-	a.strFlag(&config, "-c", "--config")
-	a.boolFlag(&locked, "--locked")
-	a.boolFlag(&noConfig, "--no-config")
-	a.intFlag(&jobs, "-j", "--jobs")
-	if err := a.parse(args); err != nil {
-		return err
-	}
-	policy, err := configurePolicyFromFlags(locked, noConfig)
+func cmdTU(names []string, options tuOptions) error {
+	policy, err := configurePolicyFromFlags(options.Locked, options.NoConfig)
 	if err != nil {
 		return err
 	}
-	names := cleanArgs(a.Pos)
+	names = cleanArgs(names)
 
 	p, err := openProject()
 	if err != nil {
 		return err
 	}
-	if err := bootstrapIfUnconfigured(p, buildDir, config, policy); err != nil {
+	if err := bootstrapIfUnconfigured(p, options.BuildDir, options.Config, policy); err != nil {
 		return err
 	}
-	dir, cfgName, err := p.resolveVariant(buildDir, config)
+	dir, cfgName, err := p.resolveVariant(options.BuildDir, options.Config)
 	if err != nil {
 		return err
 	}
@@ -315,7 +261,7 @@ func cmdTU(args []string) error {
 	}
 	selected = uniqueStrings(selected)
 
-	ninjaArgs := append(append([]string{}, ninjaBase...), "-j", fmt.Sprint(jobs))
+	ninjaArgs := append(append([]string{}, ninjaBase...), "-j", fmt.Sprint(options.Jobs))
 	ninjaArgs = append(ninjaArgs, selected...)
 	cmd := exec.Command("ninja", ninjaArgs...)
 	cmd.Stdout = os.Stdout
@@ -371,15 +317,7 @@ func uniqueStrings(in []string) []string {
 // full configure path (deps synced, injection re-applied, presets and
 // compile_commands refreshed) — the manual override when ensureConfigured
 // considers everything current.
-func cmdRefresh(args []string) error {
-	a := newArgSpec()
-	if err := a.parse(args); err != nil {
-		return err
-	}
-	name, err := a.atMostOnePos("refresh")
-	if err != nil {
-		return err
-	}
+func cmdRefresh(name string) error {
 	p, err := openProject()
 	if err != nil {
 		return err

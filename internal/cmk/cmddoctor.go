@@ -23,11 +23,7 @@ func (c *doctorChecker) fail(f string, a ...any) {
 // cmdDoctor reports the project's resolved setup in one place: toolchain,
 // build tools, compiler launcher, deps in the store, build dirs, and where
 // cmk keeps things. It never installs or builds anything.
-func cmdDoctor(args []string) error {
-	a := newArgSpec()
-	if err := a.parse(args); err != nil {
-		return err
-	}
+func cmdDoctor() error {
 	p, err := openProject()
 	if err != nil {
 		return err

@@ -1,12 +1,15 @@
 package cmk
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 func TestExpandVars(t *testing.T) {
@@ -30,41 +33,50 @@ func TestExpandVars(t *testing.T) {
 	}
 }
 
-func TestArgSpecConvenienceParsing(t *testing.T) {
-	var cfg string
-	var jobs int
-	var interactive, verbose bool
-	var targets []string
-
-	a := newArgSpec()
-	a.strFlag(&cfg, "-c", "--config")
-	a.intFlag(&jobs, "-j", "--jobs")
-	a.boolFlag(&interactive, "-i", "--interactive")
-	a.boolFlag(&verbose, "-v", "--verbose")
-	a.strListFlag(&targets, "-t", "--target")
-	if err := a.parse([]string{
-		"-cAsan",
-		"-j8",
-		"-iv",
-		"-tfoo",
-		"--target=bar",
-		"baz",
-		"--",
-		"--native",
-	}); err != nil {
+func TestCobraBuildConvenienceParsing(t *testing.T) {
+	command := newBuildCommand()
+	if err := command.ParseFlags([]string{"-cAsan", "-j8", "-iv", "-tfoo", "--target=bar"}); err != nil {
 		t.Fatal(err)
 	}
-	if cfg != "Asan" || jobs != 8 || !interactive || !verbose {
-		t.Fatalf("flags parsed as cfg=%q jobs=%d interactive=%v verbose=%v", cfg, jobs, interactive, verbose)
+	config, _ := command.Flags().GetString("config")
+	jobs, _ := command.Flags().GetInt("jobs")
+	interactive, _ := command.Flags().GetBool("interactive")
+	verbose, _ := command.Flags().GetBool("verbose")
+	targets, _ := command.Flags().GetStringArray("target")
+	if config != "Asan" || jobs != 8 || !interactive || !verbose {
+		t.Fatalf("flags parsed as config=%q jobs=%d interactive=%v verbose=%v", config, jobs, interactive, verbose)
 	}
 	if !eqStrings(targets, []string{"foo", "bar"}) {
 		t.Fatalf("targets = %v, want [foo bar]", targets)
 	}
-	if !eqStrings(a.Pos, []string{"baz"}) {
-		t.Fatalf("pos = %v, want [baz]", a.Pos)
+}
+
+func TestCobraPassthrough(t *testing.T) {
+	var positional, passthrough []string
+	command := &cobra.Command{
+		Use: "test",
+		Run: func(command *cobra.Command, args []string) {
+			positional, passthrough = splitPassthrough(command, args)
+		},
 	}
-	if !eqStrings(a.Rest, []string{"--native"}) {
-		t.Fatalf("rest = %v, want [--native]", a.Rest)
+	command.SetArgs([]string{"target", "--", "--native"})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !eqStrings(positional, []string{"target"}) || !eqStrings(passthrough, []string{"--native"}) {
+		t.Fatalf("positional=%v passthrough=%v", positional, passthrough)
+	}
+}
+
+func TestCobraVersionCompatibility(t *testing.T) {
+	for _, args := range [][]string{{"--version"}, {"-V"}, {"version"}} {
+		var stdout, stderr bytes.Buffer
+		if code := Run(args, &stdout, &stderr, "1.2.3"); code != 0 {
+			t.Fatalf("Run(%v) returned %d: %s", args, code, stderr.String())
+		}
+		if stdout.String() != "cmk 1.2.3\n" {
+			t.Fatalf("Run(%v) output %q", args, stdout.String())
+		}
 	}
 }
 

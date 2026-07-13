@@ -23,9 +23,11 @@ var cppSourceExts = map[string]bool{
 var cppModuleExts = map[string]bool{
 	".ccm":  true,
 	".cppm": true,
+	".c++m": true,
 	".cxxm": true,
 	".ixx":  true,
 	".mxx":  true,
+	".mpp":  true,
 }
 
 var cppHeaderExts = map[string]bool{
@@ -36,19 +38,12 @@ var cppHeaderExts = map[string]bool{
 	".hxx": true,
 }
 
-var cppInlineExts = map[string]bool{
-	".inl": true,
-	".ipp": true,
-	".tpp": true,
-	".txx": true,
-}
-
-func isCppFile(path string, includeHeaders bool) bool {
-	ext := strings.ToLower(filepath.Ext(path))
+func isCppFile(path string) bool {
+	ext := filepath.Ext(path)
 	if cppSourceExts[ext] || cppModuleExts[ext] {
 		return true
 	}
-	return includeHeaders && (cppHeaderExts[ext] || cppInlineExts[ext])
+	return cppHeaderExts[ext]
 }
 
 func gitList(root string, args ...string) ([]string, error) {
@@ -68,47 +63,28 @@ func gitList(root string, args ...string) ([]string, error) {
 }
 
 // selectFiles resolves the file selection shared by fmt and lint into
-// root-relative paths. Exactly one of explicit files/all/staged/unstaged.
-func selectFiles(p *Project, explicit []string, all, staged, unstaged, includeHeaders bool, ignore []string) ([]string, error) {
+// absolute paths. Without an explicit mode it selects changes relative to
+// HEAD.
+func selectFiles(p *Project, explicit string, all, staged, unstaged bool, ignore []string, verbose bool) ([]string, error) {
 	modes := 0
-	for _, b := range []bool{len(explicit) > 0, all, staged, unstaged} {
+	for _, b := range []bool{explicit != "", all, staged, unstaged} {
 		if b {
 			modes++
 		}
 	}
-	if modes != 1 {
-		return nil, errors.New("pass file(s), or exactly one of --all/--staged/--unstaged")
+	if modes > 1 {
+		return nil, errors.New("pass a file, or at most one of --all/--staged/--unstaged")
 	}
 
-	if len(explicit) > 0 {
-		seen := map[string]bool{}
-		var out []string
-		for _, file := range explicit {
-			abs, err := filepath.Abs(file)
-			if err != nil {
-				return nil, err
-			}
-			if _, err := os.Stat(abs); err != nil {
-				return nil, err
-			}
-			rel, err := filepath.Rel(p.Root, abs)
-			if err != nil {
-				return nil, err
-			}
-			if seen[rel] {
-				continue
-			}
-			seen[rel] = true
-			if !isCppFile(rel, includeHeaders) {
-				continue
-			}
-			if ignored(rel, ignore) {
-				fmt.Fprintf(os.Stderr, "cmk: %s matches an ignore pattern in cmk.toml; skipping\n", rel)
-				continue
-			}
-			out = append(out, rel)
+	if explicit != "" {
+		abs, err := filepath.Abs(explicit)
+		if err != nil {
+			return nil, err
 		}
-		return out, nil
+		if _, err := os.Stat(abs); err != nil {
+			return nil, fmt.Errorf("file not found: %s", abs)
+		}
+		return []string{abs}, nil
 	}
 
 	var files []string
@@ -117,14 +93,13 @@ func selectFiles(p *Project, explicit []string, all, staged, unstaged, includeHe
 	case all:
 		files, err = gitList(p.Root, "ls-files")
 	case staged:
-		files, err = gitList(p.Root, "diff", "--name-only", "--cached", "--diff-filter=ACMR")
+		files, err = gitList(p.Root, "diff", "--name-only", "--cached")
 	case unstaged:
-		files, err = gitList(p.Root, "diff", "--name-only", "--diff-filter=ACMR")
-		if err == nil {
-			untracked, uerr := gitList(p.Root, "ls-files", "--others", "--exclude-standard")
-			if uerr == nil {
-				files = append(files, untracked...)
-			}
+		files, err = gitList(p.Root, "diff", "--name-only")
+	default:
+		files, err = gitList(p.Root, "diff", "--name-only", "HEAD")
+		if err != nil {
+			files, err = gitList(p.Root, "diff", "--name-only", "--cached")
 		}
 	}
 	if err != nil {
@@ -134,58 +109,104 @@ func selectFiles(p *Project, explicit []string, all, staged, unstaged, includeHe
 	seen := map[string]bool{}
 	var out []string
 	for _, f := range files {
-		if seen[f] || !isCppFile(f, includeHeaders) || ignored(f, ignore) {
+		abs := filepath.Join(p.Root, f)
+		if _, statErr := os.Stat(abs); statErr != nil {
+			continue
+		}
+		if seen[f] {
 			continue
 		}
 		seen[f] = true
-		out = append(out, f)
+		if ignored(f, ignore) {
+			if verbose {
+				fmt.Println("Skipping (ignored):", f)
+			}
+			continue
+		}
+		if !isCppFile(f) {
+			if verbose {
+				fmt.Println("Skipping (not C/C++):", f)
+			}
+			continue
+		}
+		out = append(out, abs)
 	}
 	sort.Strings(out)
+	if verbose {
+		fmt.Printf("Found %d candidate file(s).\n", len(files))
+	}
 	return out, nil
 }
 
-func cmdFmt(args []string) error {
-	var all, staged, unstaged, dryRun, verbose bool
-	a := newArgSpec()
-	a.boolFlag(&all, "-a", "--all")
-	a.boolFlag(&staged, "-s", "--staged")
-	a.boolFlag(&unstaged, "-u", "--unstaged")
-	a.boolFlag(&dryRun, "-n", "--dry-run")
-	a.boolFlag(&verbose, "-v", "--verbose")
-	if err := a.parse(args); err != nil {
-		return err
+func resolveExplicitFiles(files []string) ([]string, error) {
+	seen := map[string]bool{}
+	resolved := make([]string, 0, len(files))
+	for _, file := range files {
+		abs, err := filepath.Abs(file)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := os.Stat(abs); err != nil {
+			return nil, fmt.Errorf("file not found: %s", abs)
+		}
+		if !seen[abs] {
+			seen[abs] = true
+			resolved = append(resolved, abs)
+		}
 	}
+	return resolved, nil
+}
+
+func cmdFmt(explicitFiles []string, options fmtOptions) error {
 	p, err := openProject()
 	if err != nil {
 		return err
 	}
-	files, err := selectFiles(p, a.Pos, all, staged, unstaged, true, p.Cfg.Fmt.Ignore)
+	var files []string
+	if len(explicitFiles) > 0 {
+		files, err = resolveExplicitFiles(explicitFiles)
+	} else {
+		files, err = selectFiles(p, "", options.All, options.Staged, options.Unstaged, p.Cfg.Fmt.Ignore, options.Verbose)
+	}
 	if err != nil {
 		return err
 	}
 	if len(files) == 0 {
-		fmt.Fprintln(os.Stderr, "cmk: no files to format")
+		fmt.Println("No source files to format.")
 		return nil
+	}
+	if options.Verbose {
+		for _, file := range files {
+			fmt.Println(file)
+		}
 	}
 
 	type res struct {
 		file        string
 		wouldChange bool
 	}
-	results, errs := runParallel(files, defaultJobs(), func(rel string) (res, error) {
-		abs := filepath.Join(p.Root, rel)
-		if dryRun {
-			wouldChange, err := clangFormatWouldChange(abs)
-			if err != nil {
-				return res{}, fmt.Errorf("%s: %w", rel, err)
-			}
-			return res{rel, wouldChange}, nil
+	results, errs := runParallel(files, defaultJobs(), func(abs string) (res, error) {
+		if options.DryRun {
+			cmd := exec.Command("clang-format", "--dry-run", "-Werror", abs)
+			cmd.Dir = p.Root
+			err := cmd.Run()
+			return res{abs, err != nil}, nil
 		}
-		out, err := exec.Command("clang-format", "-i", abs).CombinedOutput()
+		before, err := os.ReadFile(abs)
 		if err != nil {
-			return res{}, fmt.Errorf("%s: %s", rel, strings.TrimSpace(string(out)))
+			return res{}, err
 		}
-		return res{rel, false}, nil
+		cmd := exec.Command("clang-format", "-i", abs)
+		cmd.Dir = p.Root
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return res{}, fmt.Errorf("%s: %s", abs, strings.TrimSpace(string(out)))
+		}
+		after, err := os.ReadFile(abs)
+		if err != nil {
+			return res{}, err
+		}
+		return res{abs, !bytes.Equal(before, after)}, nil
 	})
 
 	var firstErr error
@@ -198,40 +219,28 @@ func cmdFmt(args []string) error {
 			}
 			continue
 		}
-		if dryRun && r.wouldChange {
-			fmt.Println(r.file)
-			changed++
-		} else if verbose {
-			fmt.Fprintln(os.Stderr, "formatted", r.file)
-		}
-	}
-	if dryRun && changed == 0 {
-		fmt.Fprintf(os.Stderr, "cmk: %d files already formatted\n", len(files))
-	}
-	return firstErr
-}
-
-func clangFormatWouldChange(path string) (bool, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return false, err
-	}
-	out, err := exec.Command("clang-format", path).Output()
-	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
-			msg := strings.TrimSpace(string(ee.Stderr))
-			if msg != "" {
-				return false, errors.New(msg)
+		if r.wouldChange {
+			if options.DryRun {
+				fmt.Println(r.file)
 			}
+			changed++
 		}
-		return false, err
 	}
-	return !bytes.Equal(out, data), nil
+	if firstErr != nil {
+		return firstErr
+	}
+	if options.DryRun {
+		if changed > 0 {
+			return fmt.Errorf("%d file(s) need formatting.", changed)
+		}
+		return nil
+	}
+	fmt.Printf("Formatted %d file(s), %d changed.\n", len(files), changed)
+	return nil
 }
 
-// compileDBFiles returns the set of source files (root-relative) that
-// appear in compile_commands.json.
-func compileDBFiles(root, buildDir string) (map[string]bool, error) {
+// compileDBFiles returns the sorted source files in compile_commands.json.
+func compileDBFiles(buildDir string) ([]string, error) {
 	data, err := os.ReadFile(filepath.Join(buildDir, "compile_commands.json"))
 	if err != nil {
 		return nil, fmt.Errorf("no compile_commands.json in %s; run `cmk config` first", buildDir)
@@ -243,39 +252,46 @@ func compileDBFiles(root, buildDir string) (map[string]bool, error) {
 	if err := json.Unmarshal(data, &entries); err != nil {
 		return nil, err
 	}
-	files := map[string]bool{}
+	seen := map[string]bool{}
+	var files []string
 	for _, e := range entries {
 		f := e.File
 		if !filepath.IsAbs(f) {
 			f = filepath.Join(e.Directory, f)
 		}
-		if rel, err := filepath.Rel(root, f); err == nil {
-			files[rel] = true
+		f = filepath.Clean(f)
+		if !seen[f] {
+			seen[f] = true
+			files = append(files, f)
 		}
 	}
+	sort.Strings(files)
 	return files, nil
 }
 
-func cmdLint(args []string) error {
-	var buildDir string
-	var all, staged, unstaged, interactive, fix, wae, verbose bool
-	a := newArgSpec()
-	a.strFlag(&buildDir, "-b", "--build")
-	a.boolFlag(&all, "-a", "--all")
-	a.boolFlag(&staged, "-s", "--staged")
-	a.boolFlag(&unstaged, "-u", "--unstaged")
-	a.boolFlag(&interactive, "-i", "--interactive")
-	a.boolFlag(&fix, "--fix")
-	a.boolFlag(&wae, "-W", "--warnings-as-errors")
-	a.boolFlag(&verbose, "-v", "--verbose")
-	if err := a.parse(args); err != nil {
-		return err
+func lintCommandArgs(dir string, cfg LintCfg, warningsAsErrors, fix, useColor bool) []string {
+	args := []string{"-p", dir}
+	if cfg.HeaderFilter != "" {
+		args = append(args, "-header-filter="+cfg.HeaderFilter)
 	}
+	if warningsAsErrors || cfg.WarningsAsErrors {
+		args = append(args, "-warnings-as-errors=*")
+	}
+	if fix {
+		args = append(args, "--fix")
+	}
+	if useColor {
+		args = append(args, "--use-color")
+	}
+	return append(args, cfg.ExtraArgs...)
+}
+
+func cmdLint(explicitFiles []string, options lintOptions) error {
 	p, err := openProject()
 	if err != nil {
 		return err
 	}
-	dir, err := p.resolveBuildDir(buildDir)
+	dir, err := p.resolveBuildDir(options.BuildDir)
 	if err != nil {
 		return err
 	}
@@ -284,109 +300,175 @@ func cmdLint(args []string) error {
 	if err := ensureConfigured(p, dir, configureAuto); err != nil {
 		return err
 	}
-	cdb, err := compileDBFiles(p.Root, dir)
+	cdbPath := filepath.Join(dir, "compile_commands.json")
+	if _, err := os.Stat(cdbPath); err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "compile_commands.json missing in %s — running `cmake` to generate it.\n", dir)
+		if err := runConfigure(p, dir, presetForDir(p, dir), stampExtra(dir)); err != nil {
+			return err
+		}
+		if _, err := os.Stat(cdbPath); err != nil {
+			return fmt.Errorf("compile_commands.json still missing after refresh; ensure CMAKE_EXPORT_COMPILE_COMMANDS=ON in %s", dir)
+		}
+	}
+	cdb, err := compileDBFiles(dir)
 	if err != nil {
 		return err
 	}
 
 	var files []string
-	if interactive {
-		if len(a.Pos) > 0 {
-			return fmt.Errorf("pass either file(s) or --interactive, not both")
+	if options.Interactive {
+		cands := append([]string(nil), cdb...)
+		if len(cands) == 0 {
+			return fmt.Errorf("no source files in %s", filepath.Join(dir, "compile_commands.json"))
 		}
-		var cands []string
-		for f := range cdb {
-			if !ignored(f, p.Cfg.Lint.Ignore) {
-				cands = append(cands, f)
+		display := make([]string, len(cands))
+		for i, candidate := range cands {
+			rel, relErr := filepath.Rel(p.Root, candidate)
+			if relErr == nil {
+				display[i] = rel
+			} else {
+				display[i] = candidate
 			}
 		}
-		sort.Strings(cands)
-		sel, err := completingRead(cands)
+		sel, err := completingRead(display)
 		if err != nil {
 			return err
 		}
-		files = []string{sel}
+		if sel == "" {
+			return errors.New("no source file selected")
+		}
+		for i, shown := range display {
+			if shown == sel {
+				files = []string{cands[i]}
+				break
+			}
+		}
+		if len(files) == 0 {
+			return fmt.Errorf("selected file %q not found in compile database", sel)
+		}
+	} else if len(explicitFiles) > 0 {
+		files, err = resolveExplicitFiles(explicitFiles)
+		if err != nil {
+			return err
+		}
 	} else {
-		files, err = selectFiles(p, a.Pos, all, staged, unstaged, false, p.Cfg.Lint.Ignore)
+		files, err = selectFiles(p, "", options.All, options.Staged, options.Unstaged, p.Cfg.Lint.Ignore, options.Verbose)
 		if err != nil {
 			return err
 		}
-		var inDB []string
-		for _, f := range files {
-			if cdb[f] {
-				inDB = append(inDB, f)
-			} else if verbose {
-				fmt.Fprintf(os.Stderr, "cmk: skipping %s (not in compile_commands.json)\n", f)
-			}
-		}
-		files = inDB
 	}
 	if len(files) == 0 {
-		fmt.Fprintln(os.Stderr, "cmk: no files to lint")
+		fmt.Println("No source files to lint.")
 		return nil
 	}
+	if options.Verbose {
+		for _, file := range files {
+			fmt.Println(file)
+		}
+	}
 
-	tidyArgs := []string{"-p", dir, "--quiet"}
-	tidyArgs = append(tidyArgs, p.Cfg.Lint.ExtraArgs...)
-	if hf := p.Cfg.Lint.HeaderFilter; hf != "" {
-		tidyArgs = append(tidyArgs, "--header-filter="+hf)
-	}
-	if wae || p.Cfg.Lint.WarningsAsErrors {
-		tidyArgs = append(tidyArgs, "--warnings-as-errors=*")
-	}
-	if fix {
-		tidyArgs = append(tidyArgs, "--fix")
-	}
+	useColor := stdoutIsTerminal()
+	tidyArgs := lintCommandArgs(dir, p.Cfg.Lint, options.WarningsAsErrors, options.Fix, useColor)
 
 	jobs := defaultJobs()
-	if fix {
+	if options.Fix {
 		jobs = 1 // overlapping fixes on shared headers corrupt files
 	}
 
 	type res struct {
-		file   string
-		output string
-		failed bool
+		file     string
+		stdout   string
+		stderr   string
+		warnings int
+		errors   int
+		failed   bool
 	}
-	results, errs := runParallel(files, jobs, func(rel string) (res, error) {
-		cmd := exec.Command("clang-tidy", append(append([]string(nil), tidyArgs...), filepath.Join(p.Root, rel))...)
+	results, errs := runParallel(files, jobs, func(file string) (res, error) {
+		cmd := exec.Command("clang-tidy", append(append([]string(nil), tidyArgs...), file)...)
 		cmd.Dir = p.Root
-		out, err := cmd.CombinedOutput()
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		err := cmd.Run()
 		failed := false
 		if err != nil {
 			if _, ok := err.(*exec.ExitError); !ok {
-				return res{}, fmt.Errorf("%s: %w", rel, err)
+				return res{}, fmt.Errorf("clang-tidy failed to start for %s: %w", file, err)
 			}
 			failed = true
 		}
-		return res{rel, string(out), failed}, nil
+		stdoutText, stderrText := stdout.String(), stderr.String()
+		return res{
+			file:     file,
+			stdout:   stdoutText,
+			stderr:   stderrText,
+			warnings: countDiagnostics(stdoutText, "warning:") + countDiagnostics(stderrText, "warning:"),
+			errors:   countDiagnostics(stdoutText, "error:") + countDiagnostics(stderrText, "error:"),
+			failed:   failed,
+		}, nil
 	})
 
 	failures := 0
+	type report struct {
+		file             string
+		warnings, errors int
+	}
+	var reports []report
 	for i, r := range results {
 		if errs[i] != nil {
-			fmt.Fprintln(os.Stderr, "cmk:", errs[i])
+			fmt.Fprintln(os.Stderr, errs[i])
 			failures++
 			continue
 		}
-		out := strings.TrimSpace(r.output)
-		if out != "" {
-			fmt.Println(out)
-		}
-		if verbose {
-			status := "ok"
-			if r.failed {
-				status = "FAIL"
-			}
-			fmt.Fprintf(os.Stderr, "cmk: %s %s\n", r.file, status)
+		if strings.TrimSpace(r.stdout) != "" || strings.TrimSpace(r.stderr) != "" || r.failed {
+			fmt.Printf("── %s ──\n", r.file)
+			fmt.Print(r.stdout)
+			fmt.Fprint(os.Stderr, r.stderr)
 		}
 		if r.failed {
 			failures++
 		}
+		if r.warnings > 0 || r.errors > 0 || r.failed {
+			reports = append(reports, report{r.file, r.warnings, r.errors})
+		}
+	}
+	if len(reports) > 0 {
+		fmt.Println("\nLint summary:")
+		for _, report := range reports {
+			var parts []string
+			if report.warnings > 0 {
+				parts = append(parts, fmt.Sprintf("%d warning(s)", report.warnings))
+			}
+			if report.errors > 0 {
+				parts = append(parts, fmt.Sprintf("%d error(s)", report.errors))
+			}
+			if len(parts) == 0 {
+				parts = append(parts, "failed")
+			}
+			fmt.Printf("  %s: %s\n", report.file, strings.Join(parts, ", "))
+		}
 	}
 	if failures > 0 {
-		return fmt.Errorf("clang-tidy reported issues in %d of %d files", failures, len(files))
+		return fmt.Errorf("%d/%d file(s) failed clang-tidy", failures, len(files))
 	}
-	fmt.Fprintf(os.Stderr, "cmk: %d files clean\n", len(files))
+	fmt.Printf("Linted %d file(s), %d with diagnostics.\n", len(files), len(reports))
 	return nil
+}
+
+func countDiagnostics(text, marker string) int {
+	count := 0
+	for line := range strings.Lines(text) {
+		if strings.Contains(line, marker) {
+			count++
+		}
+	}
+	return count
+}
+
+func stdoutIsTerminal() bool {
+	info, err := os.Stdout.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }

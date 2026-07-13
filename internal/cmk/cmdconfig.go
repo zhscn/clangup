@@ -15,18 +15,7 @@ import (
 
 // cmdConfig runs cmake configure with the toolchain and dep exports
 // injected. Deps are synced first (cargo-style).
-func cmdConfig(args []string) error {
-	var buildDir string
-	a := newArgSpec()
-	a.strFlag(&buildDir, "-B", "--build-dir")
-	if err := a.parse(args); err != nil {
-		return err
-	}
-	presetName, err := a.atMostOnePos("config")
-	if err != nil {
-		return err
-	}
-
+func cmdConfig(presetName, buildDir string, extraArgs []string) error {
 	p, err := openProject()
 	if err != nil {
 		return err
@@ -50,7 +39,7 @@ func cmdConfig(args []string) error {
 	if dir == "" {
 		dir = defaultConfigureDir(p, preset)
 	}
-	return runConfigure(p, dir, preset, a.Rest)
+	return runConfigure(p, dir, preset, extraArgs)
 }
 
 // defaultConfigureDir is where configure puts the build tree when no -B

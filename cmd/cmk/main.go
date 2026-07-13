@@ -1,10 +1,13 @@
 package main
 
-import "github.com/zhscn/clangup/internal/cmk"
+import (
+	"os"
+
+	"github.com/zhscn/clangup/internal/cmk"
+)
 
 var version = "dev"
 
 func main() {
-	cmk.Version = version
-	cmk.Main()
+	os.Exit(cmk.Run(os.Args[1:], os.Stdout, os.Stderr, version))
 }

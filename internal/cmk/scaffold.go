@@ -8,14 +8,7 @@ import (
 	"strings"
 )
 
-func cmdInit(args []string) error {
-	var force bool
-	a := newArgSpec()
-	a.boolFlag(&force, "-f", "--force")
-	if err := a.parse(args); err != nil {
-		return err
-	}
-
+func cmdInit(force bool) error {
 	root, err := findProjectRoot()
 	if err != nil {
 		// not in a project yet: scaffold in the PWD
@@ -35,15 +28,7 @@ func cmdInit(args []string) error {
 	return nil
 }
 
-func cmdNew(args []string) error {
-	a := newArgSpec()
-	if err := a.parse(args); err != nil {
-		return err
-	}
-	if len(a.Pos) != 1 {
-		return fmt.Errorf("usage: cmk new <name>")
-	}
-	name := a.Pos[0]
+func cmdNew(name string) error {
 	if _, err := os.Stat(name); err == nil {
 		return fmt.Errorf("%s already exists", name)
 	}

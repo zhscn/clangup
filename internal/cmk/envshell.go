@@ -96,11 +96,7 @@ func projectToolchain() (*Project, *Toolchain, error) {
 
 // cmdEnv prints POSIX exports for the project environment, for
 // `eval "$(cmk env)"` or direnv.
-func cmdEnv(args []string) error {
-	a := newArgSpec()
-	if err := a.parse(args); err != nil {
-		return err
-	}
+func cmdEnv() error {
 	p, tc, err := projectToolchain()
 	if err != nil {
 		return err
@@ -118,14 +114,7 @@ func cmdEnv(args []string) error {
 
 // cmdShell runs an interactive shell (or, after --, a command) inside
 // the project environment.
-func cmdShell(args []string) error {
-	a := newArgSpec()
-	if err := a.parse(args); err != nil {
-		return err
-	}
-	if len(a.Pos) > 0 {
-		return fmt.Errorf("unexpected argument %q (use `cmk shell -- <cmd>` to run a command)", a.Pos[0])
-	}
+func cmdShell(command []string) error {
 	if os.Getenv("CMK_SHELL") != "" {
 		return errors.New("already inside a cmk shell")
 	}
@@ -147,8 +136,8 @@ func cmdShell(args []string) error {
 	env = append(env, "CMK_SHELL=1")
 
 	var cmd *exec.Cmd
-	if len(a.Rest) > 0 {
-		cmd = exec.Command(a.Rest[0], a.Rest[1:]...)
+	if len(command) > 0 {
+		cmd = exec.Command(command[0], command[1:]...)
 	} else {
 		shell := os.Getenv("SHELL")
 		if shell == "" {

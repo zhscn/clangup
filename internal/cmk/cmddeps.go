@@ -6,14 +6,7 @@ import (
 )
 
 // cmdSync builds the named deps (default: all) and their needs.
-func cmdSync(args []string) error {
-	var force bool
-	a := newArgSpec()
-	a.boolFlag(&force, "-f", "--force")
-	if err := a.parse(args); err != nil {
-		return err
-	}
-
+func cmdSync(names []string, force bool) error {
 	p, err := openProject()
 	if err != nil {
 		return err
@@ -26,7 +19,7 @@ func cmdSync(args []string) error {
 	if err != nil {
 		return err
 	}
-	depsDirty, err := syncDeps(p, tc, a.Pos, force)
+	depsDirty, err := syncDeps(p, tc, names, force)
 	if depsDirty {
 		if saveErr := saveLock(p.Root, p.Lock); saveErr != nil && err == nil {
 			err = saveErr
@@ -37,19 +30,13 @@ func cmdSync(args []string) error {
 
 // cmdUpdate re-resolves locked entries: toolchain release and git dep
 // commits. Without arguments everything is re-resolved.
-func cmdUpdate(args []string) error {
-	a := newArgSpec()
-	if err := a.parse(args); err != nil {
-		return err
-	}
-
+func cmdUpdate(names []string) error {
 	p, err := openProject()
 	if err != nil {
 		return err
 	}
 	lk := p.Lock
 
-	names := a.Pos
 	all := len(names) == 0
 	var depNames []string
 	for _, n := range names {

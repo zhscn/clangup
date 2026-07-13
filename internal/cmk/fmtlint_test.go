@@ -9,163 +9,158 @@ import (
 	"testing"
 )
 
-func TestSelectFilesMultipleExplicitFiles(t *testing.T) {
+func TestSelectFilesExplicitFileBypassesGitFilters(t *testing.T) {
 	root := t.TempDir()
-	for _, rel := range []string{"src/a.cc", "include/a.h"} {
-		path := filepath.Join(root, rel)
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte("// test\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	p := &Project{Root: root}
-	files, err := selectFiles(p, []string{
-		filepath.Join(root, "src/a.cc"),
-		filepath.Join(root, "include/a.h"),
-		filepath.Join(root, "src/a.cc"),
-	}, false, false, false, true, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	want := []string{"src/a.cc", "include/a.h"}
-	if !slices.Equal(files, want) {
-		t.Fatalf("selectFiles explicit = %v, want %v", files, want)
-	}
-}
-
-func TestSelectFilesExplicitFilesHonorIgnore(t *testing.T) {
-	root := t.TempDir()
-	for _, rel := range []string{"src/a.cc", "gen/a.cc"} {
-		path := filepath.Join(root, rel)
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte("// test\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	p := &Project{Root: root}
-	files, err := selectFiles(p, []string{
-		filepath.Join(root, "src/a.cc"),
-		filepath.Join(root, "gen/a.cc"),
-	}, false, false, false, true, []string{"gen/**"})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	want := []string{"src/a.cc"}
-	if !slices.Equal(files, want) {
-		t.Fatalf("selectFiles explicit ignore = %v, want %v", files, want)
-	}
-}
-
-func TestSelectFilesExplicitFilesSkipUnsupportedExtensions(t *testing.T) {
-	root := t.TempDir()
-	for _, rel := range []string{"src/a.cc", "include/a.hpp", "README.md", "scripts/gen.py"} {
-		path := filepath.Join(root, rel)
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte("// test\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	p := &Project{Root: root}
-	files, err := selectFiles(p, []string{
-		filepath.Join(root, "src/a.cc"),
-		filepath.Join(root, "README.md"),
-		filepath.Join(root, "include/a.hpp"),
-		filepath.Join(root, "scripts/gen.py"),
-	}, false, false, false, true, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	want := []string{"src/a.cc", "include/a.hpp"}
-	if !slices.Equal(files, want) {
-		t.Fatalf("selectFiles explicit unsupported = %v, want %v", files, want)
-	}
-}
-
-func TestSelectFilesExplicitFilesConflictWithModes(t *testing.T) {
-	root := t.TempDir()
-	file := filepath.Join(root, "src/a.cc")
+	file := filepath.Join(root, "generated", "README.md")
 	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(file, []byte("test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	files, err := selectFiles(
+		&Project{Root: root}, file, false, false, false,
+		[]string{"generated/**"}, false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(files, []string{file}) {
+		t.Fatalf("selectFiles explicit = %v, want [%s]", files, file)
+	}
+}
+
+func TestResolveExplicitFilesPreservesOrderAndDeduplicates(t *testing.T) {
+	root := t.TempDir()
+	first := filepath.Join(root, "first.cc")
+	second := filepath.Join(root, "README.md")
+	for _, file := range []string{first, second} {
+		if err := os.WriteFile(file, []byte("test\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	files, err := resolveExplicitFiles([]string{first, second, first})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{first, second}; !slices.Equal(files, want) {
+		t.Fatalf("resolveExplicitFiles = %v, want %v", files, want)
+	}
+}
+
+func TestSelectFilesExplicitFileConflictsWithMode(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "a.cc")
 	if err := os.WriteFile(file, []byte("// test\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	p := &Project{Root: root}
-	_, err := selectFiles(p, []string{file}, true, false, false, true, nil)
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if !strings.Contains(err.Error(), "pass file(s)") {
-		t.Fatalf("error = %v, want it to mention explicit files", err)
+	_, err := selectFiles(&Project{Root: root}, file, true, false, false, nil, false)
+	if err == nil || !strings.Contains(err.Error(), "pass a file") {
+		t.Fatalf("error = %v, want explicit-file conflict", err)
 	}
 }
 
-func TestIsCppFileCommonExtensions(t *testing.T) {
-	tests := []struct {
-		path        string
-		withHeaders bool
-		sourceOnly  bool
-	}{
-		{"src/a.c", true, true},
-		{"src/a.C", true, true},
-		{"src/a.c++", true, true},
-		{"src/a.cc", true, true},
-		{"src/a.cpp", true, true},
-		{"src/a.cxx", true, true},
-		{"src/a.cppm", true, true},
-		{"src/a.ixx", true, true},
-		{"include/a.h", true, false},
-		{"include/a.H++", true, false},
-		{"include/a.hh", true, false},
-		{"include/a.hpp", true, false},
-		{"include/a.hxx", true, false},
-		{"include/a.inl", true, false},
-		{"include/a.ipp", true, false},
-		{"include/a.tpp", true, false},
-		{"include/a.txx", true, false},
-		{"README.md", false, false},
-		{"CMakeLists.txt", false, false},
-		{"include/a.inc", false, false},
+func TestSelectFilesDefaultsToTrackedChanges(t *testing.T) {
+	root := initGitRepo(t)
+	tracked := filepath.Join(root, "tracked.cc")
+	header := filepath.Join(root, "tracked.h")
+	ignored := filepath.Join(root, "generated", "ignored.cc")
+	for path, content := range map[string]string{
+		tracked: "int tracked = 1;\n",
+		header:  "#pragma once\n",
+		ignored: "int ignored = 1;\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gitRun(t, root, "add", ".")
+	gitRun(t, root, "commit", "-m", "initial")
+
+	if err := os.WriteFile(tracked, []byte("int tracked = 2;\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(header, []byte("#pragma once\n// changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ignored, []byte("int ignored = 2;\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "untracked.cc"), []byte("int x;\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 
-	for _, tt := range tests {
-		if got := isCppFile(tt.path, true); got != tt.withHeaders {
-			t.Errorf("isCppFile(%q, true) = %v, want %v", tt.path, got, tt.withHeaders)
+	files, err := selectFiles(
+		&Project{Root: root}, "", false, false, false,
+		[]string{"generated/**"}, false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{header, tracked}
+	slices.Sort(want)
+	if !slices.Equal(files, want) {
+		t.Fatalf("selectFiles changed = %v, want %v", files, want)
+	}
+}
+
+func TestIsCppFileMatchesRustExtensions(t *testing.T) {
+	accepted := []string{
+		"a.c", "a.h", "a.cc", "a.cpp", "a.cxx", "a.c++",
+		"a.hh", "a.hpp", "a.hxx", "a.h++", "a.ixx", "a.cppm",
+		"a.ccm", "a.cxxm", "a.c++m", "a.mxx", "a.mpp",
+	}
+	for _, path := range accepted {
+		if !isCppFile(path) {
+			t.Errorf("isCppFile(%q) = false", path)
 		}
-		if got := isCppFile(tt.path, false); got != tt.sourceOnly {
-			t.Errorf("isCppFile(%q, false) = %v, want %v", tt.path, got, tt.sourceOnly)
+	}
+	for _, path := range []string{"a.C", "a.H", "a.inl", "a.ipp", "README.md"} {
+		if isCppFile(path) {
+			t.Errorf("isCppFile(%q) = true", path)
 		}
 	}
 }
 
-func TestClangFormatWouldChangeReportsRealErrors(t *testing.T) {
-	if _, err := exec.LookPath("clang-format"); err != nil {
-		t.Skip("clang-format not found")
+func TestLintCommandArgsMatchRustOrdering(t *testing.T) {
+	cfg := LintCfg{
+		WarningsAsErrors: true,
+		HeaderFilter:     "^include/",
+		ExtraArgs:        []string{"--checks=modernize-*"},
 	}
+	got := lintCommandArgs("build", cfg, false, true, true)
+	want := []string{
+		"-p", "build",
+		"-header-filter=^include/",
+		"-warnings-as-errors=*",
+		"--fix",
+		"--use-color",
+		"--checks=modernize-*",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("lintCommandArgs = %v, want %v", got, want)
+	}
+}
 
+func initGitRepo(t *testing.T) string {
+	t.Helper()
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, ".clang-format"), []byte("BasedOnStyle: [\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	src := filepath.Join(root, "a.cc")
-	if err := os.WriteFile(src, []byte("int main() { return 0; }\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	gitRun(t, root, "init", "-q")
+	gitRun(t, root, "config", "user.name", "cmk test")
+	gitRun(t, root, "config", "user.email", "cmk@example.invalid")
+	return root
+}
 
-	if _, err := clangFormatWouldChange(src); err == nil {
-		t.Fatal("expected clang-format error")
+func gitRun(t *testing.T, root string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
 }

@@ -34,7 +34,7 @@ func TestBuildUsesExistingCMakeTreeWithoutManagedToolchain(t *testing.T) {
 	t.Setenv("CC", "")
 	t.Setenv("CXX", "")
 
-	if err := cmdBuild(nil); err != nil {
+	if err := cmdBuild(nil, nil, buildOptions{Jobs: defaultJobs()}); err != nil {
 		t.Fatal(err)
 	}
 	arguments, err := os.ReadFile(log)

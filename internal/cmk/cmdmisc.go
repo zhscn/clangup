@@ -15,49 +15,32 @@ import (
 
 // cmdTest runs ctest in the resolved build dir. Positional arguments become
 // one OR-ed -R regex, args after -- pass through to ctest.
-func cmdTest(args []string) error {
-	var buildDir, config string
-	var buildTargets, labels []string
-	var noBuild, verbose, locked, noConfig bool
-	jobs := defaultJobs()
-	a := newArgSpec()
-	a.strFlag(&buildDir, "-b", "--build")
-	a.strFlag(&config, "-c", "--config")
-	a.strListFlag(&buildTargets, "-t", "--target")
-	a.strListFlag(&labels, "-L", "--label")
-	a.boolFlag(&noBuild, "--no-build")
-	a.boolFlag(&verbose, "-v", "--verbose")
-	a.boolFlag(&locked, "--locked")
-	a.boolFlag(&noConfig, "--no-config")
-	a.intFlag(&jobs, "-j", "--jobs")
-	if err := a.parse(args); err != nil {
-		return err
-	}
-	policy, err := configurePolicyFromFlags(locked, noConfig)
+func cmdTest(patterns []string, options testOptions) error {
+	policy, err := configurePolicyFromFlags(options.Locked, options.NoConfig)
 	if err != nil {
 		return err
 	}
-	patterns := cleanArgs(a.Pos)
+	patterns = cleanArgs(patterns)
 
 	p, err := openProject()
 	if err != nil {
 		return err
 	}
-	if !noBuild {
-		if err := bootstrapIfUnconfigured(p, buildDir, config, policy); err != nil {
+	if !options.NoBuild {
+		if err := bootstrapIfUnconfigured(p, options.BuildDir, options.Config, policy); err != nil {
 			return err
 		}
 	}
-	dir, cfgName, err := p.resolveVariant(buildDir, config)
+	dir, cfgName, err := p.resolveVariant(options.BuildDir, options.Config)
 	if err != nil {
 		return err
 	}
 
-	if !noBuild {
+	if !options.NoBuild {
 		if err := ensureConfigured(p, dir, policy); err != nil {
 			return err
 		}
-		buildArgs := cmakeBuildArgs(dir, cfgName, jobs, buildTargets, false, false, nil)
+		buildArgs := cmakeBuildArgs(dir, cfgName, options.Jobs, options.BuildTargets, false, false, nil)
 		build := exec.Command("cmake", buildArgs...)
 		build.Stdout = os.Stdout
 		build.Stderr = os.Stderr
@@ -71,7 +54,7 @@ func cmdTest(args []string) error {
 		}
 	}
 
-	ctestArgs := []string{"--test-dir", dir, "--output-on-failure", "-j", fmt.Sprint(jobs)}
+	ctestArgs := []string{"--test-dir", dir, "--output-on-failure", "-j", fmt.Sprint(options.Jobs)}
 	if cfgName != "" {
 		// Multi-config requires -C to select which configuration's tests
 		// to run; ctest finds none without it.
@@ -80,13 +63,13 @@ func cmdTest(args []string) error {
 	if pattern := joinRegexAlternatives(patterns); pattern != "" {
 		ctestArgs = append(ctestArgs, "-R", pattern)
 	}
-	for _, label := range cleanArgs(labels) {
+	for _, label := range cleanArgs(options.Labels) {
 		ctestArgs = append(ctestArgs, "-L", label)
 	}
-	if verbose {
+	if options.Verbose {
 		ctestArgs = append(ctestArgs, "--verbose")
 	}
-	ctestArgs = append(ctestArgs, a.Rest...)
+	ctestArgs = append(ctestArgs, options.CTestArgs...)
 	cmd := exec.Command("ctest", ctestArgs...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -98,51 +81,30 @@ func cmdTest(args []string) error {
 // dir and configuration. Like `cmk test`, it builds first so install rules
 // see fresh artifacts. The prefix defaults to the one baked at configure
 // time (CMAKE_INSTALL_PREFIX); [install] prefix or --prefix override it.
-func cmdInstall(args []string) error {
-	var buildDir, config, prefix, component string
-	var noBuild, strip, verbose, locked, noConfig bool
-	jobs := defaultJobs()
-	a := newArgSpec()
-	a.strFlag(&buildDir, "-b", "--build")
-	a.strFlag(&config, "-c", "--config")
-	a.strFlag(&prefix, "-p", "--prefix")
-	a.strFlag(&component, "--component")
-	a.boolFlag(&noBuild, "--no-build")
-	a.boolFlag(&strip, "--strip")
-	a.boolFlag(&verbose, "-v", "--verbose")
-	a.boolFlag(&locked, "--locked")
-	a.boolFlag(&noConfig, "--no-config")
-	a.intFlag(&jobs, "-j", "--jobs")
-	if err := a.parse(args); err != nil {
-		return err
-	}
-	policy, err := configurePolicyFromFlags(locked, noConfig)
+func cmdInstall(options installOptions) error {
+	policy, err := configurePolicyFromFlags(options.Locked, options.NoConfig)
 	if err != nil {
 		return err
 	}
-	if len(a.Pos) > 0 {
-		return fmt.Errorf("install takes no positional arguments, got %v", a.Pos)
-	}
-
 	p, err := openProject()
 	if err != nil {
 		return err
 	}
-	if !noBuild {
-		if err := bootstrapIfUnconfigured(p, buildDir, config, policy); err != nil {
+	if !options.NoBuild {
+		if err := bootstrapIfUnconfigured(p, options.BuildDir, options.Config, policy); err != nil {
 			return err
 		}
 	}
-	dir, cfgName, err := p.resolveVariant(buildDir, config)
+	dir, cfgName, err := p.resolveVariant(options.BuildDir, options.Config)
 	if err != nil {
 		return err
 	}
 
-	if !noBuild {
+	if !options.NoBuild {
 		if err := ensureConfigured(p, dir, policy); err != nil {
 			return err
 		}
-		buildArgs := cmakeBuildArgs(dir, cfgName, jobs, nil, false, verbose, nil)
+		buildArgs := cmakeBuildArgs(dir, cfgName, options.Jobs, nil, false, options.Verbose, nil)
 		build := exec.Command("cmake", buildArgs...)
 		build.Stdout, build.Stderr = os.Stdout, os.Stderr
 		env, err := p.commandEnvWithToolchain()
@@ -161,20 +123,21 @@ func cmdInstall(args []string) error {
 		// configuration's artifacts to install.
 		installArgs = append(installArgs, "--config", cfgName)
 	}
-	pfx, err := p.installPrefix(prefix)
+	pfx, err := p.installPrefix(options.Prefix)
 	if err != nil {
 		return err
 	}
 	if pfx != "" {
 		installArgs = append(installArgs, "--prefix", pfx)
 	}
+	component := options.Component
 	if component == "" {
 		component = p.Cfg.Install.Component
 	}
 	if component != "" {
 		installArgs = append(installArgs, "--component", component)
 	}
-	if strip || p.Cfg.Install.Strip {
+	if options.Strip || p.Cfg.Install.Strip {
 		installArgs = append(installArgs, "--strip")
 	}
 	cmd := exec.Command("cmake", installArgs...)
@@ -222,18 +185,7 @@ func (p *Project) installPrefix(flagPrefix string) (string, error) {
 // concurrent build's entry is skipped via its lock); --all wipes the
 // whole store and the download cache. Either way every project
 // self-heals by rebuilding on its next sync.
-func cmdClean(args []string) error {
-	var all, prune bool
-	a := newArgSpec()
-	a.boolFlag(&all, "--all")
-	a.boolFlag(&prune, "--prune")
-	if err := a.parse(args); err != nil {
-		return err
-	}
-	if all && prune {
-		return fmt.Errorf("pass at most one of --all and --prune")
-	}
-
+func cmdClean(all, prune bool) error {
 	sd := storeDir()
 	if all {
 		for _, dir := range []string{sd, downloadsDir()} {
@@ -372,28 +324,12 @@ func humanSize(n int64) string {
 
 // cmdAdd scaffolds a [deps.<name>] entry (computing the sha256 for url
 // sources, validating the ref for git sources) plus a recipe stub.
-func cmdAdd(args []string) error {
-	var url, sha, gitURL, ref, cmakeName, needs, script string
-	a := newArgSpec()
-	a.strFlag(&url, "--url")
-	a.strFlag(&sha, "--sha256")
-	a.strFlag(&gitURL, "--git")
-	a.strFlag(&ref, "--ref")
-	a.strFlag(&cmakeName, "--cmake-name")
-	a.strFlag(&needs, "--needs")
-	a.strFlag(&script, "--script")
-	if err := a.parse(args); err != nil {
-		return err
-	}
-	if len(a.Pos) != 1 {
-		return fmt.Errorf("usage: cmk add <name> [--url U [--sha256 S] | --git U --ref R] [--needs a,b] [--cmake-name N]")
-	}
-	name := a.Pos[0]
+func cmdAdd(name string, options addOptions) error {
+	url, sha := options.URL, options.SHA256
+	gitURL, ref := options.Git, options.Ref
+	cmakeName, needs, script := options.CMakeName, options.Needs, options.Script
 	if !depNameRe.MatchString(name) {
 		return fmt.Errorf("invalid dep name %q", name)
-	}
-	if url != "" && gitURL != "" {
-		return fmt.Errorf("set at most one of --url and --git")
 	}
 	if gitURL != "" && ref == "" {
 		return fmt.Errorf("--git requires --ref")
