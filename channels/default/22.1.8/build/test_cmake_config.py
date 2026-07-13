@@ -26,6 +26,15 @@ class CMakeConfigTest(unittest.TestCase):
             overlap = common & self.cache_entries(platform)
             self.assertEqual(set(), overlap, f"duplicate entries in {platform}")
 
+    def test_linux_cxx_runtimes_use_fat_lto_objects(self) -> None:
+        contents = (ROOT / "linux-runtimes.cmake").read_text(encoding="utf-8")
+        for entry in (
+            "set(LIBCXX_ADDITIONAL_COMPILE_FLAGS",
+            "set(LIBCXXABI_ADDITIONAL_COMPILE_FLAGS",
+        ):
+            self.assertIn(entry, contents)
+        self.assertEqual(2, contents.count('"-flto;-ffat-lto-objects"'))
+
     def cache_entries(self, name: str) -> set[str]:
         return set(CACHE_ENTRY.findall((ROOT / name).read_text(encoding="utf-8")))
 

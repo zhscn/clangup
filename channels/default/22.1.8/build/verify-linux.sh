@@ -93,6 +93,17 @@ fi
   -o /tmp/clangup-default-compatible-triple
 /tmp/clangup-default-compatible-triple
 
+"${prefix}/bin/clang++" -std=c++20 -stdlib=libc++ -flto \
+  -ffat-lto-objects -fuse-ld=lld \
+  /tmp/clangup-default-libcxx-cxx20.cc \
+  -o /tmp/clangup-default-libcxx-lto
+/tmp/clangup-default-libcxx-lto
+for archive in libc++.a libc++abi.a; do
+  "${prefix}/bin/llvm-readelf" -S "${prefix}/lib/${archive}" \
+    >"/tmp/clangup-default-${archive}.sections"
+  grep -Fq '.llvm.lto' "/tmp/clangup-default-${archive}.sections"
+done
+
 clang_ldd="$(ldd "${prefix}/bin/clang")"
 grep -Fq "=> ${prefix}/lib/libclang-cpp.so" <<<"${clang_ldd}"
 ldd "${prefix}/bin/llvm-ar" | grep -Fq "=> ${prefix}/lib/libLLVM.so"
