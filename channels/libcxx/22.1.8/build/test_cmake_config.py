@@ -35,6 +35,33 @@ class CMakeConfigTest(unittest.TestCase):
         ):
             self.assertIn(entry, contents)
 
+    def test_compiler_rt_is_built_with_final_clang(self) -> None:
+        contents = (ROOT / "compiler-rt.cmake").read_text(encoding="utf-8")
+        for entry in (
+            'set(CMAKE_C_COMPILER "${_prefix}/bin/clang"',
+            'set(CMAKE_CXX_COMPILER "${_prefix}/bin/clang++"',
+            "set(COMPILER_RT_BUILD_BUILTINS OFF",
+            "set(COMPILER_RT_BUILD_SANITIZERS ON",
+            "set(COMPILER_RT_USE_BUILTINS_LIBRARY ON",
+            "set(COMPILER_RT_USE_LIBCXX OFF",
+        ):
+            self.assertIn(entry, contents)
+
+    def test_main_build_defers_compiler_rt_consumers(self) -> None:
+        contents = (ROOT / "linux.cmake").read_text(encoding="utf-8")
+        for entry in (
+            "set(COMPILER_RT_BUILD_BUILTINS ON",
+            "set(COMPILER_RT_BUILD_CRT ON",
+            "set(COMPILER_RT_BUILD_SANITIZERS OFF",
+            "set(COMPILER_RT_BUILD_LIBFUZZER OFF",
+            "set(COMPILER_RT_BUILD_PROFILE OFF",
+            "set(COMPILER_RT_BUILD_CTX_PROFILE OFF",
+            "set(COMPILER_RT_BUILD_MEMPROF OFF",
+            "set(COMPILER_RT_BUILD_ORC OFF",
+            "set(COMPILER_RT_BUILD_XRAY OFF",
+        ):
+            self.assertIn(entry, contents)
+
     def cache_entries(self, name: str) -> set[str]:
         return set(CACHE_ENTRY.findall((ROOT / name).read_text(encoding="utf-8")))
 

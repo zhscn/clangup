@@ -50,3 +50,21 @@ printf '%s\n' "${cmake_args[@]}" > "$(dirname -- "${CLANGUP_BUILD}")/cmake-argum
 ninja -C "${CLANGUP_BUILD}" -j "${CLANGUP_JOBS}"
 ninja -C "${CLANGUP_BUILD}" install
 ninja -C "${CLANGUP_BUILD}" install-builtins install-runtimes
+
+export CLANGUP_RESOURCE_DIR="$("${CLANGUP_PREFIX}/bin/clang" --print-resource-dir)"
+case "${CLANGUP_RESOURCE_DIR}" in
+  "${CLANGUP_PREFIX}"/*) ;;
+  *)
+    echo "final Clang resource directory escapes the prefix: ${CLANGUP_RESOURCE_DIR}" >&2
+    exit 1
+    ;;
+esac
+
+compiler_rt_build="$(dirname -- "${CLANGUP_BUILD}")/compiler-rt"
+cmake \
+  -G Ninja \
+  -S "${CLANGUP_SOURCE}/compiler-rt" \
+  -B "${compiler_rt_build}" \
+  -C "${script_dir}/compiler-rt.cmake"
+ninja -C "${compiler_rt_build}" -j "${CLANGUP_JOBS}"
+ninja -C "${compiler_rt_build}" install
