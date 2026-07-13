@@ -70,7 +70,9 @@ type DepCfg struct {
 
 type PresetCfg struct {
 	Name                 string         `yaml:"-"`
-	Build                string         `yaml:"build"`
+	BuildDir             string         `yaml:"build-dir"`
+	BuildType            string         `yaml:"build-type"`
+	Inherits             string         `yaml:"inherits"`
 	Generator            string         `yaml:"generator"`
 	DefaultConfiguration string         `yaml:"default-configuration"`
 	Configurations       []string       `yaml:"configurations"`
@@ -131,7 +133,9 @@ func loadConfig(root string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			normalizeConfig(cfg)
+			if err := normalizeConfig(cfg); err != nil {
+				return nil, err
+			}
 			return cfg, nil
 		}
 		return nil, err
@@ -144,14 +148,16 @@ func loadConfig(root string) (*Config, error) {
 	if cfg.Version != 1 {
 		return nil, fmt.Errorf("%s: version must be 1", path)
 	}
-	normalizeConfig(cfg)
+	if err := normalizeConfig(cfg); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
 	if err := validateConfig(cfg, root); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	return cfg, nil
 }
 
-func normalizeConfig(cfg *Config) {
+func normalizeConfig(cfg *Config) error {
 	if cfg.Toolchain == nil {
 		cfg.Toolchain = ToolchainCfg{}
 	}
@@ -171,7 +177,7 @@ func normalizeConfig(cfg *Config) {
 		cfg.Configure.Presets = map[string]*PresetCfg{}
 	}
 	if len(cfg.Configure.Presets) == 0 {
-		cfg.Configure.Presets["default"] = &PresetCfg{Build: "build"}
+		cfg.Configure.Presets["default"] = &PresetCfg{BuildDir: "build"}
 	}
 	for name, preset := range cfg.Configure.Presets {
 		if preset == nil {
@@ -179,9 +185,9 @@ func normalizeConfig(cfg *Config) {
 			cfg.Configure.Presets[name] = preset
 		}
 		preset.Name = name
-		if preset.Build == "" {
-			preset.Build = filepath.Join("build", name)
-		}
+	}
+	if err := resolvePresetInheritance(cfg); err != nil {
+		return err
 	}
 	if cfg.Configure.DefaultPreset == "" {
 		if cfg.Configure.Presets["default"] != nil {
@@ -206,6 +212,102 @@ func normalizeConfig(cfg *Config) {
 	if hasMultiConfigPreset(cfg) && cfg.Configure.DefaultConfiguration == "" && len(cfg.Configure.Configurations) > 0 {
 		cfg.Configure.DefaultConfiguration = cfg.Configure.Configurations[0].Name
 	}
+	return nil
+}
+
+func resolvePresetInheritance(cfg *Config) error {
+	raw := cfg.Configure.Presets
+	resolved := make(map[string]*PresetCfg, len(raw))
+	visiting := map[string]bool{}
+	var resolve func(string) (*PresetCfg, error)
+	resolve = func(name string) (*PresetCfg, error) {
+		if preset := resolved[name]; preset != nil {
+			return preset, nil
+		}
+		preset := raw[name]
+		if preset == nil {
+			return nil, fmt.Errorf("cmake preset %q does not exist", name)
+		}
+		if visiting[name] {
+			return nil, fmt.Errorf("cmake preset inheritance contains a cycle at %q", name)
+		}
+		visiting[name] = true
+		var parent *PresetCfg
+		if preset.Inherits != "" {
+			if raw[preset.Inherits] == nil {
+				return nil, fmt.Errorf("cmake preset %q inherits unknown preset %q", name, preset.Inherits)
+			}
+			var err error
+			parent, err = resolve(preset.Inherits)
+			if err != nil {
+				return nil, err
+			}
+		}
+		merged := mergePreset(parent, preset)
+		merged.Name = name
+		if merged.BuildDir == "" {
+			merged.BuildDir = filepath.Join("build", name)
+		}
+		delete(visiting, name)
+		resolved[name] = &merged
+		return &merged, nil
+	}
+	for name := range raw {
+		if _, err := resolve(name); err != nil {
+			return err
+		}
+	}
+	cfg.Configure.Presets = resolved
+	return nil
+}
+
+func mergePreset(parent, child *PresetCfg) PresetCfg {
+	merged := *child
+	merged.Configurations = cloneStrings(child.Configurations)
+	merged.Args = append([]string(nil), child.Args...)
+	merged.Variables = mergePresetVariables(nil, child.Variables)
+	if parent == nil {
+		return merged
+	}
+	if merged.BuildType == "" {
+		merged.BuildType = parent.BuildType
+	}
+	if merged.Generator == "" {
+		merged.Generator = parent.Generator
+	}
+	if merged.DefaultConfiguration == "" {
+		merged.DefaultConfiguration = parent.DefaultConfiguration
+	}
+	if child.Configurations == nil {
+		merged.Configurations = cloneStrings(parent.Configurations)
+	}
+	merged.Variables = mergePresetVariables(parent.Variables, child.Variables)
+	merged.Args = append(append([]string(nil), parent.Args...), child.Args...)
+	// Every preset owns its build directory. A child never inherits the
+	// parent's path and receives build/<name> when build-dir is omitted.
+	merged.BuildDir = child.BuildDir
+	return merged
+}
+
+func cloneStrings(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	return append([]string{}, values...)
+}
+
+func mergePresetVariables(parent, child map[string]any) map[string]any {
+	if len(parent) == 0 && len(child) == 0 {
+		return nil
+	}
+	merged := make(map[string]any, len(parent)+len(child))
+	for name, value := range parent {
+		merged[name] = value
+	}
+	for name, value := range child {
+		merged[name] = value
+	}
+	return merged
 }
 
 func validateConfig(cfg *Config, root string) error {
@@ -237,7 +339,21 @@ func validateConfig(cfg *Config, root string) error {
 		if err := validateCMakeArgs("cmake.presets."+name+".args", preset.Args); err != nil {
 			return err
 		}
-		build := expandVars(preset.Build, map[string]string{"PROJECT_ROOT": root})
+		if preset.BuildType != "" {
+			if isMultiConfig(cfg, preset) {
+				return fmt.Errorf("cmake.presets.%s.build-type requires a single-config generator", name)
+			}
+			if _, ok := cfg.Configure.Variables["CMAKE_BUILD_TYPE"]; ok {
+				return fmt.Errorf("cmake.presets.%s.build-type conflicts with cmake.variables.CMAKE_BUILD_TYPE", name)
+			}
+			if _, ok := preset.Variables["CMAKE_BUILD_TYPE"]; ok {
+				return fmt.Errorf("cmake.presets.%s sets both build-type and variables.CMAKE_BUILD_TYPE", name)
+			}
+			if definesVar(cfg.Configure.Args, "CMAKE_BUILD_TYPE") || definesVar(preset.Args, "CMAKE_BUILD_TYPE") {
+				return fmt.Errorf("cmake.presets.%s.build-type conflicts with a CMAKE_BUILD_TYPE argument", name)
+			}
+		}
+		build := expandVars(preset.BuildDir, map[string]string{"PROJECT_ROOT": root})
 		if !filepath.IsAbs(build) {
 			build = filepath.Join(root, build)
 		}

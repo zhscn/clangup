@@ -54,7 +54,7 @@ cmake:
   default-preset: default
   default-configuration: Debug
   presets:
-    default: {build: build}
+    default: {build-dir: build}
   configurations:
     - {name: Debug}
     - {name: Release}

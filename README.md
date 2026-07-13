@@ -53,7 +53,7 @@ cmake:
 
   presets:
     default:
-      build: build
+      build-dir: build
 
   configurations:
     - name: Debug
@@ -71,22 +71,16 @@ cmk test -c Release
 cmk install -c Release
 ```
 
-Each preset owns a separate CMake configure/build tree. A multi-config tree
-contains every entry under `configurations`; select one with `-c`. Values under
-`variables` are CMake variables passed as `-D<name>=<value>`, with preset
-variables overriding the common values. A preset may also override
-`cmake.generator` with its own `generator`. Multi-config presets inherit the
-global configuration list unless they provide `configurations`; they may also
-override `default-configuration`. If the global default is absent from a
-preset's list, its first configuration becomes the default.
+Use `-p` to select a preset and `-c` to select a multi-config configuration.
+Presets may override the generator, CMake variables, configurations, and their
+default configuration. Single-config presets use `build-type` instead of `-c`.
 
-For a single-config generator such as `Ninja`, set `CMAKE_BUILD_TYPE` in the
-preset's `variables`. Such a preset does not accept `-c`; when every preset is
-single-config, omit `configurations` and `default-configuration`.
+`inherits` reuses another preset's settings. Each preset has its own
+`build-dir`, which defaults to `build/<preset>`.
 
-Toolchain selectors resolve in exact platform, OS, then `default` order. For
-example, `linux-aarch64` overrides `linux`. `cmk.lock` records the exact
-toolchain and external dependency inputs for each platform.
+Toolchains resolve by platform, then OS, then `default`; for example,
+`linux-aarch64` takes precedence over `linux`. `cmk.lock` pins resolved
+toolchains and dependencies.
 
 ### Configuration example
 
@@ -114,18 +108,22 @@ cmake:
 
   presets:
     default:
-      build: build/default
+      build-dir: build/default
+      variables:
+        ENABLE_OPTIONAL_FEATURES: true
     minimal:
-      build: build/minimal
+      inherits: default
+      build-dir: build/minimal
       configurations: [Debug, Release]
       default-configuration: Release
       variables:
         ENABLE_OPTIONAL_FEATURES: false
     release:
-      build: build/release
+      build-dir: build/release
       generator: Ninja
+      build-type: Release
       variables:
-        CMAKE_BUILD_TYPE: Release
+        ENABLE_LTO: true
 
   configurations:
     - name: Debug

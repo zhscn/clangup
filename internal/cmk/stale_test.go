@@ -322,8 +322,8 @@ func TestComputeInjectionSuppressesRegeneration(t *testing.T) {
 
 func TestPresetForDir(t *testing.T) {
 	root := t.TempDir()
-	debug := &PresetCfg{Name: "debug", Build: "build/debug"}
-	release := &PresetCfg{Name: "release", Build: "${PROJECT_ROOT}/build/release"}
+	debug := &PresetCfg{Name: "debug", BuildDir: "build/debug"}
+	release := &PresetCfg{Name: "release", BuildDir: "${PROJECT_ROOT}/build/release"}
 	p := &Project{Root: root, Lock: &Lock{}, Cfg: &Config{
 		Configure: ConfigureCfg{Presets: map[string]*PresetCfg{"debug": debug, "release": release}},
 	}}
@@ -346,7 +346,9 @@ func TestWriteConfigFlagsFileKeepsMtimeWhenUnchanged(t *testing.T) {
 			Configurations: []*ConfigurationCfg{{Name: "Asan", Compile: []string{"-fsanitize=address"}}},
 		},
 	}}
-	normalizeConfig(p.Cfg)
+	if err := normalizeConfig(p.Cfg); err != nil {
+		t.Fatal(err)
+	}
 	if err := writeConfigFlagsFile(p); err != nil {
 		t.Fatal(err)
 	}

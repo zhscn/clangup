@@ -501,15 +501,15 @@ cmake:
     ENABLE_LOGGING: true
   presets:
     default:
-      build: build/default
+      build-dir: build/default
     minimal:
-      build: build/minimal
+      build-dir: build/minimal
       default-configuration: Asan
       configurations: [Asan]
       variables:
         ENABLE_OPTIONAL: false
     single:
-      build: build/single
+      build-dir: build/single
       generator: Ninja
       variables:
         CMAKE_BUILD_TYPE: Release
@@ -530,7 +530,7 @@ cmake:
 	if got := strings.Join(effectiveConfigurations(cfg, nil), ","); got != "Debug,Asan" {
 		t.Fatalf("configurations = %s", got)
 	}
-	if cfg.Configure.Presets["minimal"].Build != "build/minimal" || cfg.Toolchain.selectorFor("linux", "x86_64") != "libcxx" {
+	if cfg.Configure.Presets["minimal"].BuildDir != "build/minimal" || cfg.Toolchain.selectorFor("linux", "x86_64") != "libcxx" {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
 	p := &Project{Root: root, Cfg: cfg, Lock: &Lock{}, BuildDirs: map[string]string{}}
@@ -566,8 +566,8 @@ cmake:
 		"duplicate build": `version: 1
 cmake:
   presets:
-    a: {build: build}
-    b: {build: build}
+    a: {build-dir: build}
+    b: {build-dir: build}
 `,
 		"cmk-owned variable": `version: 1
 cmake:
@@ -580,6 +580,12 @@ cmake:
   presets:
     default:
       configurations: [Unknown]
+`,
+		"preset inheritance cycle": `version: 1
+cmake:
+  presets:
+    first: {inherits: second}
+    second: {inherits: first}
 `,
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -594,6 +600,45 @@ cmake:
 	}
 }
 
+func TestPresetInheritance(t *testing.T) {
+	root := t.TempDir()
+	body := `version: 1
+cmake:
+  default-preset: child
+  presets:
+    base:
+      build-dir: build/base
+      build-type: Debug
+      variables:
+        ENABLE_ASAN: true
+        MODE: base
+      args: [-DPARENT=ON]
+    child:
+      inherits: base
+      variables:
+        MODE: child
+        ENABLE_COVERAGE: true
+      args: [-DCHILD=ON]
+`
+	if err := os.WriteFile(filepath.Join(root, configFileName), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfig(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := cfg.Configure.Presets["child"]
+	if child.BuildDir != "build/child" || child.BuildType != "Debug" {
+		t.Fatalf("child paths/type = %q/%q", child.BuildDir, child.BuildType)
+	}
+	if child.Variables["ENABLE_ASAN"] != true || child.Variables["MODE"] != "child" || child.Variables["ENABLE_COVERAGE"] != true {
+		t.Fatalf("child variables = %#v", child.Variables)
+	}
+	if got := strings.Join(child.Args, ","); got != "-DPARENT=ON,-DCHILD=ON" {
+		t.Fatalf("child args = %s", got)
+	}
+}
+
 func TestWriteUserPresetsMatrix(t *testing.T) {
 	root := t.TempDir()
 	cfg := &Config{Configure: ConfigureCfg{
@@ -603,15 +648,17 @@ func TestWriteUserPresetsMatrix(t *testing.T) {
 		Presets: map[string]*PresetCfg{
 			"default": {
 				Name:                 "default",
-				Build:                "build/default",
+				BuildDir:             "build/default",
 				Configurations:       []string{"Release"},
 				DefaultConfiguration: "Release",
 			},
-			"minimal": {Name: "minimal", Build: "build/minimal", Generator: "Ninja"},
+			"minimal": {Name: "minimal", BuildDir: "build/minimal", Generator: "Ninja", BuildType: "Release"},
 		},
 		Configurations: []*ConfigurationCfg{{Name: "Debug"}, {Name: "Release"}},
 	}}
-	normalizeConfig(cfg)
+	if err := normalizeConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
 	p := &Project{Root: root, Cfg: cfg, Lock: &Lock{}}
 	tc := &Toolchain{CC: "/opt/clang/bin/clang", CXX: "/opt/clang/bin/clang++"}
 	if err := writeUserPresets(p, tc); err != nil {
@@ -631,7 +678,9 @@ func TestWriteUserPresetsMatrix(t *testing.T) {
 	if got.BuildPresets[0].Name != "cmk-default-Release" || got.ConfigurePresets[0].CacheVariables["CMAKE_CONFIGURATION_TYPES"] != "Release" {
 		t.Fatalf("preset configuration subset was not preserved: %+v / %+v", got.ConfigurePresets[0], got.BuildPresets[0])
 	}
-	if got.ConfigurePresets[1].Generator != "Ninja" || got.BuildPresets[1].Name != "cmk-minimal" {
+	if got.ConfigurePresets[1].Generator != "Ninja" ||
+		got.ConfigurePresets[1].CacheVariables["CMAKE_BUILD_TYPE"] != "Release" ||
+		got.BuildPresets[1].Name != "cmk-minimal" {
 		t.Fatalf("preset generator override was not preserved: %+v / %+v", got.ConfigurePresets[1], got.BuildPresets[1])
 	}
 }

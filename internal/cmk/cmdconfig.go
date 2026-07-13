@@ -48,8 +48,8 @@ func defaultConfigureDir(p *Project, preset *PresetCfg) string {
 
 func presetBuildDir(p *Project, preset *PresetCfg) string {
 	dir := "build"
-	if preset != nil && preset.Build != "" {
-		dir = expandVars(preset.Build, p.vars())
+	if preset != nil && preset.BuildDir != "" {
+		dir = expandVars(preset.BuildDir, p.vars())
 	}
 	if !filepath.IsAbs(dir) {
 		dir = filepath.Join(p.Root, dir)
@@ -217,6 +217,9 @@ func (p *Project) injectionParts(tc *Toolchain, preset *PresetCfg, extraArgs []s
 		envStamp: envStampEntries(p),
 	}
 	if preset != nil {
+		if preset.BuildType != "" {
+			in.userArgs = append(in.userArgs, "-DCMAKE_BUILD_TYPE="+expandVars(preset.BuildType, vars))
+		}
 		in.userArgs = append(in.userArgs, variableArgs(preset.Variables, vars)...)
 		in.userArgs = append(in.userArgs, expandAll(preset.Args, vars)...)
 	}

@@ -74,7 +74,7 @@ cmake:
 
   presets:
     default:
-      build: build
+      build-dir: build
 
   configurations:
     - name: Debug
@@ -84,18 +84,18 @@ cmake:
   # inside every multi-config tree with cmk build -p <preset> -c <config>.
   # presets:
   #   default:
-  #     build: build/default
+  #     build-dir: build/default
   #   minimal:
-  #     build: build/minimal
+  #     inherits: default
+  #     build-dir: build/minimal
   #     configurations: [Debug, Release]
   #     default-configuration: Release
   #     variables:
   #       ENABLE_OPTIONAL_FEATURES: false
   #   release:
-  #     build: build/release
+  #     build-dir: build/release
   #     generator: Ninja
-  #     variables:
-  #       CMAKE_BUILD_TYPE: Release
+  #     build-type: Release
 
   # configurations:
   #   - name: Debug

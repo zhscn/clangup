@@ -118,7 +118,7 @@ func writeUserPresets(p *Project, tc *Toolchain) error {
 		for key, value := range cache {
 			cache[key] = relocate(value)
 		}
-		dir := expandVars(pr.Build, vars)
+		dir := expandVars(pr.BuildDir, vars)
 		if !filepath.IsAbs(dir) {
 			dir = "${sourceDir}/" + filepath.ToSlash(dir)
 		}
