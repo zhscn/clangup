@@ -110,6 +110,53 @@ func TestSelectFilesDefaultsToTrackedChanges(t *testing.T) {
 	}
 }
 
+func TestSelectLintScopeFilesCommitAndBranch(t *testing.T) {
+	root := initGitRepo(t)
+	gitRun(t, root, "branch", "-M", "main")
+	tracked := filepath.Join(root, "tracked.cc")
+	if err := os.WriteFile(tracked, []byte("int value = 1;\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, root, "add", ".")
+	gitRun(t, root, "commit", "-m", "base")
+	gitRun(t, root, "checkout", "-q", "-b", "feature")
+
+	added := filepath.Join(root, "added.cpp")
+	ignored := filepath.Join(root, "generated", "ignored.cc")
+	if err := os.WriteFile(tracked, []byte("int value = 2;\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(added, []byte("int added = 1;\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(ignored), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ignored, []byte("int ignored = 1;\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, root, "add", ".")
+	gitRun(t, root, "commit", "-m", "feature")
+
+	p := &Project{Root: root, Cfg: &Config{Lint: LintCfg{Ignore: []string{"generated/**"}}}}
+	want := []string{added, tracked}
+	slices.Sort(want)
+	for name, options := range map[string]lintOptions{
+		"commit": {Commit: "HEAD"},
+		"branch": {Branch: "auto"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			files, err := selectLintScopeFiles(p, options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(files, want) {
+				t.Fatalf("files = %v, want %v", files, want)
+			}
+		})
+	}
+}
+
 func TestIsCppFileMatchesRustExtensions(t *testing.T) {
 	accepted := []string{
 		"a.c", "a.h", "a.cc", "a.cpp", "a.cxx", "a.c++",

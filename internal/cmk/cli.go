@@ -52,6 +52,7 @@ type fmtOptions struct {
 
 type lintOptions struct {
 	BuildDir                  string
+	Commit, Branch            string
 	All, Staged, Unstaged     bool
 	Interactive, Fix          bool
 	WarningsAsErrors, Verbose bool
@@ -303,8 +304,8 @@ func newFmtCommand() *cobra.Command {
 func newLintCommand() *cobra.Command {
 	var options lintOptions
 	command := &cobra.Command{Use: "lint [file...]", Aliases: []string{"l"}, Short: "Lint source files with clang-tidy", Args: cobra.ArbitraryArgs, RunE: func(_ *cobra.Command, args []string) error {
-		if len(args) > 0 && (options.Interactive || options.All || options.Staged || options.Unstaged) {
-			return fmt.Errorf("pass file(s), or one of --interactive/--all/--staged/--unstaged")
+		if len(args) > 0 && (options.Interactive || options.All || options.Staged || options.Unstaged || options.Commit != "" || options.Branch != "") {
+			return fmt.Errorf("pass file(s), or one lint scope")
 		}
 		return cmdLint(args, options)
 	}}
@@ -314,10 +315,13 @@ func newLintCommand() *cobra.Command {
 	flags.BoolVarP(&options.All, "all", "a", false, "Lint all tracked source files")
 	flags.BoolVarP(&options.Staged, "staged", "s", false, "Lint only staged files")
 	flags.BoolVarP(&options.Unstaged, "unstaged", "u", false, "Lint only unstaged files")
+	flags.StringVar(&options.Commit, "commit", "", "Lint files changed by one commit")
+	flags.StringVar(&options.Branch, "branch", "", "Lint files changed from a merge base (default: origin/main or main)")
+	flags.Lookup("branch").NoOptDefVal = "auto"
 	flags.BoolVar(&options.Fix, "fix", false, "Apply suggested fixes serially")
 	flags.BoolVarP(&options.WarningsAsErrors, "warnings-as-errors", "W", false, "Treat warnings as errors")
 	flags.BoolVarP(&options.Verbose, "verbose", "v", false, "Print verbose output")
-	command.MarkFlagsMutuallyExclusive("interactive", "all", "staged", "unstaged")
+	command.MarkFlagsMutuallyExclusive("interactive", "all", "staged", "unstaged", "commit", "branch")
 	return command
 }
 

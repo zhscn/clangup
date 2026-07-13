@@ -157,6 +157,87 @@ func resolveExplicitFiles(files []string) ([]string, error) {
 	return resolved, nil
 }
 
+func verifyGitRef(root, ref string) bool {
+	cmd := exec.Command("git", "-C", root, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
+	return cmd.Run() == nil
+}
+
+func resolveBranchBase(root, requested string) (string, error) {
+	if requested != "" && requested != "auto" {
+		if !verifyGitRef(root, requested) {
+			return "", fmt.Errorf("branch base %q is not a valid git ref", requested)
+		}
+		return requested, nil
+	}
+	for _, candidate := range []string{"origin/main", "main"} {
+		if verifyGitRef(root, candidate) {
+			return candidate, nil
+		}
+	}
+	return "", errors.New("cannot resolve branch base; pass --branch=<ref>")
+}
+
+func filterLintScopeFiles(p *Project, candidates []string, ignore []string, verbose bool) ([]string, error) {
+	seen := map[string]bool{}
+	var files []string
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		abs := candidate
+		if !filepath.IsAbs(abs) {
+			abs = filepath.Join(p.Root, candidate)
+		}
+		abs = filepath.Clean(abs)
+		rel, err := filepath.Rel(p.Root, abs)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			if verbose {
+				fmt.Println("Skipping (outside project):", candidate)
+			}
+			continue
+		}
+		if seen[abs] {
+			continue
+		}
+		seen[abs] = true
+		if _, err := os.Stat(abs); err != nil {
+			continue
+		}
+		rel = filepath.ToSlash(rel)
+		if ignored(rel, ignore) || !isCppFile(rel) {
+			continue
+		}
+		files = append(files, abs)
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
+func selectLintScopeFiles(p *Project, options lintOptions) ([]string, error) {
+	var candidates []string
+	var err error
+	switch {
+	case options.Commit != "":
+		if !verifyGitRef(p.Root, options.Commit) {
+			return nil, fmt.Errorf("commit %q is not a valid git ref", options.Commit)
+		}
+		candidates, err = gitList(p.Root, "diff", "--name-only", "--diff-filter=AM", options.Commit+"^!")
+	case options.Branch != "":
+		base, baseErr := resolveBranchBase(p.Root, options.Branch)
+		if baseErr != nil {
+			return nil, baseErr
+		}
+		candidates, err = gitList(p.Root, "diff", "--name-only", "--diff-filter=AM", base+"...HEAD")
+	default:
+		return selectFiles(p, "", options.All, options.Staged, options.Unstaged, p.Cfg.Lint.Ignore, options.Verbose)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return filterLintScopeFiles(p, candidates, p.Cfg.Lint.Ignore, options.Verbose)
+}
+
 func cmdFmt(explicitFiles []string, options fmtOptions) error {
 	p, err := openProject()
 	if err != nil {
@@ -355,7 +436,7 @@ func cmdLint(explicitFiles []string, options lintOptions) error {
 			return err
 		}
 	} else {
-		files, err = selectFiles(p, "", options.All, options.Staged, options.Unstaged, p.Cfg.Lint.Ignore, options.Verbose)
+		files, err = selectLintScopeFiles(p, options)
 		if err != nil {
 			return err
 		}
