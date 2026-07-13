@@ -44,13 +44,12 @@ ldd /tmp/clangup-default-smoke | tee /tmp/clangup-default-smoke.ldd
 grep -q 'libstdc[+][+][.]so' /tmp/clangup-default-smoke.ldd
 
 runtime_dir="$("${prefix}/bin/clang" --print-runtime-dir)"
-case "${runtime_dir}" in
-  "${prefix}"/*) ;;
-  *) echo "Clang runtime directory escapes the prefix: ${runtime_dir}" >&2; exit 1 ;;
+case "$(uname -m)" in
+  x86_64) compatible_triple=x86_64-pc-linux ;;
+  aarch64) compatible_triple=aarch64-pc-linux-gnu ;;
+  *) echo "unsupported verification architecture: $(uname -m)" >&2; exit 2 ;;
 esac
-for runtime in builtins asan profile fuzzer; do
-  test -f "${runtime_dir}/libclang_rt.${runtime}.a"
-done
+test "$("${prefix}/bin/clang" --target="${compatible_triple}" --print-runtime-dir)" = "${runtime_dir}"
 
 cat >/tmp/clangup-default-libcxx-cxx20.cc <<'EOF'
 #include <algorithm>
@@ -85,6 +84,20 @@ EOF
 if ldd /tmp/clangup-default-libcxx-cxx20 |
     grep -Eq 'libstdc[+][+][.]so|libc[+][+][.]so|libc[+][+]abi[.]so'; then
   echo "explicit libc++ C++20 smoke has a dynamic C++ runtime dependency" >&2
+  exit 1
+fi
+
+"${prefix}/bin/clang++" --target="${compatible_triple}" -std=c++20 \
+  -stdlib=libc++ --rtlib=compiler-rt --unwindlib=libgcc \
+  /tmp/clangup-default-libcxx-cxx20.cc \
+  -o /tmp/clangup-default-compatible-triple
+/tmp/clangup-default-compatible-triple
+
+clang_ldd="$(ldd "${prefix}/bin/clang")"
+grep -Fq "=> ${prefix}/lib/libclang-cpp.so" <<<"${clang_ldd}"
+ldd "${prefix}/bin/llvm-ar" | grep -Fq "=> ${prefix}/lib/libLLVM.so"
+if grep -Eq 'libstdc[+][+][.]so|libc[+][+][.]so|libc[+][+]abi[.]so' <<<"${clang_ldd}"; then
+  echo "Clang has a dynamic C++ runtime dependency" >&2
   exit 1
 fi
 

@@ -186,7 +186,7 @@ def rewrite_python_shebangs(prefix: Path) -> None:
                 break
 
 
-def validate_linux_runtime_layout(prefix: Path, triple: str) -> Path:
+def validate_linux_runtime_layout(prefix: Path) -> Path:
     clang = prefix / "bin" / "clang"
     runtime_dir = Path(
         subprocess.check_output([str(clang), "--print-runtime-dir"], text=True).strip()
@@ -195,25 +195,17 @@ def validate_linux_runtime_layout(prefix: Path, triple: str) -> Path:
         runtime_dir.resolve().relative_to(prefix.resolve())
     except ValueError:
         fail(f"Clang runtime directory escapes the payload: {runtime_dir}")
-    required_runtimes = (
-        "libclang_rt.builtins.a",
-        "libclang_rt.asan.a",
-        "libclang_rt.profile.a",
-        "libclang_rt.fuzzer.a",
-    )
+    required_runtimes = ("builtins", "asan", "profile", "fuzzer")
     for name in required_runtimes:
-        if not (runtime_dir / name).is_file():
-            fail(f"installed compiler-rt library is missing: {runtime_dir / name}")
-    target_libdir = prefix / "lib" / triple
+        if not any(runtime_dir.glob(f"libclang_rt.{name}*.a")):
+            fail(f"installed compiler-rt library is missing: {name} in {runtime_dir}")
+    target_libdir = prefix / "lib"
     for name in ("libc++.a", "libc++abi.a"):
         if not (target_libdir / name).is_file():
             fail(f"installed static C++ runtime is missing: {target_libdir / name}")
-    config_site = prefix / "include" / triple / "c++" / "v1" / "__config_site"
+    config_site = prefix / "include" / "c++" / "v1" / "__config_site"
     if not config_site.is_file():
-        fail(f"installed libc++ target configuration is missing: {config_site}")
-    generic_config_site = prefix / "include" / "c++" / "v1" / "__config_site"
-    if generic_config_site.exists() or generic_config_site.is_symlink():
-        fail(f"unexpected generic libc++ target configuration: {generic_config_site}")
+        fail(f"installed libc++ configuration is missing: {config_site}")
     for pattern in ("libc++.so*", "libc++abi.so*"):
         if any(prefix.rglob(pattern)):
             fail(f"Linux payload unexpectedly contains shared C++ runtime: {pattern}")
@@ -378,7 +370,7 @@ def smoke(prefix: Path, target: dict[str, Any], work: Path, channel: str) -> Non
             executable = prefix / "bin" / name
             if not executable.exists():
                 fail(f"required payload executable is missing: {executable}")
-        validate_linux_runtime_layout(prefix, target["triple"])
+        validate_linux_runtime_layout(prefix)
         for executable in (clang, prefix / "bin" / "lld"):
             if not executable.exists():
                 fail(f"required payload executable is missing: {executable}")
