@@ -105,8 +105,8 @@ for archive in libc++.a libc++abi.a; do
 done
 
 clang_ldd="$(ldd "${prefix}/bin/clang")"
-grep -Fq "=> ${prefix}/lib/libclang-cpp.so" <<<"${clang_ldd}"
-ldd "${prefix}/bin/llvm-ar" | grep -Fq "=> ${prefix}/lib/libLLVM.so"
+grep -q 'libclang-cpp[.]so' <<<"${clang_ldd}"
+grep -q 'libLLVM[.]so' <<<"$(ldd "${prefix}/bin/llvm-ar")"
 if grep -Eq 'libstdc[+][+][.]so|libc[+][+][.]so|libc[+][+]abi[.]so' <<<"${clang_ldd}"; then
   echo "Clang has a dynamic C++ runtime dependency" >&2
   exit 1

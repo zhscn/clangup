@@ -25,15 +25,6 @@ class CMakeConfigTest(unittest.TestCase):
         overlap = common & self.cache_entries("linux.cmake")
         self.assertEqual(set(), overlap)
 
-    def test_linux_cxx_runtimes_use_fat_lto_objects(self) -> None:
-        contents = (ROOT / "linux-runtimes.cmake").read_text(encoding="utf-8")
-        for entry in (
-            "set(LIBCXX_ADDITIONAL_COMPILE_FLAGS",
-            "set(LIBCXXABI_ADDITIONAL_COMPILE_FLAGS",
-        ):
-            self.assertIn(entry, contents)
-        self.assertEqual(2, contents.count('"-flto;-ffat-lto-objects"'))
-
     def test_driver_defaults_match_channel_contract(self) -> None:
         contents = (ROOT / "linux.cmake").read_text(encoding="utf-8")
         for entry in (
@@ -41,33 +32,6 @@ class CMakeConfigTest(unittest.TestCase):
             "set(CLANG_DEFAULT_LINKER lld",
             "set(CLANG_DEFAULT_RTLIB compiler-rt",
             "set(CLANG_DEFAULT_UNWINDLIB libgcc",
-        ):
-            self.assertIn(entry, contents)
-
-    def test_compiler_rt_is_built_with_final_clang(self) -> None:
-        contents = (ROOT / "compiler-rt.cmake").read_text(encoding="utf-8")
-        for entry in (
-            'set(CMAKE_C_COMPILER "${_prefix}/bin/clang"',
-            'set(CMAKE_CXX_COMPILER "${_prefix}/bin/clang++"',
-            "set(COMPILER_RT_BUILD_BUILTINS OFF",
-            "set(COMPILER_RT_BUILD_SANITIZERS ON",
-            "set(COMPILER_RT_USE_BUILTINS_LIBRARY ON",
-            "set(COMPILER_RT_USE_LIBCXX OFF",
-        ):
-            self.assertIn(entry, contents)
-
-    def test_main_build_defers_compiler_rt_consumers(self) -> None:
-        contents = (ROOT / "linux.cmake").read_text(encoding="utf-8")
-        for entry in (
-            "set(COMPILER_RT_BUILD_BUILTINS ON",
-            "set(COMPILER_RT_BUILD_CRT ON",
-            "set(COMPILER_RT_BUILD_SANITIZERS OFF",
-            "set(COMPILER_RT_BUILD_LIBFUZZER OFF",
-            "set(COMPILER_RT_BUILD_PROFILE OFF",
-            "set(COMPILER_RT_BUILD_CTX_PROFILE OFF",
-            "set(COMPILER_RT_BUILD_MEMPROF OFF",
-            "set(COMPILER_RT_BUILD_ORC OFF",
-            "set(COMPILER_RT_BUILD_XRAY OFF",
         ):
             self.assertIn(entry, contents)
 

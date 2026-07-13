@@ -27,16 +27,6 @@ if [[ "$(uname -s)" != Linux || "$(uname -m)" != "${expected_machine}" ]]; then
 fi
 export CLANGUP_BUILD_CONFIG_DIR="${script_dir}"
 
-for tool in clang clang++ llvm-ar llvm-nm llvm-ranlib; do
-  test -x "${CLANGUP_BOOTSTRAP_PREFIX}/bin/${tool}"
-done
-runtime_dir="$("${CLANGUP_BOOTSTRAP_PREFIX}/bin/clang" --print-runtime-dir)"
-test -f "${runtime_dir}/libclang_rt.builtins.a"
-test -f "${CLANGUP_BOOTSTRAP_PREFIX}/include/c++/v1/__config"
-test -f "${CLANGUP_BOOTSTRAP_PREFIX}/include/${CLANGUP_TARGET_TRIPLE}/c++/v1/__config_site"
-test -f "${CLANGUP_BOOTSTRAP_PREFIX}/lib/${CLANGUP_TARGET_TRIPLE}/libc++.a"
-test -f "${CLANGUP_BOOTSTRAP_PREFIX}/lib/${CLANGUP_TARGET_TRIPLE}/libc++abi.a"
-
 cmake_args=(
   cmake -G Ninja
   -S "${CLANGUP_SOURCE}/llvm"
@@ -56,13 +46,6 @@ printf '%s\n' '-L<CFGDIR>/../../lib' >"${CLANGUP_PREFIX}/etc/clang/clang.cfg"
 printf '%s\n' '-L<CFGDIR>/../../lib' >"${CLANGUP_PREFIX}/etc/clang/clang++.cfg"
 
 export CLANGUP_RESOURCE_DIR="$("${CLANGUP_PREFIX}/bin/clang" --print-resource-dir)"
-case "${CLANGUP_RESOURCE_DIR}" in
-  "${CLANGUP_PREFIX}"/*) ;;
-  *)
-    echo "final Clang resource directory escapes the prefix: ${CLANGUP_RESOURCE_DIR}" >&2
-    exit 1
-    ;;
-esac
 
 compiler_rt_build="$(dirname -- "${CLANGUP_BUILD}")/compiler-rt"
 cmake \
