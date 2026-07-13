@@ -1,6 +1,7 @@
 package cmk
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -11,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"go.yaml.in/yaml/v3"
 )
 
 // cmdTest runs ctest in the resolved build dir. Positional arguments become
@@ -27,11 +30,11 @@ func cmdTest(patterns []string, options testOptions) error {
 		return err
 	}
 	if !options.NoBuild {
-		if err := bootstrapIfUnconfigured(p, options.BuildDir, options.Config, policy); err != nil {
+		if err := bootstrapIfUnconfigured(p, options.BuildDir, options.Preset, policy); err != nil {
 			return err
 		}
 	}
-	dir, cfgName, err := p.resolveVariant(options.BuildDir, options.Config)
+	dir, cfgName, err := p.resolveVariant(options.BuildDir, options.Preset, options.Config)
 	if err != nil {
 		return err
 	}
@@ -91,11 +94,11 @@ func cmdInstall(options installOptions) error {
 		return err
 	}
 	if !options.NoBuild {
-		if err := bootstrapIfUnconfigured(p, options.BuildDir, options.Config, policy); err != nil {
+		if err := bootstrapIfUnconfigured(p, options.BuildDir, options.Preset, policy); err != nil {
 			return err
 		}
 	}
-	dir, cfgName, err := p.resolveVariant(options.BuildDir, options.Config)
+	dir, cfgName, err := p.resolveVariant(options.BuildDir, options.Preset, options.Config)
 	if err != nil {
 		return err
 	}
@@ -324,8 +327,8 @@ func humanSize(n int64) string {
 	}
 }
 
-// cmdAdd scaffolds a [deps.<name>] entry (computing the sha256 for url
-// sources, validating the ref for git sources) plus a recipe stub.
+// cmdAdd adds a dependency entry, computing archive hashes and validating git
+// refs, then creates a recipe stub.
 func cmdAdd(name string, options addOptions) error {
 	url, sha := options.URL, options.SHA256
 	gitURL, ref := options.Git, options.Ref
@@ -342,7 +345,7 @@ func cmdAdd(name string, options addOptions) error {
 		return err
 	}
 	if _, exists := p.Cfg.Deps[name]; exists {
-		return fmt.Errorf("[deps.%s] already exists in cmk.toml", name)
+		return fmt.Errorf("dependency %q already exists in cmk.yaml", name)
 	}
 	var needsList []string
 	for _, n := range strings.Split(needs, ",") {
@@ -375,36 +378,14 @@ func cmdAdd(name string, options addOptions) error {
 		fmt.Fprintf(os.Stderr, "cmk: %s@%s is %s (pinned at next sync)\n", gitURL, ref, commit[:12])
 	}
 
-	var b strings.Builder
-	fmt.Fprintf(&b, "\n[deps.%s]\n", name)
-	fmt.Fprintf(&b, "script = %q\n", script)
-	if cmakeName != "" {
-		fmt.Fprintf(&b, "cmake_name = %q\n", cmakeName)
-	}
-	if len(needsList) > 0 {
-		quoted := make([]string, len(needsList))
-		for i, n := range needsList {
-			quoted[i] = fmt.Sprintf("%q", n)
-		}
-		fmt.Fprintf(&b, "needs = [%s]\n", strings.Join(quoted, ", "))
-	}
+	dep := &DepCfg{Script: script, CMakeName: cmakeName, Needs: needsList}
 	switch {
 	case url != "":
-		fmt.Fprintf(&b, "source = { url = %q, sha256 = %q }\n", url, sha)
+		dep.Source = &SourceCfg{URL: url, SHA256: sha}
 	case gitURL != "":
-		fmt.Fprintf(&b, "source = { git = %q, ref = %q }\n", gitURL, ref)
+		dep.Source = &SourceCfg{Git: gitURL, Ref: ref}
 	}
-
-	tomlPath := filepath.Join(p.Root, configFileName)
-	f, err := os.OpenFile(tomlPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return err
-	}
-	if _, err := f.WriteString(b.String()); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
+	if err := addDependencyToConfig(filepath.Join(p.Root, configFileName), name, dep); err != nil {
 		return err
 	}
 
@@ -418,8 +399,59 @@ func cmdAdd(name string, options addOptions) error {
 		}
 		fmt.Fprintf(os.Stderr, "cmk: wrote %s\n", scriptPath)
 	}
-	fmt.Fprintf(os.Stderr, "cmk: added [deps.%s]; edit the recipe, then run `cmk sync %s`\n", name, name)
+	fmt.Fprintf(os.Stderr, "cmk: added dependency %s; edit the recipe, then run `cmk sync %s`\n", name, name)
 	return nil
+}
+
+func addDependencyToConfig(path, name string, dependency *DepCfg) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var document yaml.Node
+	if err := yaml.Unmarshal(data, &document); err != nil {
+		return err
+	}
+	if len(document.Content) != 1 || document.Content[0].Kind != yaml.MappingNode {
+		return fmt.Errorf("%s: root must be a mapping", path)
+	}
+	root := document.Content[0]
+	var dependencies *yaml.Node
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == "dependencies" {
+			dependencies = root.Content[i+1]
+			break
+		}
+	}
+	if dependencies == nil {
+		key := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "dependencies"}
+		dependencies = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		root.Content = append(root.Content, key, dependencies)
+	}
+	if dependencies.Kind != yaml.MappingNode {
+		return fmt.Errorf("%s: dependencies must be a mapping", path)
+	}
+	for i := 0; i+1 < len(dependencies.Content); i += 2 {
+		if dependencies.Content[i].Value == name {
+			return fmt.Errorf("dependency %q already exists", name)
+		}
+	}
+	value := &yaml.Node{}
+	if err := value.Encode(dependency); err != nil {
+		return err
+	}
+	dependencies.Content = append(dependencies.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: name}, value)
+	var output bytes.Buffer
+	encoder := yaml.NewEncoder(&output)
+	encoder.SetIndent(2)
+	if err := encoder.Encode(&document); err != nil {
+		return err
+	}
+	if err := encoder.Close(); err != nil {
+		return err
+	}
+	return os.WriteFile(path, output.Bytes(), 0o644)
 }
 
 const recipeStub = `#!/usr/bin/env bash

@@ -20,17 +20,15 @@ func cmdConfig(presetName, buildDir string, extraArgs []string) error {
 	if err != nil {
 		return err
 	}
-	mc := isMultiConfig(p.Cfg)
-	if mc && presetName != "" {
-		return fmt.Errorf("multi-config configures every configuration at once; "+
-			"pick one at build time with `cmk build -c %s`, not `cmk config %s`", presetName, presetName)
+	if !p.hasCmkConfig() {
+		return fmt.Errorf("cmk config requires %s", configFileName)
 	}
-	var preset *PresetCfg
-	if !mc {
-		preset, err = resolvePreset(p.Cfg, presetName)
-		if err != nil {
-			return err
-		}
+	if presetName != "" && buildDir != "" {
+		return fmt.Errorf("pass either a preset or --build-dir, not both")
+	}
+	preset, err := resolvePreset(p.Cfg, presetName)
+	if err != nil {
+		return err
 	}
 	dir := buildDir
 	if dir != "" && !filepath.IsAbs(dir) {
@@ -42,23 +40,21 @@ func cmdConfig(presetName, buildDir string, extraArgs []string) error {
 	return runConfigure(p, dir, preset, extraArgs)
 }
 
-// defaultConfigureDir is where configure puts the build tree when no -B
-// is given: the preset's dir, the multi-config dir, or "build".
+// defaultConfigureDir is where configure puts the selected preset's build
+// tree when no -B is given.
 func defaultConfigureDir(p *Project, preset *PresetCfg) string {
-	dir := ""
-	if preset != nil {
-		dir = expandVars(preset.Dir, p.vars())
-	}
-	if dir == "" && isMultiConfig(p.Cfg) {
-		dir = p.multiConfigDir()
-	}
-	if dir == "" {
-		dir = "build"
+	return presetBuildDir(p, preset)
+}
+
+func presetBuildDir(p *Project, preset *PresetCfg) string {
+	dir := "build"
+	if preset != nil && preset.Build != "" {
+		dir = expandVars(preset.Build, p.vars())
 	}
 	if !filepath.IsAbs(dir) {
 		dir = filepath.Join(p.Root, dir)
 	}
-	return dir
+	return filepath.Clean(dir)
 }
 
 // runConfigure is the single configure path: resolve the toolchain, sync
@@ -68,6 +64,16 @@ func defaultConfigureDir(p *Project, preset *PresetCfg) string {
 // `cmk config` and build-time auto-reconfigure (ensureConfigured) land
 // here, so a reconfigure behaves identically no matter what triggered it.
 func runConfigure(p *Project, dir string, preset *PresetCfg, extraArgs []string) error {
+	if err := validateCMakeArgs("cmk config arguments", extraArgs); err != nil {
+		return err
+	}
+	if preset == nil && p.hasCmkConfig() {
+		var err error
+		preset, err = resolvePreset(p.Cfg, "")
+		if err != nil {
+			return err
+		}
+	}
 	// Serialize configures of one build dir: two concurrent cmk
 	// invocations that both detected staleness must not run cmake into
 	// the same cache. The loser re-runs the --fresh decision below
@@ -98,10 +104,7 @@ func runConfigure(p *Project, dir string, preset *PresetCfg, extraArgs []string)
 		return err
 	}
 
-	gen := p.Cfg.Configure.Generator
-	if gen == "" {
-		gen = "Ninja"
-	}
+	gen := effectiveGenerator(p.Cfg, preset)
 	cmakeArgs := []string{"-S", p.Root, "-B", dir, "-G", gen}
 	// When the injection changed since this build dir was last
 	// configured, cached find_package() results (Boost_DIR, OPENSSL_*)
@@ -135,11 +138,15 @@ func runConfigure(p *Project, dir string, preset *PresetCfg, extraArgs []string)
 	}
 	// The stamp's mtime doubles as the staleness baseline: written after
 	// cmake finishes, every configure input is at least as old as it.
-	writeInjectionStamp(dir, stampArgs, extraArgs)
+	presetName := ""
+	if preset != nil {
+		presetName = preset.Name
+	}
+	writeInjectionStamp(dir, stampArgs, extraArgs, presetName)
 	if err := writeUserPresets(p, tc); err != nil {
 		return err
 	}
-	return p.syncRootCompileCommands(dir)
+	return p.syncRootCompileCommands(dir, preset)
 }
 
 // injectionParts is the decomposed cmk injection — everything cmk adds on
@@ -148,6 +155,8 @@ func runConfigure(p *Project, dir string, preset *PresetCfg, extraArgs []string)
 // CMakeUserPresets.json (writeUserPresets) are all projections of one
 // value, so they cannot drift apart.
 type injectionParts struct {
+	preset    string
+	generator string
 	// toolchain is the toolchain-file-vs-compiler-vars decision for
 	// cmk's own configure. writeUserPresets re-makes this decision per
 	// preset, since a preset may bring its own CMAKE_TOOLCHAIN_FILE.
@@ -170,7 +179,7 @@ type injectionParts struct {
 	// CMAKE_DEFAULT_BUILD_TYPE, and CMAKE_PROJECT_INCLUDE when there are
 	// configuration flag edits.
 	multiConfig []string
-	// userArgs are the expanded [config].args, plus the selected
+	// userArgs are the expanded CMake variables and arguments, plus the selected
 	// preset's args and ad-hoc CLI args when configuring.
 	userArgs []string
 	// flagsPath/flagsContent is the computed configurations include
@@ -182,36 +191,42 @@ type injectionParts struct {
 	envStamp []string
 }
 
-// injectionParts assembles the injection for one configure of this
-// project: preset selects a [config.preset.*] (nil for multi-config and
-// plain single-config), extraArgs are ad-hoc CLI args.
+// injectionParts assembles the injection for one configured preset. extraArgs
+// are ad-hoc CLI arguments recorded for automatic reconfiguration.
 func (p *Project) injectionParts(tc *Toolchain, preset *PresetCfg, extraArgs []string) (*injectionParts, error) {
 	vars := p.vars()
 	exports, err := allDepExports(p)
 	if err != nil {
 		return nil, err
 	}
+	presetName := ""
+	if preset != nil {
+		presetName = preset.Name
+	}
 	in := &injectionParts{
-		launcher: launcherArgs(p.Cfg.Configure.CompilerLauncher),
-		common:   []string{"-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"},
+		preset:    presetName,
+		generator: effectiveGenerator(p.Cfg, preset),
+		launcher:  launcherArgs(p.Cfg.Configure.CompilerLauncher),
+		common:    []string{"-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"},
 		// cmk owns reconfiguration (see ensureConfigured): the generated
 		// build system gets no regen rule, so a stale configure can never
 		// be re-run by ninja with an environment cmk didn't control.
 		argvOnly: []string{"-DCMAKE_SUPPRESS_REGENERATION=ON"},
 		exports:  exports,
-		userArgs: expandAll(p.Cfg.Configure.Args, vars),
+		userArgs: append(variableArgs(p.Cfg.Configure.Variables, vars), expandAll(p.Cfg.Configure.Args, vars)...),
 		envStamp: envStampEntries(p),
 	}
 	if preset != nil {
+		in.userArgs = append(in.userArgs, variableArgs(preset.Variables, vars)...)
 		in.userArgs = append(in.userArgs, expandAll(preset.Args, vars)...)
 	}
 	in.userArgs = append(in.userArgs, extraArgs...)
 	in.toolchain = tc.cmakeArgs(in.userArgs)
 	in.flagsPath, in.flagsContent = configFlagsFile(p)
-	if isMultiConfig(p.Cfg) {
+	if isMultiConfig(p.Cfg, preset) {
 		in.multiConfig = append(in.multiConfig,
-			"-DCMAKE_CONFIGURATION_TYPES="+strings.Join(effectiveConfigurations(p.Cfg), ";"))
-		if d := p.Cfg.Configure.Default; d != "" {
+			"-DCMAKE_CONFIGURATION_TYPES="+strings.Join(effectiveConfigurations(p.Cfg, preset), ";"))
+		if d := effectiveDefaultConfiguration(p.Cfg, preset); d != "" {
 			in.multiConfig = append(in.multiConfig, "-DCMAKE_DEFAULT_BUILD_TYPE="+d)
 		}
 		if in.flagsContent != "" {
@@ -239,6 +254,7 @@ func (in *injectionParts) argv() []string {
 // plus the content hash of injected files and the [env] overlay.
 func (in *injectionParts) stampArgs() []string {
 	out := in.argv()
+	out = append(out, "preset:"+in.preset, "generator:"+in.generator)
 	if in.flagsContent != "" {
 		// Hash the computed content, not the on-disk file: the identity
 		// must not depend on whether the file has been materialized yet.
@@ -287,7 +303,7 @@ func launcherArgs(launcher string) []string {
 	}
 	path, err := exec.LookPath(launcher)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "cmk: warning: compiler_launcher %q not found on PATH; building without it\n", launcher)
+		fmt.Fprintf(os.Stderr, "cmk: warning: launcher %q not found on PATH; building without it\n", launcher)
 		return nil
 	}
 	return []string{
@@ -336,13 +352,13 @@ func injectionHash(args []string) string {
 // instead of silently dropping them with the --fresh cache wipe. An
 // explicit `cmk config` remains authoritative and resets them.
 type injectionStamp struct {
-	Hash  string   `json:"hash"`
-	Extra []string `json:"extra,omitempty"`
+	Hash   string   `json:"hash"`
+	Preset string   `json:"preset,omitempty"`
+	Extra  []string `json:"extra,omitempty"`
 }
 
-// loadInjectionStamp returns the recorded stamp, or nil when the dir has
-// none (never cmk-configured, or a pre-JSON stamp — either way the next
-// configure re-stamps it).
+// loadInjectionStamp returns the recorded stamp, or nil when the build tree
+// has no valid cmk injection identity.
 func loadInjectionStamp(dir string) *injectionStamp {
 	data, err := os.ReadFile(filepath.Join(dir, injectionStampFile))
 	if err != nil {
@@ -363,16 +379,15 @@ func stampExtra(dir string) []string {
 	return nil
 }
 
-// injectionChanged reports whether the build dir was last configured
-// with a different injected argument set (or by an older cmk that
-// didn't record one).
+// injectionChanged reports whether the build tree records the requested
+// injection identity.
 func injectionChanged(dir string, args []string) bool {
 	st := loadInjectionStamp(dir)
 	return st == nil || st.Hash != injectionHash(args)
 }
 
-func writeInjectionStamp(dir string, args, extra []string) {
-	data, err := json.Marshal(&injectionStamp{Hash: injectionHash(args), Extra: extra})
+func writeInjectionStamp(dir string, args, extra []string, preset string) {
+	data, err := json.Marshal(&injectionStamp{Hash: injectionHash(args), Preset: preset, Extra: extra})
 	if err == nil {
 		err = os.WriteFile(filepath.Join(dir, injectionStampFile), append(data, '\n'), 0o644)
 	}
@@ -396,10 +411,10 @@ func resolvePreset(cfg *Config, name string) (*PresetCfg, error) {
 		}
 		return pr, nil
 	}
-	if d := cfg.Configure.Default; d != "" {
+	if d := cfg.Configure.DefaultPreset; d != "" {
 		pr, ok := presets[d]
 		if !ok {
-			return nil, fmt.Errorf("[config].default = %q does not name a preset", d)
+			return nil, fmt.Errorf("cmake.default-preset %q does not name a preset", d)
 		}
 		return pr, nil
 	}
@@ -411,7 +426,7 @@ func resolvePreset(cfg *Config, name string) (*PresetCfg, error) {
 			return pr, nil
 		}
 	}
-	return nil, fmt.Errorf("multiple presets defined; pick one of: %s (or set [config].default)",
+	return nil, fmt.Errorf("multiple presets defined; pick one of: %s (or set cmake.default-preset)",
 		strings.Join(presetNames(presets), ", "))
 }
 

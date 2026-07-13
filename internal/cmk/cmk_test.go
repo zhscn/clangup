@@ -36,16 +36,17 @@ func TestExpandVars(t *testing.T) {
 
 func TestCobraBuildConvenienceParsing(t *testing.T) {
 	command := newBuildCommand()
-	if err := command.ParseFlags([]string{"-cAsan", "-j8", "-iv", "-tfoo", "--target=bar"}); err != nil {
+	if err := command.ParseFlags([]string{"-pminimal", "-cAsan", "-j8", "-iv", "-tfoo", "--target=bar"}); err != nil {
 		t.Fatal(err)
 	}
 	config, _ := command.Flags().GetString("config")
+	preset, _ := command.Flags().GetString("preset")
 	jobs, _ := command.Flags().GetInt("jobs")
 	interactive, _ := command.Flags().GetBool("interactive")
 	verbose, _ := command.Flags().GetBool("verbose")
 	targets, _ := command.Flags().GetStringArray("target")
-	if config != "Asan" || jobs != 8 || !interactive || !verbose {
-		t.Fatalf("flags parsed as config=%q jobs=%d interactive=%v verbose=%v", config, jobs, interactive, verbose)
+	if preset != "minimal" || config != "Asan" || jobs != 8 || !interactive || !verbose {
+		t.Fatalf("flags parsed as preset=%q config=%q jobs=%d interactive=%v verbose=%v", preset, config, jobs, interactive, verbose)
 	}
 	if !eqStrings(targets, []string{"foo", "bar"}) {
 		t.Fatalf("targets = %v, want [foo bar]", targets)
@@ -472,233 +473,150 @@ func TestIsMultiConfig(t *testing.T) {
 	}
 	for gen, want := range cases {
 		cfg := &Config{Configure: ConfigureCfg{Generator: gen}}
-		if got := isMultiConfig(cfg); got != want {
+		if got := isMultiConfig(cfg, nil); got != want {
 			t.Errorf("isMultiConfig(%q) = %v, want %v", gen, got, want)
 		}
 	}
-}
-
-func TestEffectiveConfigurations(t *testing.T) {
-	// explicit list preserved verbatim
-	cfg := &Config{Configure: ConfigureCfg{Configurations: []string{"Debug", "Release"}}}
-	if got := effectiveConfigurations(cfg); strings.Join(got, ",") != "Debug,Release" {
-		t.Errorf("explicit list: %v", got)
+	cfg := &Config{Configure: ConfigureCfg{Generator: "Ninja Multi-Config"}}
+	if isMultiConfig(cfg, &PresetCfg{Generator: "Ninja"}) {
+		t.Error("preset generator must override the global multi-config generator")
 	}
-	// empty -> CMake standard four
-	cfg = &Config{}
-	if got := effectiveConfigurations(cfg); strings.Join(got, ",") != "Debug,Release,RelWithDebInfo,MinSizeRel" {
-		t.Errorf("default list: %v", got)
-	}
-	// custom configs auto-enable, appended sorted after the explicit list
-	cfg = &Config{Configure: ConfigureCfg{
-		Configurations: []string{"Debug"},
-		Configuration:  map[string]*ConfigurationCfg{"Tsan": {}, "Asan": {}},
-		Default:        "Asan",
-	}}
-	if got := effectiveConfigurations(cfg); strings.Join(got, ",") != "Debug,Asan,Tsan" {
-		t.Errorf("custom configs: %v", got)
-	}
-	// a custom config already in the list isn't duplicated
-	cfg = &Config{Configure: ConfigureCfg{
-		Configurations: []string{"Debug", "Asan"},
-		Configuration:  map[string]*ConfigurationCfg{"Asan": {}},
-	}}
-	if got := effectiveConfigurations(cfg); strings.Join(got, ",") != "Debug,Asan" {
-		t.Errorf("no dup: %v", got)
+	cfg.Configure.Generator = "Ninja"
+	if !isMultiConfig(cfg, &PresetCfg{Generator: "Ninja Multi-Config"}) {
+		t.Error("preset generator must override the global single-config generator")
 	}
 }
 
-func TestResolveConfig(t *testing.T) {
-	// single-config: empty unless -c given (then an error)
-	p := &Project{Cfg: &Config{}}
-	if got, err := p.resolveConfig(""); err != nil || got != "" {
-		t.Errorf("single-config default: %q, %v", got, err)
+func TestYAMLConfigMatrix(t *testing.T) {
+	root := t.TempDir()
+	body := `version: 1
+toolchain:
+  default: default
+  linux: libcxx
+cmake:
+  generator: Ninja Multi-Config
+  default-preset: default
+  default-configuration: Debug
+  variables:
+    ENABLE_LOGGING: true
+  presets:
+    default:
+      build: build/default
+    minimal:
+      build: build/minimal
+      default-configuration: Asan
+      configurations: [Asan]
+      variables:
+        ENABLE_OPTIONAL: false
+    single:
+      build: build/single
+      generator: Ninja
+      variables:
+        CMAKE_BUILD_TYPE: Release
+  configurations:
+    - name: Debug
+    - name: Asan
+      inherits: Debug
+      compile: [-fsanitize=address]
+      link: [-fsanitize=address]
+`
+	if err := os.WriteFile(filepath.Join(root, configFileName), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := p.resolveConfig("Debug"); err == nil {
-		t.Error("single-config with -c must error")
+	cfg, err := loadConfig(root)
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	// multi-config: explicit, default, first-fallback
-	p = &Project{Cfg: &Config{Configure: ConfigureCfg{
-		Generator:      "Ninja Multi-Config",
-		Configurations: []string{"Debug", "Release", "Asan"},
-		Default:        "Release",
-	}}}
-	if got, _ := p.resolveConfig("Asan"); got != "Asan" {
-		t.Errorf("explicit: %q", got)
+	if got := strings.Join(effectiveConfigurations(cfg, nil), ","); got != "Debug,Asan" {
+		t.Fatalf("configurations = %s", got)
 	}
-	if _, err := p.resolveConfig("Nope"); err == nil {
-		t.Error("unknown config must error")
+	if cfg.Configure.Presets["minimal"].Build != "build/minimal" || cfg.Toolchain.selectorFor("linux", "x86_64") != "libcxx" {
+		t.Fatalf("unexpected config: %+v", cfg)
 	}
-	if got, _ := p.resolveConfig(""); got != "Release" {
-		t.Errorf("default: %q", got)
+	p := &Project{Root: root, Cfg: cfg, Lock: &Lock{}, BuildDirs: map[string]string{}}
+	dir, configuration, err := p.resolveVariant("", "minimal", "Asan")
+	if err != nil || dir != filepath.Join(root, "build/minimal") || configuration != "Asan" {
+		t.Fatalf("variant = %q, %q, %v", dir, configuration, err)
 	}
-	p.Cfg.Configure.Default = ""
-	if got, _ := p.resolveConfig(""); got != "Debug" {
-		t.Errorf("first fallback: %q", got)
+	if _, _, err := p.resolveVariant("", "minimal", "Debug"); err == nil {
+		t.Fatal("preset accepted a configuration outside its selected subset")
+	}
+	if _, _, err := p.resolveVariant("", "single", "Asan"); err == nil {
+		t.Fatal("single-config preset accepted --config")
+	}
+	_, content := configFlagsFile(p)
+	if !strings.Contains(content, `cmk_set_config_flag(CMAKE_CXX_FLAGS_ASAN "CMAKE_CXX_FLAGS_DEBUG" "-fsanitize=address"`) {
+		t.Fatalf("configuration flags missing:\n%s", content)
 	}
 }
 
-func TestResolveVariant(t *testing.T) {
-	// preset mode: -c <preset> selects the preset by name (its build dir),
-	// with no --config; mirrors `cmk config <preset>`.
-	p := &Project{
-		Root: "/proj",
-		Cfg: &Config{Configure: ConfigureCfg{
-			Presets: map[string]*PresetCfg{
-				"debug":   {Dir: "build/debug"},
-				"release": {Dir: "build/release"},
+func TestYAMLConfigValidation(t *testing.T) {
+	for name, body := range map[string]string{
+		"unknown field": `version: 1
+cmake:
+  typo: true
+`,
+		"inheritance cycle": `version: 1
+cmake:
+  generator: Ninja Multi-Config
+  configurations:
+    - {name: A, inherits: B}
+    - {name: B, inherits: A}
+`,
+		"duplicate build": `version: 1
+cmake:
+  presets:
+    a: {build: build}
+    b: {build: build}
+`,
+		"cmk-owned variable": `version: 1
+cmake:
+  variables:
+    CMAKE_CONFIGURATION_TYPES: Debug
+`,
+		"unknown preset configuration": `version: 1
+cmake:
+  generator: Ninja Multi-Config
+  presets:
+    default:
+      configurations: [Unknown]
+`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, configFileName), []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := loadConfig(root); err == nil {
+				t.Fatal("invalid configuration accepted")
+			}
+		})
+	}
+}
+
+func TestWriteUserPresetsMatrix(t *testing.T) {
+	root := t.TempDir()
+	cfg := &Config{Configure: ConfigureCfg{
+		Generator:            "Ninja Multi-Config",
+		DefaultPreset:        "default",
+		DefaultConfiguration: "Debug",
+		Presets: map[string]*PresetCfg{
+			"default": {
+				Name:                 "default",
+				Build:                "build/default",
+				Configurations:       []string{"Release"},
+				DefaultConfiguration: "Release",
 			},
-			Default: "debug",
-		}},
-		BuildDirs: map[string]string{
-			"build/debug":   "/proj/build/debug",
-			"build/release": "/proj/build/release",
+			"minimal": {Name: "minimal", Build: "build/minimal", Generator: "Ninja"},
 		},
-	}
-	if dir, cfg, err := p.resolveVariant("", "release"); err != nil || dir != "/proj/build/release" || cfg != "" {
-		t.Errorf("preset -c release: dir=%q cfg=%q err=%v", dir, cfg, err)
-	}
-	if dir, cfg, err := p.resolveVariant("", ""); err != nil || dir != "/proj/build/debug" || cfg != "" {
-		t.Errorf("preset default: dir=%q cfg=%q err=%v", dir, cfg, err)
-	}
-	if _, _, err := p.resolveVariant("", "nope"); err == nil {
-		t.Error("unknown preset -c must error")
-	}
-	if _, _, err := p.resolveVariant("build/debug", "release"); err == nil {
-		t.Error("-b together with -c must error in preset mode")
-	}
-
-	// plain single-config (no presets): -c has nothing to select.
-	ps := &Project{Root: "/p", Cfg: &Config{}, BuildDirs: map[string]string{"build": "/p/build"}}
-	if _, _, err := ps.resolveVariant("", "x"); err == nil {
-		t.Error("single-config without presets: -c must error")
-	}
-	if dir, cfg, err := ps.resolveVariant("", ""); err != nil || dir != "/p/build" || cfg != "" {
-		t.Errorf("single-config default: dir=%q cfg=%q err=%v", dir, cfg, err)
-	}
-
-	// multi-config: -c is the configuration; the build tree is the single dir.
-	pm := &Project{
-		Root: "/m",
-		Cfg: &Config{Configure: ConfigureCfg{
-			Generator:      "Ninja Multi-Config",
-			Configurations: []string{"Debug", "Asan"},
-			Default:        "Asan",
-		}},
-		BuildDirs: map[string]string{"build": "/m/build"},
-	}
-	if dir, cfg, err := pm.resolveVariant("", "Debug"); err != nil || dir != "/m/build" || cfg != "Debug" {
-		t.Errorf("multi -c Debug: dir=%q cfg=%q err=%v", dir, cfg, err)
-	}
-	if dir, cfg, err := pm.resolveVariant("", ""); err != nil || dir != "/m/build" || cfg != "Asan" {
-		t.Errorf("multi default: dir=%q cfg=%q err=%v", dir, cfg, err)
-	}
-}
-
-func TestWriteConfigFlagsFile(t *testing.T) {
-	root := t.TempDir()
-	p := &Project{Root: root, Cfg: &Config{Configure: ConfigureCfg{
-		Generator:      "Ninja Multi-Config",
-		Configurations: []string{"Debug", "Asan"},
-		Configuration: map[string]*ConfigurationCfg{
-			"Asan":           {Inherits: "Debug", Flags: "-fsanitize=address", LinkFlags: "-fsanitize=address"},
-			"RelWithDebInfo": {AppendFlags: "-fno-omit-frame-pointer", AppendLinkFlags: "-Wl,--as-needed"},
-		},
-	}}}
-	if err := writeConfigFlagsFile(p); err != nil {
-		t.Fatal(err)
-	}
-	path, content := configFlagsFile(p)
-	if content == "" {
-		t.Fatal("expected content for custom configs")
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != content {
-		t.Error("materialized file must match the computed content")
-	}
-	s := string(data)
-	// inherits seeds from the base config's flags; suffix is upper-cased
-	if !strings.Contains(s, `set(CMAKE_CXX_FLAGS_ASAN "${CMAKE_CXX_FLAGS_DEBUG} -fsanitize=address" CACHE STRING`) {
-		t.Errorf("missing/incorrect CXX flags line:\n%s", s)
-	}
-	if !strings.Contains(s, `set(CMAKE_EXE_LINKER_FLAGS_ASAN "${CMAKE_EXE_LINKER_FLAGS_DEBUG} -fsanitize=address"`) {
-		t.Errorf("missing/incorrect exe linker line:\n%s", s)
-	}
-	if !strings.Contains(s, `cmk_append_config_flag(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-fno-omit-frame-pointer" "cmk: RelWithDebInfo C++ flags")`) {
-		t.Errorf("missing/incorrect append CXX flags line:\n%s", s)
-	}
-	if !strings.Contains(s, `cmk_append_config_flag(CMAKE_EXE_LINKER_FLAGS_RELWITHDEBINFO "-Wl,--as-needed" "cmk: RelWithDebInfo exe linker flags")`) {
-		t.Errorf("missing/incorrect append linker flags line:\n%s", s)
-	}
-	if strings.Contains(s, `set(CMAKE_CXX_FLAGS_RELWITHDEBINFO`) {
-		t.Errorf("append-only built-in config must not replace defaults:\n%s", s)
-	}
-
-	// no custom configs -> no file, and a stale one is removed
-	p.Cfg.Configure.Configuration = nil
-	if _, content := configFlagsFile(p); content != "" {
-		t.Errorf("expected no content, got %q", content)
-	}
-	if err := writeConfigFlagsFile(p); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Error("stale flags file must be removed")
-	}
-}
-
-func TestInjectionStampCoversFlagsContent(t *testing.T) {
-	root := t.TempDir()
-	p := &Project{Root: root, Lock: &Lock{}, Cfg: &Config{Configure: ConfigureCfg{
-		Generator:     "Ninja Multi-Config",
-		Configuration: map[string]*ConfigurationCfg{"Asan": {Flags: "-fsanitize=address"}},
-	}}}
-	tc := &Toolchain{CC: "cc", CXX: "c++"}
-	_, first, err := computeInjection(p, tc, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p.Cfg.Configure.Configuration["Asan"].Flags = "-fsanitize=address,undefined"
-	_, second, err := computeInjection(p, tc, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if injectionHash(first) == injectionHash(second) {
-		t.Fatal("flag edits must change the injection stamp")
-	}
-}
-
-func TestWriteUserPresetsMultiConfigCustomConfiguration(t *testing.T) {
-	root := t.TempDir()
-	p := &Project{Root: root, Cfg: &Config{Configure: ConfigureCfg{
-		Generator:      "Ninja Multi-Config",
-		Configurations: []string{"Debug", "Asan"},
-		Default:        "Debug",
-		Configuration: map[string]*ConfigurationCfg{
-			"Asan": {
-				Inherits:  "Debug",
-				Flags:     "-fsanitize=address",
-				LinkFlags: "-fsanitize=address",
-			},
-		},
-	}}}
-	if err := writeConfigFlagsFile(p); err != nil {
-		t.Fatal(err)
-	}
-	tc := &Toolchain{
-		Root: "/opt/clang",
-		CC:   "/opt/clang/bin/clang",
-		CXX:  "/opt/clang/bin/clang++",
-		File: "/opt/clang/toolchain.cmake",
-	}
+		Configurations: []*ConfigurationCfg{{Name: "Debug"}, {Name: "Release"}},
+	}}
+	normalizeConfig(cfg)
+	p := &Project{Root: root, Cfg: cfg, Lock: &Lock{}}
+	tc := &Toolchain{CC: "/opt/clang/bin/clang", CXX: "/opt/clang/bin/clang++"}
 	if err := writeUserPresets(p, tc); err != nil {
 		t.Fatal(err)
 	}
-
 	data, err := os.ReadFile(filepath.Join(root, "CMakeUserPresets.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -707,65 +625,14 @@ func TestWriteUserPresetsMultiConfigCustomConfiguration(t *testing.T) {
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatal(err)
 	}
-	if len(got.ConfigurePresets) != 1 {
-		t.Fatalf("configurePresets = %d, want 1", len(got.ConfigurePresets))
+	if len(got.ConfigurePresets) != 2 || len(got.BuildPresets) != 2 || len(got.TestPresets) != 2 {
+		t.Fatalf("preset matrix sizes = %d/%d/%d", len(got.ConfigurePresets), len(got.BuildPresets), len(got.TestPresets))
 	}
-	cfg := got.ConfigurePresets[0]
-	if cfg.Name != "cmk-default" {
-		t.Fatalf("configure preset name = %q, want cmk-default", cfg.Name)
+	if got.BuildPresets[0].Name != "cmk-default-Release" || got.ConfigurePresets[0].CacheVariables["CMAKE_CONFIGURATION_TYPES"] != "Release" {
+		t.Fatalf("preset configuration subset was not preserved: %+v / %+v", got.ConfigurePresets[0], got.BuildPresets[0])
 	}
-	if got := cfg.CacheVariables["CMAKE_CONFIGURATION_TYPES"]; got != "Debug;Asan" {
-		t.Errorf("CMAKE_CONFIGURATION_TYPES = %q, want Debug;Asan", got)
-	}
-	if got := cfg.CacheVariables["CMAKE_PROJECT_INCLUDE"]; got != "${sourceDir}/"+configFlagsFileRel {
-		t.Errorf("CMAKE_PROJECT_INCLUDE = %q", got)
-	}
-	if _, ok := cfg.CacheVariables["CMAKE_CXX_FLAGS_ASAN"]; ok {
-		t.Error("custom config flags belong in configurations.cmake, not inline preset cache variables")
-	}
-
-	foundBuild, foundTest := false, false
-	for _, bp := range got.BuildPresets {
-		if bp.Name == "cmk-Asan" {
-			foundBuild = true
-			if bp.ConfigurePreset != "cmk-default" || bp.Configuration != "Asan" {
-				t.Errorf("cmk-Asan build preset = %+v", bp)
-			}
-		}
-	}
-	for _, tp := range got.TestPresets {
-		if tp.Name == "cmk-Asan" {
-			foundTest = true
-			if tp.ConfigurePreset != "cmk-default" || tp.Configuration != "Asan" {
-				t.Errorf("cmk-Asan test preset = %+v", tp)
-			}
-		}
-	}
-	if !foundBuild || !foundTest {
-		t.Fatalf("cmk-Asan build/test presets found = %v/%v", foundBuild, foundTest)
-	}
-}
-
-func TestMultiConfigValidation(t *testing.T) {
-	write := func(body string) error {
-		root := t.TempDir()
-		if err := os.WriteFile(filepath.Join(root, "cmk.toml"), []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		_, err := loadConfig(root)
-		return err
-	}
-	// presets alongside a multi-config generator is rejected
-	if err := write("[config]\ngenerator = \"Ninja Multi-Config\"\n[config.preset.debug]\ndir = \"build\"\n"); err == nil {
-		t.Error("multi-config + presets must error")
-	}
-	// default not among configurations is rejected
-	if err := write("[config]\ngenerator = \"Ninja Multi-Config\"\nconfigurations = [\"Debug\"]\ndefault = \"Release\"\n"); err == nil {
-		t.Error("default outside configurations must error")
-	}
-	// valid multi-config config loads
-	if err := write("[config]\ngenerator = \"Ninja Multi-Config\"\nconfigurations = [\"Debug\", \"Release\"]\ndefault = \"Debug\"\n"); err != nil {
-		t.Errorf("valid multi-config rejected: %v", err)
+	if got.ConfigurePresets[1].Generator != "Ninja" || got.BuildPresets[1].Name != "cmk-minimal" {
+		t.Fatalf("preset generator override was not preserved: %+v / %+v", got.ConfigurePresets[1], got.BuildPresets[1])
 	}
 }
 

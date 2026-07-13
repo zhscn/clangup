@@ -21,14 +21,14 @@ func cmdBuild(positionalTargets, passthrough []string, options buildOptions) err
 	if err != nil {
 		return err
 	}
-	if err := bootstrapIfUnconfigured(p, options.BuildDir, options.Config, policy); err != nil {
+	if err := bootstrapIfUnconfigured(p, options.BuildDir, options.Preset, policy); err != nil {
 		return err
 	}
-	dir, cfgName, err := p.resolveVariant(options.BuildDir, options.Config)
+	dir, cfgName, err := p.resolveVariant(options.BuildDir, options.Preset, options.Config)
 	if err != nil {
 		return err
 	}
-	passThrough := p.toolchainSelector() == "" && loadInjectionStamp(dir) == nil
+	passThrough := !p.hasCmkConfig()
 	if !passThrough {
 		if err := ensureConfigured(p, dir, policy); err != nil {
 			return err
@@ -86,11 +86,11 @@ func cmdRun(targetName string, options runOptions) error {
 		return err
 	}
 	if !options.NoBuild {
-		if err := bootstrapIfUnconfigured(p, options.BuildDir, options.Config, policy); err != nil {
+		if err := bootstrapIfUnconfigured(p, options.BuildDir, options.Preset, policy); err != nil {
 			return err
 		}
 	}
-	dir, cfgName, err := p.resolveVariant(options.BuildDir, options.Config)
+	dir, cfgName, err := p.resolveVariant(options.BuildDir, options.Preset, options.Config)
 	if err != nil {
 		return err
 	}
@@ -183,10 +183,10 @@ func cmdTU(names []string, options tuOptions) error {
 	if err != nil {
 		return err
 	}
-	if err := bootstrapIfUnconfigured(p, options.BuildDir, options.Config, policy); err != nil {
+	if err := bootstrapIfUnconfigured(p, options.BuildDir, options.Preset, policy); err != nil {
 		return err
 	}
-	dir, cfgName, err := p.resolveVariant(options.BuildDir, options.Config)
+	dir, cfgName, err := p.resolveVariant(options.BuildDir, options.Preset, options.Config)
 	if err != nil {
 		return err
 	}
@@ -321,6 +321,9 @@ func cmdRefresh(name string) error {
 	p, err := openProject()
 	if err != nil {
 		return err
+	}
+	if !p.hasCmkConfig() {
+		return fmt.Errorf("cmk refresh requires %s", configFileName)
 	}
 	dir, err := p.resolveBuildDir(name)
 	if err != nil {

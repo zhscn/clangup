@@ -11,7 +11,7 @@ import (
 
 // syncRootCompileCommands refreshes the project-root compile_commands.json
 // from the database CMake exported into buildDir, honoring
-// [config].compile_commands. It is a no-op when that setting is empty or
+// cmake.compile-commands. It is a no-op when that setting is empty or
 // when buildDir has no database yet (configure not run, or export disabled).
 //
 // clangd resolves a source file's compile command from the nearest
@@ -20,7 +20,7 @@ import (
 // database carries one entry per file *per configuration*, and clangd would
 // use whichever comes first (the first configuration, not the default);
 // narrowing the root copy to a single configuration fixes that.
-func (p *Project) syncRootCompileCommands(buildDir string) error {
+func (p *Project) syncRootCompileCommands(buildDir string, preset *PresetCfg) error {
 	sel := p.Cfg.Configure.CompileCommands
 	if sel == "" {
 		return nil
@@ -31,10 +31,10 @@ func (p *Project) syncRootCompileCommands(buildDir string) error {
 	}
 
 	out := data
-	if isMultiConfig(p.Cfg) {
+	if isMultiConfig(p.Cfg, preset) {
 		cfg := sel
 		if cfg == "default" {
-			if cfg, err = p.resolveConfig(""); err != nil {
+			if cfg, err = p.resolveConfig(preset, ""); err != nil {
 				return err
 			}
 		}
@@ -65,8 +65,8 @@ func (p *Project) syncRootCompileCommands(buildDir string) error {
 // filterCompileCommands keeps only the entries a Ninja Multi-Config build
 // emitted for the given configuration. Each object path nests the
 // configuration as a path segment (…/<target>.dir/<Config>/foo.cc.o), so a
-// "/<Config>/" match on the output (or the command, if an older CMake omitted
-// the output field) selects one configuration's worth of entries. Entry
+// "/<Config>/" match on the output, command, or arguments selects one
+// configuration's entries. Entry
 // contents are preserved; the file is re-indented.
 func filterCompileCommands(data []byte, config string) ([]byte, error) {
 	var raws []json.RawMessage

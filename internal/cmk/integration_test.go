@@ -48,10 +48,20 @@ file(GLOB_RECURSE SRCS CONFIGURE_DEPENDS "src/*.cc")
 add_executable(hello ${SRCS})
 `)
 	write("src/main.cc", "int main() { return 0; }\n")
-	write("cmk.toml", `[config]
-generator = "Ninja Multi-Config"
-configurations = ["Debug", "Release"]
-default = "Debug"
+	write("cmk.yaml", `version: 1
+cmake:
+  generator: Ninja Multi-Config
+  default-preset: default
+  default-configuration: Debug
+  presets:
+    default: {build: build}
+  configurations:
+    - {name: Debug}
+    - {name: Release}
+    - name: Asan
+      inherits: Debug
+      compile: [-fsanitize=address]
+      link: [-fsanitize=address]
 `)
 	t.Chdir(root)
 	p, err := openProject()
@@ -94,6 +104,19 @@ func TestIntegrationReconfigureLifecycle(t *testing.T) {
 	dir := filepath.Join(root, "build")
 	if _, err := os.Stat(filepath.Join(dir, "CMakeCache.txt")); err != nil {
 		t.Fatalf("bootstrap did not configure: %v", err)
+	}
+	cache, err := os.ReadFile(filepath.Join(dir, "CMakeCache.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundAsanFlags := false
+	for line := range strings.Lines(string(cache)) {
+		if strings.HasPrefix(line, "CMAKE_CXX_FLAGS_ASAN:STRING=") && strings.Contains(line, "-fsanitize=address") {
+			foundAsanFlags = true
+		}
+	}
+	if !foundAsanFlags {
+		t.Fatal("custom configuration flags missing from cache")
 	}
 
 	// The generated build system must carry no regen or glob-verify
@@ -209,18 +232,13 @@ func TestIntegrationForeignProjectLeftAlone(t *testing.T) {
 		[]byte("cmake_minimum_required(VERSION 3.27)\nproject(f NONE)\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// Configured by hand, not by cmk — and no cmk.toml anywhere.
+	// Configured by hand, not by cmk — and no cmk.yaml anywhere.
 	dir := filepath.Join(root, "build")
 	out, err := exec.Command("cmake", "-S", root, "-B", dir, "-G", "Ninja", "-DFOREIGN_OPT=1").CombinedOutput()
 	if err != nil {
 		t.Fatalf("manual configure: %v\n%s", err, out)
 	}
 	t.Chdir(root)
-	// A git root would normally be required to even resolve a project;
-	// fake the minimum: openProject falls back to git, so init one.
-	if out, err := exec.Command("git", "init", "-q", root).CombinedOutput(); err != nil {
-		t.Skipf("git init: %v\n%s", err, out)
-	}
 	p, err := openProject()
 	if err != nil {
 		t.Fatal(err)

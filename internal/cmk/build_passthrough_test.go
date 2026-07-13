@@ -3,7 +3,6 @@ package cmk
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -15,9 +14,6 @@ func TestBuildUsesExistingCMakeTreeWithoutManagedToolchain(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(bin, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, configFileName), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(build, "CMakeCache.txt"), nil, 0o644); err != nil {
@@ -34,14 +30,15 @@ func TestBuildUsesExistingCMakeTreeWithoutManagedToolchain(t *testing.T) {
 	t.Setenv("CC", "")
 	t.Setenv("CXX", "")
 
-	if err := cmdBuild(nil, nil, buildOptions{Jobs: defaultJobs()}); err != nil {
+	if err := cmdBuild([]string{"app"}, []string{"-v"}, buildOptions{BuildDir: build, Config: "Release", Jobs: 3}); err != nil {
 		t.Fatal(err)
 	}
 	arguments, err := os.ReadFile(log)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(string(arguments), "--build "+build+" -j ") {
+	want := "--build " + build + " -j 3 --config Release --target app -- -v\n"
+	if string(arguments) != want {
 		t.Fatalf("cmake arguments = %q", arguments)
 	}
 	if fileExists(filepath.Join(build, injectionStampFile)) {

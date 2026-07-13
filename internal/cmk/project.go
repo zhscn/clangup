@@ -2,7 +2,6 @@ package cmk
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -66,19 +65,26 @@ func openProject() (*Project, error) {
 	}
 	p := &Project{Root: root, Cfg: cfg, Lock: lk, BuildDirs: map[string]string{}}
 	p.scanBuildDirs()
+	p.registerManagedBuildDirs()
 	return p, nil
 }
 
-// findProjectRoot walks up from the PWD looking for cmk.toml, falling
-// back to the git toplevel (preferring a superproject).
+// findProjectRoot walks up from the PWD looking for cmk.yaml, then uses an
+// enclosing foreign CMake build tree, the git toplevel, or the PWD.
 func findProjectRoot() (string, error) {
 	dir, err := os.Getwd()
 	if err != nil {
 		return "", err
 	}
+	nearestBuildTree := ""
 	for d := dir; ; {
 		if _, err := os.Stat(filepath.Join(d, configFileName)); err == nil {
 			return d, nil
+		}
+		if nearestBuildTree == "" {
+			if _, err := os.Stat(filepath.Join(d, "CMakeCache.txt")); err == nil {
+				nearestBuildTree = d
+			}
 		}
 		parent := filepath.Dir(d)
 		if parent == d {
@@ -86,15 +92,18 @@ func findProjectRoot() (string, error) {
 		}
 		d = parent
 	}
+	if nearestBuildTree != "" {
+		return nearestBuildTree, nil
+	}
 	cmd := exec.Command("git", "rev-parse", "--show-superproject-working-tree", "--show-toplevel")
 	cmd.Env = append(os.Environ(), "GIT_DISCOVERY_ACROSS_FILESYSTEM=1")
 	out, err := cmd.Output()
 	if err != nil {
-		return "", errors.New("no cmk.toml found and not inside a git repository")
+		return dir, nil
 	}
 	head, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
 	if head == "" {
-		return "", errors.New("cannot determine project root")
+		return dir, nil
 	}
 	return head, nil
 }
@@ -109,7 +118,26 @@ func maxScanDepth() int {
 }
 
 func (p *Project) scanBuildDirs() {
+	if _, err := os.Stat(filepath.Join(p.Root, "CMakeCache.txt")); err == nil {
+		p.BuildDirs["."] = p.Root
+	}
 	p.collectBuildDirs(p.Root, 1, maxScanDepth())
+}
+
+func (p *Project) registerManagedBuildDirs() {
+	if !p.hasCmkConfig() {
+		return
+	}
+	for _, preset := range p.Cfg.Configure.Presets {
+		path := presetBuildDir(p, preset)
+		if _, err := os.Stat(filepath.Join(path, "CMakeCache.txt")); err != nil {
+			continue
+		}
+		rel, err := filepath.Rel(p.Root, path)
+		if err == nil {
+			p.BuildDirs[rel] = path
+		}
+	}
 }
 
 func (p *Project) collectBuildDirs(dir string, depth, maxDepth int) {
@@ -143,29 +171,25 @@ func (p *Project) listBuildDirs() []string {
 	return keys
 }
 
-// resolveBuildDir follows the cascade: explicit name → single dir → PWD
-// inside a dir → [build].default → fzf prompt.
+// resolveBuildDir follows the cascade: explicit name, PWD inside a build
+// tree, the only known tree, the managed default preset, then fzf.
 func (p *Project) resolveBuildDir(name string) (string, error) {
 	if name != "" {
 		if abs, ok := p.BuildDirs[name]; ok {
 			return abs, nil
 		}
-		// allow absolute or PWD-relative paths too
-		if abs, err := filepath.Abs(name); err == nil {
+		candidate := name
+		if p.hasCmkConfig() && !filepath.IsAbs(candidate) {
+			candidate = filepath.Join(p.Root, candidate)
+		}
+		// Managed paths are project-relative; foreign paths are PWD-relative.
+		if abs, err := filepath.Abs(candidate); err == nil {
 			if _, err := os.Stat(filepath.Join(abs, "CMakeCache.txt")); err == nil {
 				return abs, nil
 			}
 		}
 		return "", fmt.Errorf("build directory %q not found (known: %s)",
 			name, strings.Join(p.listBuildDirs(), ", "))
-	}
-	if len(p.BuildDirs) == 0 {
-		return "", errors.New("no CMake build directories found; run `cmk config` first")
-	}
-	if len(p.BuildDirs) == 1 {
-		for _, abs := range p.BuildDirs {
-			return abs, nil
-		}
 	}
 	if pwd, err := os.Getwd(); err == nil {
 		for _, abs := range p.BuildDirs {
@@ -174,18 +198,19 @@ func (p *Project) resolveBuildDir(name string) (string, error) {
 			}
 		}
 	}
-	if d := p.Cfg.Build.Default; d != "" {
-		if abs, ok := p.BuildDirs[d]; ok {
+	if len(p.BuildDirs) == 0 {
+		return "", fmt.Errorf("no CMake build directories found; pass --build or run `cmk config`")
+	}
+	if len(p.BuildDirs) == 1 {
+		for _, abs := range p.BuildDirs {
 			return abs, nil
 		}
-		return "", fmt.Errorf("configured default build dir %q not found (known: %s)",
-			d, strings.Join(p.listBuildDirs(), ", "))
 	}
-	// fall back to the default preset's dir before prompting
-	if d := p.Cfg.Configure.Default; d != "" {
-		if pr := p.Cfg.Configure.Presets[d]; pr != nil && pr.Dir != "" {
-			if abs, ok := p.BuildDirs[filepath.Clean(expandVars(pr.Dir, p.vars()))]; ok {
-				return abs, nil
+	if p.hasCmkConfig() {
+		if preset := p.Cfg.Configure.Presets[p.Cfg.Configure.DefaultPreset]; preset != nil {
+			path := presetBuildDir(p, preset)
+			if _, err := os.Stat(filepath.Join(path, "CMakeCache.txt")); err == nil {
+				return path, nil
 			}
 		}
 	}
@@ -196,13 +221,13 @@ func (p *Project) resolveBuildDir(name string) (string, error) {
 	return p.BuildDirs[sel], nil
 }
 
-// hasCmkToml reports whether the project declares itself cmk-managed.
-func (p *Project) hasCmkToml() bool {
+// hasCmkConfig reports whether the project declares itself cmk-managed.
+func (p *Project) hasCmkConfig() bool {
 	_, err := os.Stat(filepath.Join(p.Root, configFileName))
 	return err == nil
 }
 
-// vars returns the expansion variables available in cmk.toml values.
+// vars returns the expansion variables available in cmk.yaml values.
 // ${DEP_<NAME>} resolves only once the dep has been synced (its stamp
 // is in cmk.lock); before that the reference stays literal, which is
 // visible enough to diagnose.
@@ -251,8 +276,8 @@ func (p *Project) commandEnvWithToolchain(layers ...map[string]string) ([]string
 	return p.commandEnv(all...), nil
 }
 
-// ccacheEnv configures ccache for cross-worktree reuse when [config]
-// compiler_launcher = "ccache". CCACHE_BASEDIR rewrites absolute paths
+// ccacheEnv configures ccache for cross-worktree reuse when the CMake
+// launcher is ccache. CCACHE_BASEDIR rewrites absolute paths
 // under the project root to relative before hashing, so the same TU built
 // in another worktree (same layout, different absolute path) hits the
 // cache; CCACHE_NOHASHDIR keeps the build directory out of the hash.
@@ -328,10 +353,8 @@ func readCodemodel(replyDir string) (*codemodelReply, error) {
 	return &cm, nil
 }
 
-// collectTargets reads the targets for the given configuration ("" picks
-// the only/first one — the single-config case). A missing reply (a build
-// dir configured before the file API queries existed) triggers one full
-// reconfigure to populate it.
+// collectTargets reads the targets for the given configuration ("" picks the
+// single-config entry). A missing reply triggers a managed reconfigure.
 func (p *Project) collectTargets(buildDir, config string) ([]Target, error) {
 	replyDir := filepath.Join(buildDir, ".cmake/api/v1/reply")
 	cm, err := readCodemodel(replyDir)

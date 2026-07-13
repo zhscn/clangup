@@ -202,11 +202,11 @@ func sourceID(d *DepCfg, ld *LockDep) string {
 func depInputs(root, name string, d *DepCfg) (patches, extras []string, err error) {
 	patches, err = resolveInputGlobs(root, d.Patches)
 	if err != nil {
-		return nil, nil, fmt.Errorf("[deps.%s].patches: %w", name, err)
+		return nil, nil, fmt.Errorf("dependencies.%s.patches: %w", name, err)
 	}
 	extras, err = resolveInputGlobs(root, d.ExtraInputs)
 	if err != nil {
-		return nil, nil, fmt.Errorf("[deps.%s].extra_inputs: %w", name, err)
+		return nil, nil, fmt.Errorf("dependencies.%s.extra-inputs: %w", name, err)
 	}
 	return patches, extras, nil
 }
@@ -260,7 +260,7 @@ func hashFiles(root string, rels []string) (string, error) {
 func depStamp(root, name string, d *DepCfg, tcID string, ld *LockDep, needStamps map[string]string, patches, extras []string) (string, error) {
 	script, err := os.ReadFile(filepath.Join(root, d.Script))
 	if err != nil {
-		return "", fmt.Errorf("[deps.%s]: %w", name, err)
+		return "", fmt.Errorf("dependencies.%s: %w", name, err)
 	}
 	h := sha256.New()
 	w := func(parts ...string) {
@@ -287,7 +287,7 @@ func depStamp(root, name string, d *DepCfg, tcID string, ld *LockDep, needStamps
 		for _, rel := range group.files {
 			data, err := os.ReadFile(filepath.Join(root, rel))
 			if err != nil {
-				return "", fmt.Errorf("[deps.%s]: %w", name, err)
+				return "", fmt.Errorf("dependencies.%s: %w", name, err)
 			}
 			w(group.tag, rel)
 			h.Write(data)
@@ -331,7 +331,7 @@ func resolveGitCommit(url, ref string) (string, error) {
 }
 
 // ensureLockEntries pins every floating git dep and drops entries for
-// deps no longer in cmk.toml, returning whether the lock changed.
+// dependencies no longer in cmk.yaml, returning whether the lock changed.
 // Stamps are filled in later, during the sync itself.
 func ensureLockEntries(cfg *Config, lk *Lock, names []string) (bool, error) {
 	dirty := false
@@ -353,7 +353,7 @@ func ensureLockEntries(cfg *Config, lk *Lock, names []string) (bool, error) {
 		fmt.Fprintf(os.Stderr, "cmk: resolving %s %s@%s\n", name, d.Source.Git, d.Source.Ref)
 		commit, err := resolveGitCommit(d.Source.Git, d.Source.Ref)
 		if err != nil {
-			return dirty, fmt.Errorf("[deps.%s]: %w", name, err)
+			return dirty, fmt.Errorf("dependencies.%s: %w", name, err)
 		}
 		if ld == nil {
 			ld = &LockDep{}
@@ -467,7 +467,7 @@ func prepareSrc(entry, root string, d *DepCfg, ld *LockDep, patches []string) (s
 // recipeBaseEnv is the sanitized environment recipes run in: the
 // inherited PATH plus a small whitelist. Shell-session vars like CFLAGS
 // or PKG_CONFIG_PATH must not leak in — the stamp can't see them. Build
-// knobs belong in [deps.<name>].env, which IS hashed.
+// knobs belong in dependencies.<name>.env, which is hashed.
 var recipeEnvKeep = []string{
 	"HOME", "USER", "LOGNAME", "SHELL", "TERM", "TMPDIR", "LANG", "LC_ALL",
 	"http_proxy", "https_proxy", "no_proxy", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",

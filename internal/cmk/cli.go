@@ -8,7 +8,7 @@ import (
 )
 
 type buildOptions struct {
-	BuildDir, Config          string
+	BuildDir, Preset, Config  string
 	TargetFlags               []string
 	Jobs                      int
 	CleanFirst, Interactive   bool
@@ -16,33 +16,33 @@ type buildOptions struct {
 }
 
 type runOptions struct {
-	BuildDir, Config, Target string
-	Jobs                     int
-	NoBuild, Verbose         bool
-	Locked, NoConfig         bool
-	ProgramArgs              []string
+	BuildDir, Preset, Config, Target string
+	Jobs                             int
+	NoBuild, Verbose                 bool
+	Locked, NoConfig                 bool
+	ProgramArgs                      []string
 }
 
 type testOptions struct {
-	BuildDir, Config     string
-	BuildTargets, Labels []string
-	Jobs                 int
-	NoBuild, Verbose     bool
-	Locked, NoConfig     bool
-	CTestArgs            []string
+	BuildDir, Preset, Config string
+	BuildTargets, Labels     []string
+	Jobs                     int
+	NoBuild, Verbose         bool
+	Locked, NoConfig         bool
+	CTestArgs                []string
 }
 
 type installOptions struct {
-	BuildDir, Config, Prefix, Component string
-	Jobs                                int
-	NoBuild, Strip, Verbose             bool
-	Locked, NoConfig                    bool
+	BuildDir, Preset, Config, Prefix, Component string
+	Jobs                                        int
+	NoBuild, Strip, Verbose                     bool
+	Locked, NoConfig                            bool
 }
 
 type tuOptions struct {
-	BuildDir, Config string
-	Jobs             int
-	Locked, NoConfig bool
+	BuildDir, Preset, Config string
+	Jobs                     int
+	Locked, NoConfig         bool
 }
 
 type fmtOptions struct {
@@ -108,10 +108,10 @@ func newNewCommand() *cobra.Command {
 
 func newInitCommand() *cobra.Command {
 	var force bool
-	command := &cobra.Command{Use: "init", Short: "Scaffold cmk.toml in the current project", Args: cobra.NoArgs, RunE: func(_ *cobra.Command, _ []string) error {
+	command := &cobra.Command{Use: "init", Short: "Scaffold cmk.yaml in the current project", Args: cobra.NoArgs, RunE: func(_ *cobra.Command, _ []string) error {
 		return cmdInit(force)
 	}}
-	command.Flags().BoolVarP(&force, "force", "f", false, "Overwrite an existing cmk.toml")
+	command.Flags().BoolVarP(&force, "force", "f", false, "Overwrite an existing cmk.yaml")
 	return command
 }
 
@@ -160,7 +160,7 @@ func newConfigCommand() *cobra.Command {
 		}
 		return cmdConfig(preset, buildDir, passthrough)
 	}}
-	command.Flags().StringVarP(&buildDir, "build-dir", "B", "", "CMake build directory")
+	command.Flags().StringVarP(&buildDir, "build", "b", "", "CMake build directory")
 	return command
 }
 
@@ -172,7 +172,8 @@ func newBuildCommand() *cobra.Command {
 	}}
 	flags := command.Flags()
 	flags.StringVarP(&options.BuildDir, "build", "b", "", "Build directory")
-	flags.StringVarP(&options.Config, "config", "c", "", "Build configuration or preset")
+	flags.StringVarP(&options.Preset, "preset", "p", "", "Configure preset")
+	flags.StringVarP(&options.Config, "config", "c", "", "Build configuration")
 	flags.StringArrayVarP(&options.TargetFlags, "target", "t", nil, "Build target (repeatable)")
 	flags.IntVarP(&options.Jobs, "jobs", "j", options.Jobs, "Parallel jobs")
 	flags.BoolVar(&options.CleanFirst, "clean-first", false, "Clean targets before building")
@@ -206,7 +207,8 @@ func newRunCommand() *cobra.Command {
 	}}
 	flags := command.Flags()
 	flags.StringVarP(&options.BuildDir, "build", "b", "", "Build directory")
-	flags.StringVarP(&options.Config, "config", "c", "", "Build configuration or preset")
+	flags.StringVarP(&options.Preset, "preset", "p", "", "Configure preset")
+	flags.StringVarP(&options.Config, "config", "c", "", "Build configuration")
 	flags.StringVarP(&options.Target, "target", "t", "", "Executable target")
 	flags.IntVarP(&options.Jobs, "jobs", "j", options.Jobs, "Parallel jobs")
 	flags.BoolVar(&options.NoBuild, "no-build", false, "Run without building")
@@ -226,7 +228,8 @@ func newTestCommand() *cobra.Command {
 	}}
 	flags := command.Flags()
 	flags.StringVarP(&options.BuildDir, "build", "b", "", "Build directory")
-	flags.StringVarP(&options.Config, "config", "c", "", "Build configuration or preset")
+	flags.StringVarP(&options.Preset, "preset", "p", "", "Configure preset")
+	flags.StringVarP(&options.Config, "config", "c", "", "Build configuration")
 	flags.StringArrayVarP(&options.BuildTargets, "target", "t", nil, "Build target (repeatable)")
 	flags.StringArrayVarP(&options.Labels, "label", "L", nil, "CTest label (repeatable)")
 	flags.IntVarP(&options.Jobs, "jobs", "j", options.Jobs, "Parallel jobs")
@@ -245,8 +248,9 @@ func newInstallCommand() *cobra.Command {
 	}}
 	flags := command.Flags()
 	flags.StringVarP(&options.BuildDir, "build", "b", "", "Build directory")
-	flags.StringVarP(&options.Config, "config", "c", "", "Build configuration or preset")
-	flags.StringVarP(&options.Prefix, "prefix", "p", "", "Installation prefix")
+	flags.StringVarP(&options.Preset, "preset", "p", "", "Configure preset")
+	flags.StringVarP(&options.Config, "config", "c", "", "Build configuration")
+	flags.StringVar(&options.Prefix, "prefix", "", "Installation prefix")
 	flags.StringVar(&options.Component, "component", "", "Installation component")
 	flags.IntVarP(&options.Jobs, "jobs", "j", options.Jobs, "Parallel jobs")
 	flags.BoolVar(&options.NoBuild, "no-build", false, "Install without building")
@@ -265,7 +269,8 @@ func newTUCommand() *cobra.Command {
 	}}
 	flags := command.Flags()
 	flags.StringVarP(&options.BuildDir, "build", "b", "", "Build directory")
-	flags.StringVarP(&options.Config, "config", "c", "", "Build configuration or preset")
+	flags.StringVarP(&options.Preset, "preset", "p", "", "Configure preset")
+	flags.StringVarP(&options.Config, "config", "c", "", "Build configuration")
 	flags.IntVarP(&options.Jobs, "jobs", "j", options.Jobs, "Parallel jobs")
 	flags.BoolVar(&options.Locked, "locked", false, "Fail when configuration is stale")
 	flags.BoolVar(&options.NoConfig, "no-config", false, "Skip configuration staleness checks")

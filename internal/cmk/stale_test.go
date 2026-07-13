@@ -207,7 +207,7 @@ func TestReconfigureReason(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		writeInjectionStamp(dir, stampArgs, nil)
+		writeInjectionStamp(dir, stampArgs, nil, "")
 	}
 	stamp()
 
@@ -240,10 +240,10 @@ func TestReconfigureReason(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// cmk.toml is a cmk-side input CMake knows nothing about.
+	// cmk.yaml is a cmk-side input CMake knows nothing about.
 	write(configFileName, future)
 	if got := p.reconfigureReason(dir, tc, nil); !strings.Contains(got, configFileName+" changed") {
-		t.Fatalf("touched cmk.toml: got %q", got)
+		t.Fatalf("touched cmk.yaml: got %q", got)
 	}
 	write(configFileName, past)
 
@@ -292,7 +292,7 @@ func TestReconfigureReason(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeInjectionStamp(dir, extraStamp, extra)
+	writeInjectionStamp(dir, extraStamp, extra, "")
 	if got := p.reconfigureReason(dir, tc, nil); got != "" {
 		t.Fatalf("stamped extra args: got %q, want no reason", got)
 	}
@@ -322,8 +322,8 @@ func TestComputeInjectionSuppressesRegeneration(t *testing.T) {
 
 func TestPresetForDir(t *testing.T) {
 	root := t.TempDir()
-	debug := &PresetCfg{Dir: "build/debug"}
-	release := &PresetCfg{Dir: "${PROJECT_ROOT}/build/release"}
+	debug := &PresetCfg{Name: "debug", Build: "build/debug"}
+	release := &PresetCfg{Name: "release", Build: "${PROJECT_ROOT}/build/release"}
 	p := &Project{Root: root, Lock: &Lock{}, Cfg: &Config{
 		Configure: ConfigureCfg{Presets: map[string]*PresetCfg{"debug": debug, "release": release}},
 	}}
@@ -342,10 +342,11 @@ func TestWriteConfigFlagsFileKeepsMtimeWhenUnchanged(t *testing.T) {
 	root := t.TempDir()
 	p := &Project{Root: root, Lock: &Lock{}, Cfg: &Config{
 		Configure: ConfigureCfg{
-			Generator:     "Ninja Multi-Config",
-			Configuration: map[string]*ConfigurationCfg{"Asan": {Flags: "-fsanitize=address"}},
+			Generator:      "Ninja Multi-Config",
+			Configurations: []*ConfigurationCfg{{Name: "Asan", Compile: []string{"-fsanitize=address"}}},
 		},
 	}}
+	normalizeConfig(p.Cfg)
 	if err := writeConfigFlagsFile(p); err != nil {
 		t.Fatal(err)
 	}

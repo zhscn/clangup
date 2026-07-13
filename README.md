@@ -1,45 +1,196 @@
 # clangup
 
-`clangup` installs and manages the LLVM toolchains published at
-`dl.clangup.dev`.
+`clangup` installs versioned LLVM toolchains from `dl.clangup.dev`. `cmk`
+selects those toolchains for CMake projects and provides configure, build, test,
+run, format, lint, install, and dependency commands.
+
+Download the `clangup` and `cmk` binaries for your platform from
+[GitHub Releases](https://github.com/zhscn/clangup/releases), make them
+executable, and place them on `PATH`.
+
+## clangup
 
 ```sh
 clangup update
 clangup channel list
-clangup channel show default
-clangup channel show libcxx
-
 clangup install default
-clangup install default@22.1.8-1
-clangup install libcxx
+clangup install libcxx@22.1.8-1
 
 clangup list
-clangup default default@22.1.8-1
-clangup uninstall default@22.1.8-1
-```
-
-The first installed toolchain becomes the default. Add its command shims to the
-current shell with:
-
-```sh
+clangup default libcxx@22.1.8-1
 eval "$(clangup env)"
+clangup doctor --full
 ```
 
-Build-system integrations can resolve and install an exact toolchain without
-changing the default:
+`default` follows the host C++ standard library, linker, runtime, and unwind
+library. On Linux, `libcxx` defaults to static libc++, LLD, compiler-rt, and
+libgcc_s.
+
+A selector is either a channel such as `libcxx` or an exact release such as
+`libcxx@22.1.8-1`. Channel selectors track the current release.
 
 ```sh
-clangup resolve default@22.1.8-1 --format=json
-clangup ensure default@22.1.8-1 --format=json
-clangup path default@22.1.8-1
+clangup ensure libcxx@22.1.8-1
+clangup path libcxx@22.1.8-1
+clangup uninstall libcxx@22.1.8-1
 ```
 
-`CLANGUP_INDEX_URL` overrides the official index URL for development and local
-testing.
+## cmk
 
-Local artifacts are installable with a sibling `manifest.json`:
+Add a `cmk.yaml` file to a CMake project:
+
+```yaml
+version: 1
+
+toolchain:
+  linux: libcxx
+  macos: default
+
+cmake:
+  generator: Ninja Multi-Config
+  default-preset: default
+  default-configuration: Debug
+
+  presets:
+    default:
+      build: build
+
+  configurations:
+    - name: Debug
+    - name: Release
+```
+
+Configure and build the project:
 
 ```sh
-clangup install --file ./toolchain.tar.zst
-clangup install --url https://example.com/toolchain.tar.zst
+cmk config
+cmk build
+cmk build -c Release app -j8
+cmk run app -- --help
+cmk test -c Release
+cmk install -c Release
 ```
+
+Each preset owns a separate CMake configure/build tree. A multi-config tree
+contains every entry under `configurations`; select one with `-c`. Values under
+`variables` are CMake variables passed as `-D<name>=<value>`, with preset
+variables overriding the common values. A preset may also override
+`cmake.generator` with its own `generator`. Multi-config presets inherit the
+global configuration list unless they provide `configurations`; they may also
+override `default-configuration`. If the global default is absent from a
+preset's list, its first configuration becomes the default.
+
+For a single-config generator such as `Ninja`, set `CMAKE_BUILD_TYPE` in the
+preset's `variables`. Such a preset does not accept `-c`; when every preset is
+single-config, omit `configurations` and `default-configuration`.
+
+Toolchain selectors resolve in exact platform, OS, then `default` order. For
+example, `linux-aarch64` overrides `linux`. `cmk.lock` records the exact
+toolchain and external dependency inputs for each platform.
+
+### Configuration example
+
+```yaml
+version: 1
+
+toolchain:
+  default: default
+  linux: libcxx
+  linux-aarch64: libcxx@22.1.8-1
+  macos: default
+
+cmake:
+  generator: Ninja Multi-Config
+  default-preset: default
+  default-configuration: Debug
+  compile-commands: default
+  launcher: ccache
+
+  variables:
+    CMAKE_TOOLCHAIN_FILE: ${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake
+    VCPKG_OVERLAY_TRIPLETS: ${PROJECT_ROOT}/triplets
+    VCPKG_OVERLAY_PORTS: ${PROJECT_ROOT}/overlay-ports
+    CMAKE_COLOR_DIAGNOSTICS: true
+
+  presets:
+    default:
+      build: build/default
+    minimal:
+      build: build/minimal
+      configurations: [Debug, Release]
+      default-configuration: Release
+      variables:
+        ENABLE_OPTIONAL_FEATURES: false
+    release:
+      build: build/release
+      generator: Ninja
+      variables:
+        CMAKE_BUILD_TYPE: Release
+
+  configurations:
+    - name: Debug
+    - name: Release
+    - name: RelWithDebInfo
+      compile: [-fno-omit-frame-pointer]
+    - name: Asan
+      inherits: Debug
+      compile: [-fsanitize=address, -fno-omit-frame-pointer]
+      link: [-fsanitize=address]
+
+install:
+  prefix: ${PROJECT_ROOT}/dist
+  strip: false
+
+env:
+  APP_CONFIG: ${PROJECT_ROOT}/config
+
+target-env:
+  app:
+    ASAN_OPTIONS: detect_leaks=1
+
+format:
+  ignore: [third_party/**, build/**]
+
+lint:
+  ignore: [third_party/**, build/**]
+  header-filter: ^(src|include)/
+  warnings-as-errors: true
+  extra-args: [--checks=bugprone-*,performance-*,modernize-*]
+
+dependencies:
+  zlib:
+    script: cmk/deps/zlib.sh
+    cmake-name: ZLIB
+    source:
+      url: https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz
+      sha256: 9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23
+```
+
+Common project commands:
+
+```sh
+cmk config minimal
+cmk build -p minimal -c Release
+cmk build -p release
+cmk update toolchain
+cmk sync
+
+cmk fmt --staged
+cmk lint --branch
+cmk lint src/file.cc --fix
+```
+
+### Existing CMake build trees
+
+`cmk build` can also invoke CMake for a project without `cmk.yaml`:
+
+```sh
+cmk build -b build
+cmk build -b build -c Release app -- -v
+```
+
+Targets, configuration, parallelism, and arguments after `--` are forwarded to
+`cmake --build`.
+
+Run `clangup --help`, `cmk --help`, `clangup doctor`, or `cmk doctor` for the
+complete command reference and diagnostics.

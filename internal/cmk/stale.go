@@ -18,7 +18,7 @@ import (
 // without cmk's --fresh/deps/presets logic). Instead every build-time
 // command calls ensureConfigured, which re-checks the same inputs CMake
 // would — the file API cmakeFiles reply lists them — plus cmk's own
-// (injection stamp, cmk.toml, dep recipes) and runs the full configure
+// (injection stamp, cmk.yaml, dep recipes) and runs the full configure
 // path when anything is stale.
 
 // configurePolicy is how a build-time command treats a stale
@@ -50,16 +50,13 @@ func configurePolicyFromFlags(locked, noConfig bool) (configurePolicy, error) {
 // ensureConfigured reconfigures dir when its configuration is stale —
 // or, under configureLocked, reports the staleness as an error.
 //
-// Implicit management needs an opt-in: a cmk.toml, or a build dir cmk
-// itself configured (stamped) before. Anything else — a foreign project
-// someone points `cmk build` at — keeps its own configuration and
-// CMake's own regen rules, which no cmk configure ever suppressed there.
-// An explicit `cmk config` still adopts such projects.
+// A project is managed only when it has cmk.yaml. Foreign build trees retain
+// their own CMake regeneration behavior.
 func ensureConfigured(p *Project, dir string, policy configurePolicy) error {
 	if policy == configureSkip {
 		return nil
 	}
-	if !p.hasCmkToml() && loadInjectionStamp(dir) == nil {
+	if !p.hasCmkConfig() {
 		return nil
 	}
 	if policy == configureLocked {
@@ -70,7 +67,7 @@ func ensureConfigured(p *Project, dir string, policy configurePolicy) error {
 			return err
 		}
 		if dirty {
-			return fmt.Errorf("--locked: cmk.lock does not match [toolchain] in cmk.toml; run `cmk config` (or `cmk update toolchain`) and commit the lock")
+			return fmt.Errorf("--locked: cmk.lock does not match toolchain in cmk.yaml; run `cmk config` (or `cmk update toolchain`) and commit the lock")
 		}
 		p.tc = tc
 		if reason := p.reconfigureReason(dir, tc, presetForDir(p, dir)); reason != "" {
@@ -93,39 +90,24 @@ func ensureConfigured(p *Project, dir string, policy configurePolicy) error {
 	return runConfigure(p, dir, preset, stampExtra(dir))
 }
 
-// bootstrapIfUnconfigured configures the selected variant when its build
-// dir doesn't exist yet: the default one on a fresh checkout (no build
-// dir at all), or the named preset's dir on `cmk build -c <preset>`. The
-// variant flag names a preset only in single-config mode; multi-config
-// configures every configuration into one dir anyway.
-func bootstrapIfUnconfigured(p *Project, buildDirFlag, variant string, policy configurePolicy) error {
+// bootstrapIfUnconfigured configures the selected preset when its build tree
+// does not exist yet.
+func bootstrapIfUnconfigured(p *Project, buildDirFlag, presetName string, policy configurePolicy) error {
 	if policy == configureSkip {
 		return nil
 	}
 	if buildDirFlag != "" {
 		return nil // an explicit -b dir is never auto-created
 	}
-	if !p.hasCmkToml() {
+	if !p.hasCmkConfig() {
 		return nil // auto-configure is for declared cmk projects (see ensureConfigured)
 	}
 	if _, err := os.Stat(filepath.Join(p.Root, "CMakeLists.txt")); err != nil {
 		return nil // not a CMake project root; let build-dir resolution error speak
 	}
-	mc := isMultiConfig(p.Cfg)
-	presetSelected := !mc && variant != "" && len(p.Cfg.Configure.Presets) > 0
-	if len(p.BuildDirs) > 0 && !presetSelected {
-		return nil
-	}
-	var preset *PresetCfg
-	if !mc {
-		if variant != "" && len(p.Cfg.Configure.Presets) == 0 {
-			return nil // let resolveVariant explain what -c means here
-		}
-		pr, err := resolvePreset(p.Cfg, variant)
-		if err != nil {
-			return err
-		}
-		preset = pr
+	preset, err := resolvePreset(p.Cfg, presetName)
+	if err != nil {
+		return err
 	}
 	dir := defaultConfigureDir(p, preset)
 	if _, err := os.Stat(filepath.Join(dir, "CMakeCache.txt")); err == nil {
@@ -139,23 +121,21 @@ func bootstrapIfUnconfigured(p *Project, buildDirFlag, variant string, policy co
 		return err
 	}
 	p.scanBuildDirs()
+	p.registerManagedBuildDirs()
 	return nil
 }
 
-// presetForDir reverse-maps a build dir to the [config.preset.*] that
-// configures it, so an auto-reconfigure reuses that preset's args. nil
-// for multi-config and plain single-config dirs.
+// presetForDir returns the recorded preset identity, falling back to matching
+// the declared build path when a stamp is unavailable.
 func presetForDir(p *Project, dir string) *PresetCfg {
-	vars := p.vars()
+	if stamp := loadInjectionStamp(dir); stamp != nil && stamp.Preset != "" {
+		if preset := p.Cfg.Configure.Presets[stamp.Preset]; preset != nil {
+			return preset
+		}
+	}
 	for _, name := range presetNames(p.Cfg.Configure.Presets) {
 		pr := p.Cfg.Configure.Presets[name]
-		d := expandVars(pr.Dir, vars)
-		if d == "" {
-			continue
-		}
-		if !filepath.IsAbs(d) {
-			d = filepath.Join(p.Root, d)
-		}
+		d := presetBuildDir(p, pr)
 		if filepath.Clean(d) == filepath.Clean(dir) {
 			return pr
 		}
@@ -202,8 +182,8 @@ func (p *Project) reconfigureReason(dir string, tc *Toolchain, preset *PresetCfg
 	}
 	for _, path := range cmkInputs {
 		fi, err := os.Stat(path)
-		// cmk inputs may legitimately be absent (no cmk.toml at a git
-		// fallback root); only presence + newer mtime is a signal.
+		// A referenced input may be absent while an incomplete checkout is
+		// being repaired; only presence plus a newer mtime is a signal here.
 		if err == nil && fi.ModTime().After(stamp) {
 			warnFutureMtime(path, fi.ModTime())
 			return p.relToRoot(path) + " changed"
@@ -239,7 +219,7 @@ func (p *Project) reconfigureReason(dir string, tc *Toolchain, preset *PresetCfg
 	return ""
 }
 
-// cmkInputFiles are configure inputs CMake knows nothing about: cmk.toml
+// cmkInputFiles are configure inputs CMake knows nothing about: cmk.yaml
 // itself and each dep's recipe script, patches, and extra_inputs. A dep
 // edit must reconfigure so runConfigure re-syncs the store and injects
 // the new prefixes. An error (a patch/extra_inputs glob matching nothing,

@@ -14,7 +14,7 @@ func cmdSync(names []string, force bool) error {
 		return err
 	}
 	if len(p.Cfg.Deps) == 0 {
-		fmt.Fprintln(os.Stderr, "cmk: no [deps] in cmk.toml")
+		fmt.Fprintln(os.Stderr, "cmk: no dependencies in cmk.yaml")
 		return nil
 	}
 	tc, err := p.toolchain()

@@ -82,7 +82,7 @@ func TestEffectiveSelectorUsesMatchingChannelPin(t *testing.T) {
 
 func TestToolchainSelectorUsesHostPlatform(t *testing.T) {
 	cfg := ToolchainCfg{
-		"selector": "fallback", "linux": "libcxx", "macos": "default",
+		"default": "fallback", "linux": "libcxx", "macos": "default",
 		"linux-aarch64": "libcxx-pgo",
 	}
 	if got := cfg.selectorFor("linux", "amd64"); got != "libcxx" {

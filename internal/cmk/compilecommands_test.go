@@ -77,15 +77,15 @@ func TestSyncRootCompileCommands(t *testing.T) {
 	}
 
 	p := &Project{Root: root, Cfg: &Config{Configure: ConfigureCfg{
-		Generator:       "Ninja Multi-Config",
-		Configurations:  []string{"Debug", "Asan"},
-		Default:         "Asan",
-		CompileCommands: "default",
+		Generator:            "Ninja Multi-Config",
+		Configurations:       []*ConfigurationCfg{{Name: "Debug"}, {Name: "Asan"}},
+		DefaultConfiguration: "Asan",
+		CompileCommands:      "default",
 	}}}
 	rootDB := filepath.Join(root, "compile_commands.json")
 
 	// First sync narrows the root copy to the default (Asan) configuration.
-	if err := p.syncRootCompileCommands(buildDir); err != nil {
+	if err := p.syncRootCompileCommands(buildDir, nil); err != nil {
 		t.Fatal(err)
 	}
 	var got []map[string]any
@@ -103,7 +103,7 @@ func TestSyncRootCompileCommands(t *testing.T) {
 	if err := os.Chtimes(rootDB, old, old); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.syncRootCompileCommands(buildDir); err != nil {
+	if err := p.syncRootCompileCommands(buildDir, nil); err != nil {
 		t.Fatal(err)
 	}
 	if fi, _ := os.Stat(rootDB); !fi.ModTime().Equal(old) {
@@ -115,7 +115,7 @@ func TestSyncRootCompileCommands(t *testing.T) {
 	if err := os.WriteFile(buildDB, []byte(db2), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.syncRootCompileCommands(buildDir); err != nil {
+	if err := p.syncRootCompileCommands(buildDir, nil); err != nil {
 		t.Fatal(err)
 	}
 	if fi, _ := os.Stat(rootDB); fi.ModTime().Equal(old) {

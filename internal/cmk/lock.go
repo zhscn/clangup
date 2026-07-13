@@ -13,7 +13,7 @@ import (
 
 const lockFileName = "cmk.lock"
 
-// Lock pins the resolved inputs that cmk.toml leaves floating: each
+// Lock pins the resolved inputs that cmk.yaml leaves floating: each
 // platform's exact toolchain release and the commit behind each git dep ref.
 type Lock struct {
 	Schema     int                       `toml:"schema"`
@@ -37,7 +37,7 @@ type LockDep struct {
 	// Stamp is the dep's content hash, which keys its store entry.
 	// Pinned here so build/run/env resolve store paths without
 	// recomputing stamps (and so the entry a build dir was configured
-	// against survives cmk.toml edits until the next sync).
+	// against survives cmk.yaml edits until the next sync).
 	Stamp  string            `toml:"stamp,omitempty"`
 	Stamps map[string]string `toml:"stamps,omitempty"`
 }

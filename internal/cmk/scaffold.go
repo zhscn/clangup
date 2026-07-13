@@ -21,7 +21,7 @@ func cmdInit(force bool) error {
 	if _, err := os.Stat(path); err == nil && !force {
 		return fmt.Errorf("%s already exists (use --force to overwrite)", path)
 	}
-	if err := os.WriteFile(path, []byte(cmkTomlTemplate), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(cmkYAMLTemplate), 0o644); err != nil {
 		return err
 	}
 	fmt.Fprintln(os.Stderr, "cmk: wrote", path)
@@ -35,7 +35,7 @@ func cmdNew(name string) error {
 
 	files := map[string]string{
 		"CMakeLists.txt": strings.ReplaceAll(cmakeListsTemplate, "{name}", name),
-		"cmk.toml":       cmkTomlTemplate,
+		"cmk.yaml":       cmkYAMLTemplate,
 		"src/main.cc":    mainCcTemplate,
 		".gitignore":     gitignoreTemplate,
 		".clang-format":  clangFormatTemplate,
@@ -57,87 +57,76 @@ func cmdNew(name string) error {
 	return nil
 }
 
-const cmkTomlTemplate = `# cmk project configuration. See https://github.com/zhscn/clangup
+const cmkYAMLTemplate = `version: 1
 
-# Uncomment to build with a clangup channel. cmk installs it on the first
-# configure and records the exact channel release in cmk.lock.
-# [toolchain]
-# linux = "libcxx@22.1.8-1"
-# macos = "default@22.1.8-1"
-# linux-aarch64 = "libcxx-pgo@22.1.8-1"
+# Toolchain selectors are resolved in exact-platform, OS, default order.
+# toolchain:
+#   default: default@22.1.8-1
+#   linux: libcxx@22.1.8-1
+#   linux-aarch64: libcxx@22.1.8-1
 
-# External deps built by bash recipes outside CMake. Standard CMake deps
-# belong in your CMakeLists (FetchContent); this is for the awkward ones.
-# The script runs in $CMK_WORK with $CMK_SRC (unpacked source),
-# $CMK_PREFIX (install here), $CMK_JOBS, $CC/$CXX, and
-# $CMK_DEP_<NAME>_PREFIX for each entry in needs. cmk config injects
-# -D<name>_ROOT=<prefix> unless the script writes $CMK_PREFIX/.cmk-exports.
-#
-# [deps.zlib]
-# script = "cmk/deps/zlib.sh"
-# cmake_name = "ZLIB"
-# source = { url = "https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz", sha256 = "9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23" }
-#
-# [deps.fdb]
-# script = "cmk/deps/fdb.sh"
-# needs = ["zlib"]
-# source = { git = "https://github.com/apple/foundationdb.git", ref = "release-7.4" }
-# patches = ["cmk/patches/fdb-*.patch"]   # applied to $CMK_SRC, hashed into the stamp
-# env = { FDB_BUILD_TYPE = "Release" }    # recipes see a sanitized env; knobs go here
+cmake:
+  generator: Ninja Multi-Config
+  default-preset: default
+  default-configuration: Debug
+  compile-commands: default
+  # launcher: ccache
 
-# One build dir holding every configuration (Ninja Multi-Config),
-# Cargo-style. Pick one at build time: cmk build -c <config>.
-[config]
-generator = "Ninja Multi-Config"
-configurations = ["Debug", "Release"]
-default = "Debug"               # default -c for build/run/test/tu
-# compile_commands = "default"   # mirror just one config's compile_commands.json
-                                 # to the project root (else clangd sees every
-                                 # config); "default" = the default above
-# compiler_launcher = "ccache"   # wrap compiles via ccache/sccache;
-                                 # for ccache, cmk also wires CCACHE_BASEDIR
-                                 # so builds in different worktrees share cache
+  presets:
+    default:
+      build: build
 
-# A custom configuration is a flag bundle. Uncomment for an Asan build
-# (then: cmk build -c Asan).
-# [config.configuration.Asan]
-# inherits = "Debug"             # seed from ${CMAKE_*_FLAGS_DEBUG}
-# flags = "-fsanitize=address -fno-omit-frame-pointer"
-# link_flags = "-fsanitize=address"
+  configurations:
+    - name: Debug
+    - name: Release
 
-# Existing configurations can be tweaked without replacing CMake's defaults.
-# [config.configuration.RelWithDebInfo]
-# append_flags = "-fno-omit-frame-pointer"
+  # A preset is a separate configure/build tree. A configuration is selected
+  # inside every multi-config tree with cmk build -p <preset> -c <config>.
+  # presets:
+  #   default:
+  #     build: build/default
+  #   minimal:
+  #     build: build/minimal
+  #     configurations: [Debug, Release]
+  #     default-configuration: Release
+  #     variables:
+  #       ENABLE_OPTIONAL_FEATURES: false
+  #   release:
+  #     build: build/release
+  #     generator: Ninja
+  #     variables:
+  #       CMAKE_BUILD_TYPE: Release
 
-# Alternative model — one build DIR per type, each a separate CMake cache.
-# Use this *instead of* the [config] above when the variants differ at
-# configure time (different -D options, deps, or toolchain file), which
-# multi-config can't express. The two models don't mix. Select a preset by
-# name the same way: cmk config release / cmk build -c release.
-#
-# [config]
-# default = "debug"
-#
-# [config.preset.debug]
-# dir = "build/debug"
-# args = ["-DCMAKE_BUILD_TYPE=Debug"]
-#
-# [config.preset.release]
-# dir = "build/release"
-# args = ["-DCMAKE_BUILD_TYPE=Release"]
+  # configurations:
+  #   - name: Debug
+  #   - name: Release
+  #   - name: Asan
+  #     inherits: Debug
+  #     compile: [-fsanitize=address, -fno-omit-frame-pointer]
+  #     link: [-fsanitize=address]
 
-# [env]                   # extra environment for cmake/ninja/run
-# MY_VAR = "${PROJECT_ROOT}/config"
+# External dependencies use immutable sources and project-owned recipes.
+# dependencies:
+#   zlib:
+#     script: cmk/deps/zlib.sh
+#     cmake-name: ZLIB
+#     source:
+#       url: https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz
+#       sha256: 9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23
 
-# [target-env.my_server]  # per-target environment for cmk run
-# ASAN_OPTIONS = "detect_leaks=1"
+# env:
+#   MY_VAR: ${PROJECT_ROOT}/config
 
-# [fmt]
-# ignore = ["third_party/**"]
+# target-env:
+#   my_server:
+#     ASAN_OPTIONS: detect_leaks=1
 
-# [lint]
-# ignore = ["third_party/**"]
-# header_filter = "^(src|include)/"
+# format:
+#   ignore: [third_party/**]
+
+# lint:
+#   ignore: [third_party/**]
+#   header-filter: ^(src|include)/
 `
 
 const cmakeListsTemplate = `cmake_minimum_required(VERSION 3.24)

@@ -44,17 +44,14 @@ type presetsFile struct {
 
 // writeUserPresets generates CMakeUserPresets.json mirroring cmk's
 // injection, so IDEs and plain CMake presets reproduce the same
-// configuration without cmk in the loop. Multi-config projects get one
-// configure preset plus build/test presets per configuration; single-config
-// preset mode gets one configure/build/test preset set per [config.preset].
+// configuration without cmk in the loop. Every cmk preset becomes a configure
+// preset; multi-config projects get one build/test preset per configuration.
 // The file is
 // machine-local (it embeds .deps paths relocated to ${sourceDir}) and
 // belongs in .gitignore.
 //
-// A file cmk authored before (it carries the vendor marker) is rewritten
-// wholesale. A file the user owns is merged into instead — cmk's
-// namespaced presets are refreshed in place and everything else is kept
-// (see finalizeUserPresets).
+// A cmk-owned file carries the vendor marker and is rewritten wholesale. A
+// user-owned file keeps its own entries while cmk refreshes its namespace.
 func writeUserPresets(p *Project, tc *Toolchain) error {
 	path := filepath.Join(p.Root, "CMakeUserPresets.json")
 	existing, _ := os.ReadFile(path)
@@ -70,10 +67,6 @@ func writeUserPresets(p *Project, tc *Toolchain) error {
 		merge = probe.Vendor["cmk"] == nil
 	}
 
-	gen := p.Cfg.Configure.Generator
-	if gen == "" {
-		gen = "Ninja"
-	}
 	vars := p.vars()
 
 	// Mirror the toolchain env so IDE / `cmake --preset` configures run
@@ -89,25 +82,13 @@ func writeUserPresets(p *Project, tc *Toolchain) error {
 		presetEnv["CCACHE_BASEDIR"] = "${sourceDir}"
 		presetEnv["CCACHE_NOHASHDIR"] = "true"
 	}
+	for key, value := range p.Cfg.Env {
+		value = expandVars(value, vars)
+		presetEnv[key] = strings.ReplaceAll(value, p.Root+string(filepath.Separator), "${sourceDir}/")
+	}
 	if len(presetEnv) == 0 {
 		presetEnv = nil
 	}
-
-	// The presets mirror the same injection cmk's own configure uses —
-	// one source of truth (injectionParts), two projections. parts.argvOnly
-	// (CMAKE_SUPPRESS_REGENERATION) is deliberately not mirrored: it
-	// belongs to cmk-managed build dirs where ensureConfigured runs the
-	// staleness checks; IDE-driven configures keep CMake's regen rules.
-	parts, err := p.injectionParts(tc, nil, nil)
-	if err != nil {
-		return err
-	}
-	base := map[string]string{}
-	addDefines(base, parts.common)
-	addDefines(base, parts.exports)
-	addDefines(base, parts.launcher)
-	addDefines(base, parts.userArgs)
-	cfgArgs := parts.userArgs
 
 	relocate := func(s string) string {
 		return strings.ReplaceAll(s, p.Root+string(filepath.Separator), "${sourceDir}/")
@@ -118,74 +99,26 @@ func writeUserPresets(p *Project, tc *Toolchain) error {
 		Vendor:  map[string]any{"cmk": map[string]any{"generated": true}},
 	}
 
-	if isMultiConfig(p.Cfg) {
-		cache := map[string]string{}
-		addDefines(cache, tc.cmakeArgs(cfgArgs))
-		addDefines(cache, parts.multiConfig)
-		for k, v := range base {
-			cache[k] = relocate(v)
-		}
-		// Relocate the flags include too: parts carries the absolute
-		// path, presets want it worktree-relative.
-		if v, ok := cache["CMAKE_PROJECT_INCLUDE"]; ok {
-			cache["CMAKE_PROJECT_INCLUDE"] = relocate(v)
-		}
-		cfgs := effectiveConfigurations(p.Cfg)
-		dir := expandVars(p.multiConfigDir(), vars)
-		if !filepath.IsAbs(dir) {
-			dir = "${sourceDir}/" + filepath.ToSlash(dir)
-		}
-		cfgPreset := presetPrefix + "default"
-		out.ConfigurePresets = append(out.ConfigurePresets, configurePreset{
-			Name:           cfgPreset,
-			DisplayName:    "default (cmk)",
-			Generator:      gen,
-			BinaryDir:      dir,
-			CacheVariables: cache,
-			Environment:    presetEnv,
-		})
-		for _, c := range cfgs {
-			out.BuildPresets = append(out.BuildPresets, buildPreset{
-				Name:            presetPrefix + c,
-				ConfigurePreset: cfgPreset,
-				Configuration:   c,
-			})
-			out.TestPresets = append(out.TestPresets, testPreset{
-				Name:            presetPrefix + c,
-				ConfigurePreset: cfgPreset,
-				Configuration:   c,
-			})
-		}
-		return finalizeUserPresets(path, merge, existing, out)
-	}
-
 	presets := p.Cfg.Configure.Presets
 	names := presetNames(presets)
-	if len(names) == 0 {
-		presets = map[string]*PresetCfg{"default": {Dir: "build"}}
-		names = []string{"default"}
-	}
-
 	for _, name := range names {
 		pr := presets[name]
-		prArgs := expandAll(pr.Args, vars)
+		generator := effectiveGenerator(p.Cfg, pr)
+		parts, err := p.injectionParts(tc, pr, nil)
+		if err != nil {
+			return err
+		}
 		cache := map[string]string{}
-		// Same toolchain-file-vs-compiler-vars decision as cmk config,
-		// per preset (a preset may bring its own CMAKE_TOOLCHAIN_FILE).
-		addDefines(cache, tc.cmakeArgs(append(append([]string{}, cfgArgs...), prArgs...)))
-		for k, v := range base {
-			cache[k] = relocate(v)
+		addDefines(cache, parts.toolchain)
+		addDefines(cache, parts.launcher)
+		addDefines(cache, parts.common)
+		addDefines(cache, parts.exports)
+		addDefines(cache, parts.multiConfig)
+		addDefines(cache, parts.userArgs)
+		for key, value := range cache {
+			cache[key] = relocate(value)
 		}
-		extra := map[string]string{}
-		addDefines(extra, prArgs)
-		for k, v := range extra {
-			cache[k] = relocate(v)
-		}
-		dir := pr.Dir
-		if dir == "" {
-			dir = "build"
-		}
-		dir = expandVars(dir, vars)
+		dir := expandVars(pr.Build, vars)
 		if !filepath.IsAbs(dir) {
 			dir = "${sourceDir}/" + filepath.ToSlash(dir)
 		}
@@ -193,13 +126,21 @@ func writeUserPresets(p *Project, tc *Toolchain) error {
 		out.ConfigurePresets = append(out.ConfigurePresets, configurePreset{
 			Name:           prName,
 			DisplayName:    name + " (cmk)",
-			Generator:      gen,
+			Generator:      generator,
 			BinaryDir:      dir,
 			CacheVariables: cache,
 			Environment:    presetEnv,
 		})
-		out.BuildPresets = append(out.BuildPresets, buildPreset{Name: prName, ConfigurePreset: prName})
-		out.TestPresets = append(out.TestPresets, testPreset{Name: prName, ConfigurePreset: prName})
+		if isMultiConfig(p.Cfg, pr) {
+			for _, configuration := range effectiveConfigurations(p.Cfg, pr) {
+				variantName := prName + "-" + configuration
+				out.BuildPresets = append(out.BuildPresets, buildPreset{Name: variantName, ConfigurePreset: prName, Configuration: configuration})
+				out.TestPresets = append(out.TestPresets, testPreset{Name: variantName, ConfigurePreset: prName, Configuration: configuration})
+			}
+		} else {
+			out.BuildPresets = append(out.BuildPresets, buildPreset{Name: prName, ConfigurePreset: prName})
+			out.TestPresets = append(out.TestPresets, testPreset{Name: prName, ConfigurePreset: prName})
+		}
 	}
 
 	return finalizeUserPresets(path, merge, existing, out)

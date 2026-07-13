@@ -1,32 +1,37 @@
 package cmk
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 
-	"github.com/BurntSushi/toml"
+	"go.yaml.in/yaml/v3"
 )
 
-const configFileName = "cmk.toml"
+const configFileName = "cmk.yaml"
 
-// Config is the cmk.toml schema.
+// Config is the cmk.yaml schema. CMake presets identify configure/build
+// trees; configurations identify build-time configurations within a
+// multi-config tree.
 type Config struct {
-	Toolchain ToolchainCfg                 `toml:"toolchain"`
-	Deps      map[string]*DepCfg           `toml:"deps"`
-	Configure ConfigureCfg                 `toml:"config"`
-	Build     BuildCfg                     `toml:"build"`
-	Install   InstallCfg                   `toml:"install"`
-	Env       map[string]string            `toml:"env"`
-	TargetEnv map[string]map[string]string `toml:"target-env"`
-	Fmt       FmtCfg                       `toml:"fmt"`
-	Lint      LintCfg                      `toml:"lint"`
+	Version   int                          `yaml:"version"`
+	Toolchain ToolchainCfg                 `yaml:"toolchain"`
+	Deps      map[string]*DepCfg           `yaml:"dependencies"`
+	Configure ConfigureCfg                 `yaml:"cmake"`
+	Install   InstallCfg                   `yaml:"install"`
+	Env       map[string]string            `yaml:"env"`
+	TargetEnv map[string]map[string]string `yaml:"target-env"`
+	Fmt       FmtCfg                       `yaml:"format"`
+	Lint      LintCfg                      `yaml:"lint"`
 }
 
-// ToolchainCfg maps platform names to clangup selectors. Exact OS-architecture
-// keys override OS keys; selector is the optional fallback.
+// ToolchainCfg maps platform names to clangup selectors. Exact
+// OS-architecture keys override OS keys, then default is used.
 type ToolchainCfg map[string]string
 
 func (cfg ToolchainCfg) selectorFor(goos, goarch string) string {
@@ -43,144 +48,82 @@ func (cfg ToolchainCfg) selectorFor(goos, goarch string) string {
 			return cfg["macos"]
 		}
 	}
-	return cfg["selector"]
+	return cfg["default"]
 }
 
 type SourceCfg struct {
-	URL    string `toml:"url"`
-	SHA256 string `toml:"sha256"`
-	Git    string `toml:"git"`
-	Ref    string `toml:"ref"`
+	URL    string `yaml:"url,omitempty"`
+	SHA256 string `yaml:"sha256,omitempty"`
+	Git    string `yaml:"git,omitempty"`
+	Ref    string `yaml:"ref,omitempty"`
 }
 
 type DepCfg struct {
-	// Script is the build recipe, relative to the project root. It runs
-	// with bash, cwd $CMK_WORK, and must install into $CMK_PREFIX.
-	Script string `toml:"script"`
-	// Needs are deps that must be built first; their prefixes are exposed
-	// to the script as $CMK_DEP_<NAME>_PREFIX.
-	Needs []string `toml:"needs"`
-	// CMakeName is the find_package() name used for the default
-	// -D<name>_ROOT export. Defaults to the dep key. Case matters
-	// (CMP0074).
-	CMakeName string `toml:"cmake_name"`
-	// Source, when set, is fetched and unpacked by cmk into $CMK_SRC.
-	// Either url+sha256 (tarball) or git+ref (commit locked in cmk.lock).
-	Source *SourceCfg `toml:"source"`
-	// Env is exported to the recipe AND hashed into the stamp. Recipes
-	// run with a sanitized environment, so build knobs must come
-	// through here — never from the caller's shell.
-	Env map[string]string `toml:"env"`
-	// Patches are root-relative globs applied (patch -p1) to $CMK_SRC
-	// after unpacking; their contents are hashed into the stamp.
-	Patches []string `toml:"patches"`
-	// ExtraInputs are root-relative globs hashed into the stamp without
-	// being applied — for files the recipe reads on its own.
-	ExtraInputs []string `toml:"extra_inputs"`
+	Script      string            `yaml:"script"`
+	Needs       []string          `yaml:"needs,omitempty"`
+	CMakeName   string            `yaml:"cmake-name,omitempty"`
+	Source      *SourceCfg        `yaml:"source,omitempty"`
+	Env         map[string]string `yaml:"env,omitempty"`
+	Patches     []string          `yaml:"patches,omitempty"`
+	ExtraInputs []string          `yaml:"extra-inputs,omitempty"`
 }
 
 type PresetCfg struct {
-	Dir  string   `toml:"dir"`
-	Args []string `toml:"args"`
+	Name                 string         `yaml:"-"`
+	Build                string         `yaml:"build"`
+	Generator            string         `yaml:"generator"`
+	DefaultConfiguration string         `yaml:"default-configuration"`
+	Configurations       []string       `yaml:"configurations"`
+	Variables            map[string]any `yaml:"variables"`
+	Args                 []string       `yaml:"args"`
 }
 
 type ConfigureCfg struct {
-	Generator string   `toml:"generator"`
-	Args      []string `toml:"args"`
-	// Default selects the default preset in single-config mode, or the
-	// default --config (a configuration name) in multi-config mode.
-	Default string `toml:"default"`
-	// CompilerLauncher wraps every compile via
-	// CMAKE_<LANG>_COMPILER_LAUNCHER, e.g. "ccache" or "sccache". Empty
-	// disables it. For ccache, cmk also configures cross-worktree reuse
-	// (see Project.ccacheEnv).
-	CompilerLauncher string                `toml:"compiler_launcher"`
-	Presets          map[string]*PresetCfg `toml:"preset"`
-
-	// --- multi-config (generator = "Ninja Multi-Config") ---
-	// One build tree holds every configuration; you pick at build time
-	// with `cmk build -c <config>`. Presets are not used in this mode.
-
-	// Dir is the single build directory (default "build").
-	Dir string `toml:"dir"`
-	// CompileCommands, when set, makes cmk mirror one configuration's
-	// compile_commands.json to the project root. A Ninja Multi-Config build
-	// exports every configuration into the build dir's database (one entry
-	// per file *per config*), so clangd — which uses the nearest database
-	// walking up from a source file — picks an arbitrary configuration. This
-	// narrows the root copy to the named configuration; "default" resolves
-	// to [config].default. For a single-config generator the database is
-	// already one-per-file and is mirrored verbatim. Empty disables it (cmk
-	// leaves any existing root file untouched). Keep it gitignored.
-	CompileCommands string `toml:"compile_commands"`
-	// Configurations is CMAKE_CONFIGURATION_TYPES; empty means CMake's
-	// standard Debug/Release/RelWithDebInfo/MinSizeRel.
-	Configurations []string `toml:"configurations"`
-	// Configuration holds per-configuration flag edits, keyed by configuration
-	// name (e.g. "Asan" or "RelWithDebInfo"). Custom configurations normally
-	// define a flag bundle; built-in configurations should usually use
-	// append_* fields to preserve CMake's defaults.
-	Configuration map[string]*ConfigurationCfg `toml:"configuration"`
+	Generator            string                `yaml:"generator"`
+	DefaultPreset        string                `yaml:"default-preset"`
+	DefaultConfiguration string                `yaml:"default-configuration"`
+	CompileCommands      string                `yaml:"compile-commands"`
+	CompilerLauncher     string                `yaml:"launcher"`
+	Variables            map[string]any        `yaml:"variables"`
+	Args                 []string              `yaml:"args"`
+	Presets              map[string]*PresetCfg `yaml:"presets"`
+	Configurations       []*ConfigurationCfg   `yaml:"configurations"`
+	configurationByName  map[string]*ConfigurationCfg
 }
 
-// ConfigurationCfg is a multi-config configuration flag edit. flags/c_flags/
-// cxx_flags/link_flags define or replace a configuration's flag bundle, usually
-// for a custom configuration such as Asan. append_* fields add to the existing
-// CMake flags for that configuration, which is the safe way to tweak built-in
-// configurations such as RelWithDebInfo.
+// ConfigurationCfg appends flags to one multi-config configuration. Inherits
+// selects the configuration whose initialized CMake flags form the base.
 type ConfigurationCfg struct {
-	// Inherits seeds the flags from another configuration's, e.g.
-	// inherits = "Debug" prepends ${CMAKE_CXX_FLAGS_DEBUG}.
-	Inherits string `toml:"inherits"`
-	// Flags apply to both C and C++; CFlags/CxxFlags add language-specific
-	// flags on top.
-	Flags    string `toml:"flags"`
-	CFlags   string `toml:"c_flags"`
-	CxxFlags string `toml:"cxx_flags"`
-	// LinkFlags apply to executable, shared, and module linking.
-	LinkFlags string `toml:"link_flags"`
-	// Append* fields preserve the current CMake flags for this configuration
-	// and append the requested flags. AppendFlags applies to both C and C++,
-	// while AppendCFlags and AppendCxxFlags add language-specific compile
-	// flags. AppendLinkFlags applies to executable, shared, and module linking.
-	AppendFlags     string `toml:"append_flags"`
-	AppendCFlags    string `toml:"append_c_flags"`
-	AppendCxxFlags  string `toml:"append_cxx_flags"`
-	AppendLinkFlags string `toml:"append_link_flags"`
+	Name     string   `yaml:"name"`
+	Inherits string   `yaml:"inherits"`
+	Compile  []string `yaml:"compile"`
+	C        []string `yaml:"c"`
+	CXX      []string `yaml:"cxx"`
+	Link     []string `yaml:"link"`
 }
 
-type BuildCfg struct {
-	// Default build dir (relative to root) used when none is given, the
-	// PWD isn't inside one, and more than one exists.
-	Default string `toml:"default"`
-}
-
-// InstallCfg configures `cmk install`. An empty Prefix means the prefix
-// baked at configure time (CMAKE_INSTALL_PREFIX) is used; set it (or pass
-// --prefix) to override at install time.
 type InstallCfg struct {
-	// Prefix is the install prefix; ${PROJECT_ROOT}/${DEP_*} expand, and a
-	// relative path is taken from the project root.
-	Prefix string `toml:"prefix"`
-	// Component installs only the named install component.
-	Component string `toml:"component"`
-	// Strip removes symbols from installed binaries.
-	Strip bool `toml:"strip"`
+	Prefix    string `yaml:"prefix"`
+	Component string `yaml:"component"`
+	Strip     bool   `yaml:"strip"`
 }
 
 type FmtCfg struct {
-	Ignore []string `toml:"ignore"`
+	Ignore []string `yaml:"ignore"`
 }
 
 type LintCfg struct {
-	Ignore           []string `toml:"ignore"`
-	WarningsAsErrors bool     `toml:"warnings_as_errors"`
-	HeaderFilter     string   `toml:"header_filter"`
-	ExtraArgs        []string `toml:"extra_args"`
+	Ignore           []string `yaml:"ignore"`
+	WarningsAsErrors bool     `yaml:"warnings-as-errors"`
+	HeaderFilter     string   `yaml:"header-filter"`
+	ExtraArgs        []string `yaml:"extra-args"`
 }
 
 var depNameRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+var presetNameRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.-]*$`)
+var cmakeCacheNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 var toolchainPlatformRe = regexp.MustCompile(`^(linux|macos)-(x86_64|aarch64)$`)
+var sha256Re = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 func loadConfig(root string) (*Config, error) {
 	cfg := &Config{}
@@ -188,79 +131,342 @@ func loadConfig(root string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			normalizeConfig(cfg)
 			return cfg, nil
 		}
 		return nil, err
 	}
-	md, err := toml.Decode(string(data), cfg)
-	if err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(cfg); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
-	if un := md.Undecoded(); len(un) > 0 {
-		fmt.Fprintf(os.Stderr, "cmk: warning: unknown keys in %s: %v\n", configFileName, un)
+	if cfg.Version != 1 {
+		return nil, fmt.Errorf("%s: version must be 1", path)
 	}
-	for platform, selector := range cfg.Toolchain {
-		if platform != "selector" && platform != "linux" && platform != "macos" && !toolchainPlatformRe.MatchString(platform) {
-			return nil, fmt.Errorf("[toolchain].%s: unsupported platform", platform)
-		}
-		if selector == "" {
-			return nil, fmt.Errorf("[toolchain].%s: selector is empty", platform)
-		}
-	}
-	for name, d := range cfg.Deps {
-		if !depNameRe.MatchString(name) {
-			return nil, fmt.Errorf("[deps.%s]: invalid dep name", name)
-		}
-		if d.Script == "" {
-			return nil, fmt.Errorf("[deps.%s]: missing script", name)
-		}
-		if d.Source != nil {
-			urlSet, gitSet := d.Source.URL != "", d.Source.Git != ""
-			if urlSet == gitSet {
-				return nil, fmt.Errorf("[deps.%s].source: set exactly one of url or git", name)
-			}
-			if urlSet && !sha256Re.MatchString(d.Source.SHA256) {
-				return nil, fmt.Errorf("[deps.%s].source: url requires a 64-hex sha256", name)
-			}
-			if gitSet && d.Source.Ref == "" {
-				return nil, fmt.Errorf("[deps.%s].source: git requires ref", name)
-			}
-		}
-		if len(d.Patches) > 0 && d.Source == nil {
-			return nil, fmt.Errorf("[deps.%s]: patches require a source (there is no $CMK_SRC to patch)", name)
-		}
-		for _, n := range d.Needs {
-			if _, ok := cfg.Deps[n]; !ok {
-				return nil, fmt.Errorf("[deps.%s]: needs unknown dep %q", name, n)
-			}
-		}
-	}
-	if isMultiConfig(cfg) {
-		if len(cfg.Configure.Presets) > 0 {
-			return nil, fmt.Errorf("[config]: a multi-config generator uses one build dir with [config.configuration.*], " +
-				"not [config.preset.*] (which create separate build dirs)")
-		}
-		cfgs := effectiveConfigurations(cfg)
-		known := map[string]bool{}
-		for _, c := range cfgs {
-			known[c] = true
-		}
-		for name, cc := range cfg.Configure.Configuration {
-			if !configNameRe.MatchString(name) {
-				return nil, fmt.Errorf("[config.configuration.%s]: invalid configuration name", name)
-			}
-			if cc.Inherits != "" && !known[cc.Inherits] && !isStandardConfig(cc.Inherits) {
-				fmt.Fprintf(os.Stderr, "cmk: warning: [config.configuration.%s].inherits = %q is not a known configuration\n", name, cc.Inherits)
-			}
-		}
-		if d := cfg.Configure.Default; d != "" && !known[d] {
-			return nil, fmt.Errorf("[config].default = %q is not one of the configurations: %s", d, strings.Join(cfgs, ", "))
-		}
-		if cc := cfg.Configure.CompileCommands; cc != "" && cc != "default" && !known[cc] {
-			return nil, fmt.Errorf("[config].compile_commands = %q is not one of the configurations: %s (or \"default\")", cc, strings.Join(cfgs, ", "))
-		}
+	normalizeConfig(cfg)
+	if err := validateConfig(cfg, root); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	return cfg, nil
 }
 
-var sha256Re = regexp.MustCompile(`^[0-9a-f]{64}$`)
+func normalizeConfig(cfg *Config) {
+	if cfg.Toolchain == nil {
+		cfg.Toolchain = ToolchainCfg{}
+	}
+	if cfg.Deps == nil {
+		cfg.Deps = map[string]*DepCfg{}
+	}
+	if cfg.Env == nil {
+		cfg.Env = map[string]string{}
+	}
+	if cfg.TargetEnv == nil {
+		cfg.TargetEnv = map[string]map[string]string{}
+	}
+	if cfg.Configure.Generator == "" {
+		cfg.Configure.Generator = "Ninja"
+	}
+	if cfg.Configure.Presets == nil {
+		cfg.Configure.Presets = map[string]*PresetCfg{}
+	}
+	if len(cfg.Configure.Presets) == 0 {
+		cfg.Configure.Presets["default"] = &PresetCfg{Build: "build"}
+	}
+	for name, preset := range cfg.Configure.Presets {
+		if preset == nil {
+			preset = &PresetCfg{}
+			cfg.Configure.Presets[name] = preset
+		}
+		preset.Name = name
+		if preset.Build == "" {
+			preset.Build = filepath.Join("build", name)
+		}
+	}
+	if cfg.Configure.DefaultPreset == "" {
+		if cfg.Configure.Presets["default"] != nil {
+			cfg.Configure.DefaultPreset = "default"
+		} else if len(cfg.Configure.Presets) == 1 {
+			for name := range cfg.Configure.Presets {
+				cfg.Configure.DefaultPreset = name
+			}
+		}
+	}
+	if hasMultiConfigPreset(cfg) && len(cfg.Configure.Configurations) == 0 {
+		for _, name := range standardConfigs {
+			cfg.Configure.Configurations = append(cfg.Configure.Configurations, &ConfigurationCfg{Name: name})
+		}
+	}
+	cfg.Configure.configurationByName = map[string]*ConfigurationCfg{}
+	for _, configuration := range cfg.Configure.Configurations {
+		if configuration != nil {
+			cfg.Configure.configurationByName[configuration.Name] = configuration
+		}
+	}
+	if hasMultiConfigPreset(cfg) && cfg.Configure.DefaultConfiguration == "" && len(cfg.Configure.Configurations) > 0 {
+		cfg.Configure.DefaultConfiguration = cfg.Configure.Configurations[0].Name
+	}
+}
+
+func validateConfig(cfg *Config, root string) error {
+	for platform, selector := range cfg.Toolchain {
+		if platform != "default" && platform != "linux" && platform != "macos" && !toolchainPlatformRe.MatchString(platform) {
+			return fmt.Errorf("toolchain.%s: unsupported platform", platform)
+		}
+		if selector == "" {
+			return fmt.Errorf("toolchain.%s: selector is empty", platform)
+		}
+	}
+	if err := validateDeps(cfg); err != nil {
+		return err
+	}
+	if err := validateVariables("cmake.variables", cfg.Configure.Variables); err != nil {
+		return err
+	}
+	if err := validateCMakeArgs("cmake.args", cfg.Configure.Args); err != nil {
+		return err
+	}
+	seenBuilds := map[string]string{}
+	for name, preset := range cfg.Configure.Presets {
+		if !presetNameRe.MatchString(name) {
+			return fmt.Errorf("cmake.presets.%s: invalid preset name", name)
+		}
+		if err := validateVariables("cmake.presets."+name+".variables", preset.Variables); err != nil {
+			return err
+		}
+		if err := validateCMakeArgs("cmake.presets."+name+".args", preset.Args); err != nil {
+			return err
+		}
+		build := expandVars(preset.Build, map[string]string{"PROJECT_ROOT": root})
+		if !filepath.IsAbs(build) {
+			build = filepath.Join(root, build)
+		}
+		build = filepath.Clean(build)
+		if previous := seenBuilds[build]; previous != "" {
+			return fmt.Errorf("cmake presets %q and %q use the same build directory %q", previous, name, build)
+		}
+		seenBuilds[build] = name
+	}
+	if cfg.Configure.DefaultPreset == "" {
+		return fmt.Errorf("cmake.default-preset is required when multiple presets are defined")
+	}
+	if cfg.Configure.Presets[cfg.Configure.DefaultPreset] == nil {
+		return fmt.Errorf("cmake.default-preset %q does not name a preset", cfg.Configure.DefaultPreset)
+	}
+	if hasMultiConfigPreset(cfg) {
+		if err := validateConfigurations(cfg); err != nil {
+			return err
+		}
+	} else {
+		if len(cfg.Configure.Configurations) > 0 || cfg.Configure.DefaultConfiguration != "" {
+			return fmt.Errorf("cmake configurations and default-configuration require a multi-config generator")
+		}
+		for name, preset := range cfg.Configure.Presets {
+			if preset.Configurations != nil || preset.DefaultConfiguration != "" {
+				return fmt.Errorf("cmake.presets.%s configurations require a multi-config generator", name)
+			}
+		}
+		if selection := cfg.Configure.CompileCommands; selection != "" && selection != "default" {
+			return fmt.Errorf("cmake.compile-commands must be default with a single-config generator")
+		}
+	}
+	return nil
+}
+
+func validateDeps(cfg *Config) error {
+	for name, dep := range cfg.Deps {
+		if !depNameRe.MatchString(name) {
+			return fmt.Errorf("dependencies.%s: invalid dependency name", name)
+		}
+		if dep == nil || dep.Script == "" {
+			return fmt.Errorf("dependencies.%s: missing script", name)
+		}
+		if dep.Source != nil {
+			urlSet, gitSet := dep.Source.URL != "", dep.Source.Git != ""
+			if urlSet == gitSet {
+				return fmt.Errorf("dependencies.%s.source: set exactly one of url or git", name)
+			}
+			if urlSet && !sha256Re.MatchString(dep.Source.SHA256) {
+				return fmt.Errorf("dependencies.%s.source: url requires a 64-hex sha256", name)
+			}
+			if gitSet && dep.Source.Ref == "" {
+				return fmt.Errorf("dependencies.%s.source: git requires ref", name)
+			}
+		}
+		if len(dep.Patches) > 0 && dep.Source == nil {
+			return fmt.Errorf("dependencies.%s: patches require a source", name)
+		}
+		for _, need := range dep.Needs {
+			if cfg.Deps[need] == nil {
+				return fmt.Errorf("dependencies.%s: needs unknown dependency %q", name, need)
+			}
+		}
+	}
+	return nil
+}
+
+func validateConfigurations(cfg *Config) error {
+	known := map[string]*ConfigurationCfg{}
+	folded := map[string]string{}
+	for i, configuration := range cfg.Configure.Configurations {
+		if configuration == nil || !configNameRe.MatchString(configuration.Name) {
+			return fmt.Errorf("cmake.configurations[%d]: invalid configuration name", i)
+		}
+		key := strings.ToLower(configuration.Name)
+		if previous := folded[key]; previous != "" {
+			return fmt.Errorf("cmake configurations %q and %q differ only by case", previous, configuration.Name)
+		}
+		folded[key] = configuration.Name
+		known[configuration.Name] = configuration
+	}
+	for _, configuration := range cfg.Configure.Configurations {
+		if base := configuration.Inherits; base != "" && known[base] == nil && !isStandardConfig(base) {
+			return fmt.Errorf("cmake configuration %q inherits unknown configuration %q", configuration.Name, base)
+		}
+	}
+	visiting, visited := map[string]bool{}, map[string]bool{}
+	var visit func(string) error
+	visit = func(name string) error {
+		if visiting[name] {
+			return fmt.Errorf("cmake configuration inheritance contains a cycle at %q", name)
+		}
+		if visited[name] {
+			return nil
+		}
+		visiting[name] = true
+		if base := known[name].Inherits; known[base] != nil {
+			if err := visit(base); err != nil {
+				return err
+			}
+		}
+		delete(visiting, name)
+		visited[name] = true
+		return nil
+	}
+	for name := range known {
+		if err := visit(name); err != nil {
+			return err
+		}
+	}
+	if known[cfg.Configure.DefaultConfiguration] == nil {
+		return fmt.Errorf("cmake.default-configuration %q is not configured", cfg.Configure.DefaultConfiguration)
+	}
+	if selection := cfg.Configure.CompileCommands; selection != "" && selection != "default" && known[selection] == nil {
+		return fmt.Errorf("cmake.compile-commands %q is not configured", selection)
+	}
+	for name, preset := range cfg.Configure.Presets {
+		path := "cmake.presets." + name
+		if !isMultiConfig(cfg, preset) {
+			if preset.Configurations != nil || preset.DefaultConfiguration != "" {
+				return fmt.Errorf("%s configurations require a multi-config generator", path)
+			}
+			continue
+		}
+		selected := effectiveConfigurations(cfg, preset)
+		if len(selected) == 0 {
+			return fmt.Errorf("%s.configurations must not be empty", path)
+		}
+		included := map[string]bool{}
+		for _, configuration := range selected {
+			if known[configuration] == nil {
+				return fmt.Errorf("%s.configurations contains unknown configuration %q", path, configuration)
+			}
+			if included[configuration] {
+				return fmt.Errorf("%s.configurations contains duplicate configuration %q", path, configuration)
+			}
+			included[configuration] = true
+		}
+		defaultConfiguration := effectiveDefaultConfiguration(cfg, preset)
+		if !included[defaultConfiguration] {
+			return fmt.Errorf("%s.default-configuration %q is not selected", path, defaultConfiguration)
+		}
+		if selection := cfg.Configure.CompileCommands; selection != "" && selection != "default" && !included[selection] {
+			return fmt.Errorf("cmake.compile-commands %q is not selected by %s", selection, path)
+		}
+	}
+	return nil
+}
+
+func validateVariables(path string, variables map[string]any) error {
+	for name, value := range variables {
+		if !cmakeCacheNameRe.MatchString(name) {
+			return fmt.Errorf("%s.%s: invalid CMake cache variable", path, name)
+		}
+		if _, err := cacheValueString(value); err != nil {
+			return fmt.Errorf("%s.%s: %w", path, name, err)
+		}
+		if cmkOwnedCacheVariables[name] {
+			return fmt.Errorf("%s.%s is managed by cmk", path, name)
+		}
+	}
+	return nil
+}
+
+var cmkOwnedCacheVariables = map[string]bool{
+	"CMAKE_CONFIGURATION_TYPES":     true,
+	"CMAKE_DEFAULT_BUILD_TYPE":      true,
+	"CMAKE_EXPORT_COMPILE_COMMANDS": true,
+	"CMAKE_PROJECT_INCLUDE":         true,
+	"CMAKE_SUPPRESS_REGENERATION":   true,
+	"CMAKE_C_COMPILER_LAUNCHER":     true,
+	"CMAKE_CXX_COMPILER_LAUNCHER":   true,
+}
+
+func validateCMakeArgs(path string, args []string) error {
+	for _, argument := range args {
+		ownsConfigureLocation := !strings.HasPrefix(argument, "-D") &&
+			(strings.HasPrefix(argument, "-G") || strings.HasPrefix(argument, "-S") || strings.HasPrefix(argument, "-B"))
+		if ownsConfigureLocation || argument == "--preset" || strings.HasPrefix(argument, "--preset=") || argument == "--fresh" {
+			return fmt.Errorf("%s contains %q, which is managed by cmk", path, argument)
+		}
+		if !strings.HasPrefix(argument, "-D") {
+			continue
+		}
+		name, _, _ := strings.Cut(argument[2:], "=")
+		if index := strings.IndexByte(name, ':'); index >= 0 {
+			name = name[:index]
+		}
+		if cmkOwnedCacheVariables[name] {
+			return fmt.Errorf("%s defines %s, which is managed by cmk", path, name)
+		}
+	}
+	return nil
+}
+
+func variableArgs(variables map[string]any, vars map[string]string) []string {
+	keys := make([]string, 0, len(variables))
+	for key := range variables {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	args := make([]string, 0, len(keys))
+	for _, key := range keys {
+		value, _ := cacheValueString(variables[key])
+		args = append(args, "-D"+key+"="+expandVars(value, vars))
+	}
+	return args
+}
+
+func cacheValueString(value any) (string, error) {
+	switch value := value.(type) {
+	case string:
+		return value, nil
+	case bool:
+		if value {
+			return "ON", nil
+		}
+		return "OFF", nil
+	case int:
+		return strconv.Itoa(value), nil
+	case int64:
+		return strconv.FormatInt(value, 10), nil
+	case uint64:
+		return strconv.FormatUint(value, 10), nil
+	case float64:
+		return strconv.FormatFloat(value, 'g', -1, 64), nil
+	case nil:
+		return "", fmt.Errorf("value must be a scalar")
+	default:
+		return "", fmt.Errorf("value must be a string, boolean, or number")
+	}
+}

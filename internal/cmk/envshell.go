@@ -21,7 +21,7 @@ type envEntry struct {
 // composeEnv builds the nix-develop-style project environment: the
 // toolchain on PATH, CC/CXX, every dep prefix on CMAKE_PREFIX_PATH and
 // PKG_CONFIG_PATH (plus their bin dirs on PATH), and the expanded [env]
-// section from cmk.toml.
+// section from cmk.yaml.
 func composeEnv(p *Project, tc *Toolchain) []envEntry {
 	var entries []envEntry
 

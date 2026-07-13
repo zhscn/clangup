@@ -32,10 +32,12 @@ func cmdDoctor() error {
 
 	fmt.Println("project:")
 	c.ok("root %s", p.Root)
-	if _, err := os.Stat(filepath.Join(p.Root, lockFileName)); err == nil {
-		c.ok("cmk.toml + cmk.lock present")
+	if !p.hasCmkConfig() {
+		c.note("foreign CMake project (cmk build uses existing build trees)")
+	} else if _, err := os.Stat(filepath.Join(p.Root, lockFileName)); err == nil {
+		c.ok("cmk.yaml + cmk.lock present")
 	} else {
-		c.note("cmk.toml present; cmk.lock appears on first sync/config")
+		c.note("cmk.yaml present; cmk.lock appears on first sync/config")
 	}
 
 	fmt.Println("toolchain:")
@@ -43,15 +45,14 @@ func cmdDoctor() error {
 
 	fmt.Println("build tools:")
 	checkTool(c, "cmake")
-	gen := p.Cfg.Configure.Generator
-	if gen == "" {
-		gen = "Ninja"
-	}
-	if strings.HasPrefix(strings.ToLower(gen), "ninja") {
-		checkTool(c, "ninja")
+	for _, preset := range p.Cfg.Configure.Presets {
+		if strings.HasPrefix(strings.ToLower(effectiveGenerator(p.Cfg, preset)), "ninja") {
+			checkTool(c, "ninja")
+			break
+		}
 	}
 
-	if isMultiConfig(p.Cfg) {
+	if hasMultiConfigPreset(p.Cfg) {
 		fmt.Println("configurations (multi-config):")
 		doctorConfigurations(c, p)
 	}
@@ -74,8 +75,8 @@ func cmdDoctor() error {
 		for _, d := range p.listBuildDirs() {
 			abs := p.BuildDirs[d]
 			switch {
-			case !p.hasCmkToml() && loadInjectionStamp(abs) == nil:
-				c.note("%s — not cmk-managed (no stamp)", d)
+			case !p.hasCmkConfig():
+				c.note("%s — existing CMake build tree", d)
 			case tc == nil:
 				c.ok("%s", d) // toolchain unavailable; staleness not assessable
 			default:
@@ -172,30 +173,16 @@ func doctorToolchain(c *doctorChecker, p *Project) {
 }
 
 func doctorConfigurations(c *doctorChecker, p *Project) {
-	def, _ := p.resolveConfig("")
-	for _, name := range effectiveConfigurations(p.Cfg) {
-		cc := p.Cfg.Configure.Configuration[name]
-		marker := ""
-		if name == def {
-			marker = " (default)"
+	for _, name := range presetNames(p.Cfg.Configure.Presets) {
+		preset := p.Cfg.Configure.Presets[name]
+		if !isMultiConfig(p.Cfg, preset) {
+			continue
 		}
-		switch {
-		case cc == nil:
-			c.ok("%s%s", name, marker)
-		case cc.hasReplacementFlags() && cc.hasAppendFlags() && cc.Inherits != "":
-			c.ok("%s%s — custom, inherits %s, appends flags", name, marker, cc.Inherits)
-		case cc.Inherits != "":
-			c.ok("%s%s — custom, inherits %s", name, marker, cc.Inherits)
-		case cc.hasReplacementFlags() && cc.hasAppendFlags():
-			c.ok("%s%s — custom, appends flags", name, marker)
-		case cc.hasAppendFlags():
-			c.ok("%s%s — appends flags", name, marker)
-		default:
-			c.ok("%s%s — custom", name, marker)
-		}
+		c.ok("%s — %s (default: %s)", name,
+			strings.Join(effectiveConfigurations(p.Cfg, preset), ", "),
+			effectiveDefaultConfiguration(p.Cfg, preset))
 	}
-	c.note("one build dir: %s", p.multiConfigDir())
-	if len(p.Cfg.Configure.Configuration) > 0 {
+	if len(orderedConfigurationEdits(p.Cfg)) > 0 {
 		c.note("configuration flag edits are included via CMAKE_PROJECT_INCLUDE; written to %s", configFlagsFileRel)
 	}
 }
@@ -203,7 +190,7 @@ func doctorConfigurations(c *doctorChecker, p *Project) {
 func doctorLauncher(c *doctorChecker, p *Project, launcher string) {
 	path, err := exec.LookPath(launcher)
 	if err != nil {
-		c.fail("compiler_launcher %q not found on PATH (builds proceed without it)", launcher)
+		c.fail("launcher %q not found on PATH (builds proceed without it)", launcher)
 		return
 	}
 	c.ok("%s (%s)", launcher, path)
