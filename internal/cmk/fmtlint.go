@@ -65,26 +65,15 @@ func gitList(root string, args ...string) ([]string, error) {
 // selectFiles resolves the file selection shared by fmt and lint into
 // absolute paths. Without an explicit mode it selects changes relative to
 // HEAD.
-func selectFiles(p *Project, explicit string, all, staged, unstaged bool, ignore []string, verbose bool) ([]string, error) {
+func selectFiles(p *Project, all, staged, unstaged bool, ignore []string, verbose bool) ([]string, error) {
 	modes := 0
-	for _, b := range []bool{explicit != "", all, staged, unstaged} {
+	for _, b := range []bool{all, staged, unstaged} {
 		if b {
 			modes++
 		}
 	}
 	if modes > 1 {
-		return nil, errors.New("pass a file, or at most one of --all/--staged/--unstaged")
-	}
-
-	if explicit != "" {
-		abs, err := filepath.Abs(explicit)
-		if err != nil {
-			return nil, err
-		}
-		if _, err := os.Stat(abs); err != nil {
-			return nil, fmt.Errorf("file not found: %s", abs)
-		}
-		return []string{abs}, nil
+		return nil, errors.New("select at most one of --all/--staged/--unstaged")
 	}
 
 	var files []string
@@ -230,7 +219,7 @@ func selectLintScopeFiles(p *Project, options lintOptions) ([]string, error) {
 		}
 		candidates, err = gitList(p.Root, "diff", "--name-only", "--diff-filter=AM", base+"...HEAD")
 	default:
-		return selectFiles(p, "", options.All, options.Staged, options.Unstaged, p.Cfg.Lint.Ignore, options.Verbose)
+		return selectFiles(p, options.All, options.Staged, options.Unstaged, p.Cfg.Lint.Ignore, options.Verbose)
 	}
 	if err != nil {
 		return nil, err
@@ -247,7 +236,7 @@ func cmdFmt(explicitFiles []string, options fmtOptions) error {
 	if len(explicitFiles) > 0 {
 		files, err = resolveExplicitFiles(explicitFiles)
 	} else {
-		files, err = selectFiles(p, "", options.All, options.Staged, options.Unstaged, p.Cfg.Fmt.Ignore, options.Verbose)
+		files, err = selectFiles(p, options.All, options.Staged, options.Unstaged, p.Cfg.Fmt.Ignore, options.Verbose)
 	}
 	if err != nil {
 		return err
@@ -261,6 +250,14 @@ func cmdFmt(explicitFiles []string, options fmtOptions) error {
 			fmt.Println(file)
 		}
 	}
+	tc, err := p.toolchain()
+	if err != nil {
+		return err
+	}
+	clangFormat, err := tc.command("clang-format")
+	if err != nil {
+		return err
+	}
 
 	type res struct {
 		file        string
@@ -268,16 +265,19 @@ func cmdFmt(explicitFiles []string, options fmtOptions) error {
 	}
 	results, errs := runParallel(files, defaultJobs(), func(abs string) (res, error) {
 		if options.DryRun {
-			cmd := exec.Command("clang-format", "--dry-run", "-Werror", abs)
+			cmd := exec.Command(clangFormat, "--output-replacements-xml", abs)
 			cmd.Dir = p.Root
-			err := cmd.Run()
-			return res{abs, err != nil}, nil
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				return res{}, fmt.Errorf("%s: %s", abs, strings.TrimSpace(string(output)))
+			}
+			return res{abs, bytes.Contains(output, []byte("<replacement "))}, nil
 		}
 		before, err := os.ReadFile(abs)
 		if err != nil {
 			return res{}, err
 		}
-		cmd := exec.Command("clang-format", "-i", abs)
+		cmd := exec.Command(clangFormat, "-i", abs)
 		cmd.Dir = p.Root
 		out, err := cmd.CombinedOutput()
 		if err != nil {
@@ -453,6 +453,14 @@ func cmdLint(explicitFiles []string, options lintOptions) error {
 
 	useColor := stdoutIsTerminal()
 	tidyArgs := lintCommandArgs(dir, p.Cfg.Lint, options.WarningsAsErrors, options.Fix, useColor)
+	tc, err := p.toolchain()
+	if err != nil {
+		return err
+	}
+	clangTidy, err := tc.command("clang-tidy")
+	if err != nil {
+		return err
+	}
 
 	jobs := defaultJobs()
 	if options.Fix {
@@ -468,7 +476,7 @@ func cmdLint(explicitFiles []string, options lintOptions) error {
 		failed   bool
 	}
 	results, errs := runParallel(files, jobs, func(file string) (res, error) {
-		cmd := exec.Command("clang-tidy", append(append([]string(nil), tidyArgs...), file)...)
+		cmd := exec.Command(clangTidy, append(append([]string(nil), tidyArgs...), file)...)
 		cmd.Dir = p.Root
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout = &stdout

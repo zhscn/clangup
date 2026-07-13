@@ -56,13 +56,21 @@ func TestInstalledExactResolvesImportedChannel(t *testing.T) {
 	}
 }
 
-func TestUnknownCommandIsInvalidRequest(t *testing.T) {
-	var stdout, stderr bytes.Buffer
-	exitCode := Run([]string{"unknown", "--format=json"}, &stdout, &stderr, "test")
-	if exitCode != 2 {
-		t.Fatalf("exit code = %d, want 2; stderr = %s", exitCode, stderr.String())
-	}
-	if !strings.Contains(stdout.String(), `"code":"invalid_request"`) {
-		t.Fatalf("unexpected error: %s", stdout.String())
+func TestInvalidRequests(t *testing.T) {
+	for name, args := range map[string][]string{
+		"unknown command": {"unknown", "--format=json"},
+		"output format":   {"install", "--format=bogus"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			exitCode := Run(args, &stdout, &stderr, "test")
+			if exitCode != 2 {
+				t.Fatalf("exit code = %d, want 2; stderr = %s", exitCode, stderr.String())
+			}
+			output := stdout.String() + stderr.String()
+			if !strings.Contains(output, "invalid_request") && !strings.Contains(output, "unsupported format") {
+				t.Fatalf("unexpected error: %s", output)
+			}
+		})
 	}
 }

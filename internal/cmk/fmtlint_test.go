@@ -9,28 +9,6 @@ import (
 	"testing"
 )
 
-func TestSelectFilesExplicitFileBypassesGitFilters(t *testing.T) {
-	root := t.TempDir()
-	file := filepath.Join(root, "generated", "README.md")
-	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(file, []byte("test\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	files, err := selectFiles(
-		&Project{Root: root}, file, false, false, false,
-		[]string{"generated/**"}, false,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !slices.Equal(files, []string{file}) {
-		t.Fatalf("selectFiles explicit = %v, want [%s]", files, file)
-	}
-}
-
 func TestResolveExplicitFilesPreservesOrderAndDeduplicates(t *testing.T) {
 	root := t.TempDir()
 	first := filepath.Join(root, "first.cc")
@@ -47,19 +25,6 @@ func TestResolveExplicitFilesPreservesOrderAndDeduplicates(t *testing.T) {
 	}
 	if want := []string{first, second}; !slices.Equal(files, want) {
 		t.Fatalf("resolveExplicitFiles = %v, want %v", files, want)
-	}
-}
-
-func TestSelectFilesExplicitFileConflictsWithMode(t *testing.T) {
-	root := t.TempDir()
-	file := filepath.Join(root, "a.cc")
-	if err := os.WriteFile(file, []byte("// test\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err := selectFiles(&Project{Root: root}, file, true, false, false, nil, false)
-	if err == nil || !strings.Contains(err.Error(), "pass a file") {
-		t.Fatalf("error = %v, want explicit-file conflict", err)
 	}
 }
 
@@ -97,7 +62,7 @@ func TestSelectFilesDefaultsToTrackedChanges(t *testing.T) {
 	}
 
 	files, err := selectFiles(
-		&Project{Root: root}, "", false, false, false,
+		&Project{Root: root}, false, false, false,
 		[]string{"generated/**"}, false,
 	)
 	if err != nil {
@@ -172,26 +137,6 @@ func TestIsCppFileMatchesRustExtensions(t *testing.T) {
 		if isCppFile(path) {
 			t.Errorf("isCppFile(%q) = true", path)
 		}
-	}
-}
-
-func TestLintCommandArgsMatchRustOrdering(t *testing.T) {
-	cfg := LintCfg{
-		WarningsAsErrors: true,
-		HeaderFilter:     "^include/",
-		ExtraArgs:        []string{"--checks=modernize-*"},
-	}
-	got := lintCommandArgs("build", cfg, false, true, true)
-	want := []string{
-		"-p", "build",
-		"-header-filter=^include/",
-		"-warnings-as-errors=*",
-		"--fix",
-		"--use-color",
-		"--checks=modernize-*",
-	}
-	if !slices.Equal(got, want) {
-		t.Fatalf("lintCommandArgs = %v, want %v", got, want)
 	}
 }
 

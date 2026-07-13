@@ -60,23 +60,21 @@ func newDoctorCommand() *cobra.Command {
 		if len(records) == 0 {
 			check.fail("none installed")
 		}
-		requirements := map[string]bool{}
+		var active *toolchain.InstallRecord
 		for _, record := range records {
 			if toolchain.IsInstalled(record.Prefix, record.ManifestSHA256, record.ArtifactSHA256) {
 				check.ok("%s", record.ID())
 			} else {
 				check.fail("%s is incomplete", record.ID())
 			}
-			for _, requirement := range record.DriverRequirements {
-				requirements[requirement] = true
+			if record.Prefix == state.Prefix {
+				copy := record
+				active = &copy
 			}
 		}
-		if len(requirements) > 0 {
+		if active != nil && len(active.DriverRequirements) > 0 {
 			fmt.Fprintln(command.OutOrStdout(), "driver requirements:")
-			names := make([]string, 0, len(requirements))
-			for name := range requirements {
-				names = append(names, name)
-			}
+			names := append([]string(nil), active.DriverRequirements...)
 			sort.Strings(names)
 			for _, name := range names {
 				checkRequirement(check, name)
@@ -102,8 +100,8 @@ func newDoctorCommand() *cobra.Command {
 		} else {
 			check.warn("%s is not in PATH; run clangup env", bin)
 		}
-		if full && state.Prefix != "" {
-			runDoctorSmoke(check, state.Prefix)
+		if full && active != nil {
+			runDoctorSmoke(check, active)
 		}
 		if check.failed {
 			return installFailure(fmt.Errorf("problems found"))
@@ -151,7 +149,7 @@ func checkRequirement(check *doctorCheck, name string) {
 	}
 }
 
-func runDoctorSmoke(check *doctorCheck, prefix string) {
+func runDoctorSmoke(check *doctorCheck, record *toolchain.InstallRecord) {
 	fmt.Fprintln(check.command.OutOrStdout(), "smoke:")
 	directory, err := os.MkdirTemp("", "clangup-doctor-")
 	if err != nil {
@@ -160,16 +158,22 @@ func runDoctorSmoke(check *doctorCheck, prefix string) {
 	}
 	defer os.RemoveAll(directory)
 	source := filepath.Join(directory, "smoke.cc")
-	program := "#include <format>\n#include <string>\nint main(){return std::format(\"{}\",42)!=\"42\";}\n"
+	program := "#include <stdexcept>\n#include <string>\nint main(){try{throw std::runtime_error(\"ok\");}catch(const std::exception& e){return std::string(e.what())!=\"ok\";}}\n"
 	if err := os.WriteFile(source, []byte(program), 0o644); err != nil {
 		check.fail("write smoke source: %v", err)
 		return
 	}
-	compiler := filepath.Join(prefix, "bin", "clang++")
+	compiler := filepath.Join(record.Prefix, "bin", "clang++")
+	trace, err := exec.Command(compiler, "-###", "-x", "c++", "/dev/null").CombinedOutput()
+	if err != nil {
+		check.fail("default driver trace: %v\n%s", err, trace)
+	} else {
+		checkDriverContract(check, record.Driver, string(trace))
+	}
 	for _, variant := range []struct {
 		name  string
 		flags []string
-	}{{"C++20 libc++", []string{"-std=c++20", "-stdlib=libc++"}}, {"ASan", []string{"-std=c++20", "-stdlib=libc++", "-fsanitize=address"}}} {
+	}{{"default C++", []string{"-std=c++11"}}, {"default ASan", []string{"-std=c++11", "-fsanitize=address"}}} {
 		binary := filepath.Join(directory, strings.ToLower(strings.ReplaceAll(variant.name, " ", "-")))
 		arguments := append(append([]string{}, variant.flags...), source, "-o", binary)
 		if output, err := exec.Command(compiler, arguments...).CombinedOutput(); err != nil {
@@ -182,4 +186,62 @@ func runDoctorSmoke(check *doctorCheck, prefix string) {
 		}
 		check.ok("%s", variant.name)
 	}
+	if driverValue(record.Driver, "cxx_stdlib", "name") == "libc++" {
+		modern := filepath.Join(directory, "modern.cc")
+		program := "#include <format>\n#include <string>\nint main(){return std::format(\"{}\",42)!=\"42\";}\n"
+		if err := os.WriteFile(modern, []byte(program), 0o644); err != nil {
+			check.fail("write C++20 smoke source: %v", err)
+			return
+		}
+		binary := filepath.Join(directory, "cxx20")
+		if output, err := exec.Command(compiler, "-std=c++20", modern, "-o", binary).CombinedOutput(); err != nil {
+			check.fail("default C++20 compile: %v\n%s", err, output)
+		} else if output, err := exec.Command(binary).CombinedOutput(); err != nil {
+			check.fail("default C++20 run: %v\n%s", err, output)
+		} else {
+			check.ok("default C++20")
+		}
+	}
+}
+
+func driverValue(driver map[string]any, keys ...string) string {
+	var value any = driver
+	for _, key := range keys {
+		object, ok := value.(map[string]any)
+		if !ok {
+			return ""
+		}
+		value = object[key]
+	}
+	result, _ := value.(string)
+	return result
+}
+
+func checkDriverContract(check *doctorCheck, driver map[string]any, trace string) {
+	cxx := driverValue(driver, "cxx_stdlib", "name")
+	switch cxx {
+	case "libc++":
+		if !strings.Contains(trace, `"-lc++"`) {
+			check.fail("default driver does not select libc++")
+			return
+		}
+	case "system":
+		if runtime.GOOS == "linux" && !strings.Contains(trace, `"-lstdc++"`) {
+			check.fail("default driver does not select system libstdc++")
+			return
+		}
+	}
+	if driverValue(driver, "linker") == "lld" && !strings.Contains(trace, "ld.lld") {
+		check.fail("default driver does not select lld")
+		return
+	}
+	if driverValue(driver, "rtlib") == "compiler-rt" && !strings.Contains(trace, "libclang_rt.builtins") {
+		check.fail("default driver does not select compiler-rt")
+		return
+	}
+	if driverValue(driver, "unwindlib") == "libgcc" && !strings.Contains(trace, `"-lgcc_s"`) {
+		check.fail("default driver does not select libgcc_s")
+		return
+	}
+	check.ok("default driver contract")
 }

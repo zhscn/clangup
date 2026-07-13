@@ -23,6 +23,7 @@ type Toolchain struct {
 	CXX       string
 	File      string
 	CXXStdlib string
+	Tools     map[string]string
 }
 
 type clangupResolveResult struct {
@@ -86,6 +87,7 @@ func toolchainFromResult(result *clangupResolveResult) (*Toolchain, error) {
 		CXX:       result.Install.CXX,
 		File:      result.Install.ToolchainFile,
 		CXXStdlib: result.Driver.CXXStdlib.Name,
+		Tools:     result.Install.Tools,
 	}, nil
 }
 
@@ -104,14 +106,19 @@ func resolveToolchain(selector string, lock *Lock) (tc *Toolchain, lockDirty boo
 	pin := lock.toolchainFor(runtime.GOOS, runtime.GOARCH)
 	requested := effectiveSelector(selector, pin)
 	var result clangupResolveResult
-	if err := runClangupJSON("ensure", requested, &result); err != nil {
+	target := pin.Target
+	if target == "" {
+		target = hostTarget()
+	}
+	extra := targetFlag(target)
+	if err := runClangupJSON("ensure", requested, &result, extra...); err != nil {
 		if !strings.Contains(err.Error(), "channel index is not cached") {
 			return nil, false, err
 		}
 		if updateErr := runClangupUpdate(); updateErr != nil {
 			return nil, false, updateErr
 		}
-		if err := runClangupJSON("ensure", requested, &result); err != nil {
+		if err := runClangupJSON("ensure", requested, &result, extra...); err != nil {
 			return nil, false, err
 		}
 	}
@@ -142,7 +149,11 @@ func locateToolchain(selector string, lock *Lock) (*Toolchain, error) {
 	}
 	requested := effectiveSelector(selector, lock.toolchainFor(runtime.GOOS, runtime.GOARCH))
 	var resolved clangupResolveResult
-	if err := runClangupJSON("resolve", requested, &resolved); err != nil {
+	target := lock.toolchainFor(runtime.GOOS, runtime.GOARCH).Target
+	if target == "" {
+		target = hostTarget()
+	}
+	if err := runClangupJSON("resolve", requested, &resolved, targetFlag(target)...); err != nil {
 		return nil, err
 	}
 	var path struct {
@@ -153,7 +164,7 @@ func locateToolchain(selector string, lock *Lock) (*Toolchain, error) {
 		Release int    `json:"release"`
 		Target  string `json:"target"`
 	}
-	if err := runClangupJSON("path", exactSelector(&resolved), &path); err != nil {
+	if err := runClangupJSON("path", exactSelector(&resolved), &path, "--target", resolved.Target); err != nil {
 		return nil, nil
 	}
 	resolved.Install = &struct {
@@ -166,6 +177,10 @@ func locateToolchain(selector string, lock *Lock) (*Toolchain, error) {
 		Prefix: path.Prefix,
 		CC:     filepath.Join(path.Prefix, "bin", "clang"),
 		CXX:    filepath.Join(path.Prefix, "bin", "clang++"),
+		Tools: map[string]string{
+			"clang-format": filepath.Join(path.Prefix, "bin", "clang-format"),
+			"clang-tidy":   filepath.Join(path.Prefix, "bin", "clang-tidy"),
+		},
 	}
 	if candidate := filepath.Join(path.Prefix, "toolchain.cmake"); fileExists(candidate) {
 		resolved.Install.ToolchainFile = candidate
@@ -187,12 +202,15 @@ func clangupBin() string {
 	return ""
 }
 
-func runClangupJSON(command, selector string, output any) error {
+func runClangupJSON(command, selector string, output any, extraArgs ...string) error {
 	bin := clangupBin()
 	if bin == "" {
 		return fmt.Errorf("clangup is required to resolve toolchain %s", selector)
 	}
-	cmd := exec.Command(bin, command, selector, "--format=json")
+	args := []string{command, selector}
+	args = append(args, extraArgs...)
+	args = append(args, "--format=json")
+	cmd := exec.Command(bin, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -207,6 +225,26 @@ func runClangupJSON(command, selector string, output any) error {
 		return fmt.Errorf("decode clangup %s output: %w", command, err)
 	}
 	return nil
+}
+
+func targetFlag(target string) []string {
+	if target == "" {
+		return nil
+	}
+	return []string{"--target", target}
+}
+
+func hostTarget() string {
+	switch hostPlatform(runtime.GOOS, runtime.GOARCH) {
+	case "linux-x86_64":
+		return "x86_64-unknown-linux-gnu"
+	case "linux-aarch64":
+		return "aarch64-unknown-linux-gnu"
+	case "macos-aarch64":
+		return "arm64-apple-darwin"
+	default:
+		return ""
+	}
 }
 
 func runClangupUpdate() error {
@@ -226,14 +264,21 @@ func runClangupUpdate() error {
 func systemToolchain() (*Toolchain, error) {
 	cc := os.Getenv("CC")
 	cxx := os.Getenv("CXX")
-	if cc == "" || cxx == "" {
+	if cc == "" && cxx == "" {
 		for _, pair := range [][2]string{{"clang", "clang++"}, {"gcc", "g++"}, {"cc", "c++"}} {
-			ccPath, err1 := exec.LookPath(pair[0])
-			cxxPath, err2 := exec.LookPath(pair[1])
-			if err1 == nil && err2 == nil {
-				cc, cxx = ccPath, cxxPath
-				break
+			if ccPath, err1 := exec.LookPath(pair[0]); err1 == nil {
+				if cxxPath, err2 := exec.LookPath(pair[1]); err2 == nil {
+					cc, cxx = ccPath, cxxPath
+					break
+				}
 			}
+		}
+	} else {
+		if cc == "" {
+			cc = findCompiler(companionCompiler(cxx, true), "clang", "gcc", "cc")
+		}
+		if cxx == "" {
+			cxx = findCompiler(companionCompiler(cc, false), "clang++", "g++", "c++")
 		}
 	}
 	if cc == "" || cxx == "" {
@@ -244,10 +289,65 @@ func systemToolchain() (*Toolchain, error) {
 		verLine, _, _ = strings.Cut(strings.TrimSpace(string(out)), "\n")
 	}
 	return &Toolchain{
-		ID:  "system:" + verLine,
-		CC:  cc,
-		CXX: cxx,
+		ID:    "system:" + verLine,
+		CC:    cc,
+		CXX:   cxx,
+		Tools: map[string]string{},
 	}, nil
+}
+
+func companionCompiler(compiler string, wantC bool) string {
+	base := filepath.Base(compiler)
+	if wantC {
+		switch base {
+		case "clang++":
+			return "clang"
+		case "g++":
+			return "gcc"
+		case "c++":
+			return "cc"
+		}
+	} else {
+		switch base {
+		case "clang":
+			return "clang++"
+		case "gcc":
+			return "g++"
+		case "cc":
+			return "c++"
+		}
+	}
+	return ""
+}
+
+func findCompiler(candidates ...string) string {
+	for _, candidate := range candidates {
+		if candidate == "" {
+			continue
+		}
+		if path, err := exec.LookPath(candidate); err == nil {
+			return path
+		}
+	}
+	return ""
+}
+
+func (tc *Toolchain) command(name string) (string, error) {
+	if path := tc.Tools[name]; path != "" && fileExists(path) {
+		return path, nil
+	}
+	if tc.Root != "" {
+		path := filepath.Join(tc.Root, "bin", name)
+		if fileExists(path) {
+			return path, nil
+		}
+		return "", fmt.Errorf("toolchain %s does not provide %s", tc.Selector, name)
+	}
+	path, err := exec.LookPath(name)
+	if err != nil {
+		return "", fmt.Errorf("%s not found on PATH", name)
+	}
+	return path, nil
 }
 
 // scriptEnv is the toolchain part of a dep script's environment.

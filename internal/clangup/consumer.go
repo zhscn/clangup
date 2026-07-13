@@ -18,6 +18,9 @@ import (
 func newUpdateCommand() *cobra.Command {
 	var format string
 	command := &cobra.Command{Use: "update", Short: "Refresh the clangup channel index", Args: cobra.NoArgs, RunE: func(command *cobra.Command, _ []string) error {
+		if err := validateOutputFormat(format); err != nil {
+			return invalidRequest(err)
+		}
 		index, err := toolchain.NewClient().SyncIndex()
 		if err != nil {
 			return invalidRepository(err)
@@ -49,6 +52,9 @@ func newChannelCommand() *cobra.Command {
 func newChannelListCommand() *cobra.Command {
 	var format string
 	command := &cobra.Command{Use: "list", Short: "List channels", Args: cobra.NoArgs, RunE: func(command *cobra.Command, _ []string) error {
+		if err := validateOutputFormat(format); err != nil {
+			return invalidRequest(err)
+		}
 		index, err := loadIndex()
 		if err != nil {
 			return invalidRepository(err)
@@ -77,6 +83,9 @@ func newChannelListCommand() *cobra.Command {
 func newChannelShowCommand() *cobra.Command {
 	var format string
 	command := &cobra.Command{Use: "show <channel>", Short: "Show channel releases", Args: cobra.ExactArgs(1), RunE: func(command *cobra.Command, args []string) error {
+		if err := validateOutputFormat(format); err != nil {
+			return invalidRequest(err)
+		}
 		index, err := loadIndex()
 		if err != nil {
 			return invalidRepository(err)
@@ -107,6 +116,9 @@ func newInstallCommand() *cobra.Command {
 	var prefix, target, format, file, location string
 	var force bool
 	command := &cobra.Command{Use: "install [channel[@version-release]]", Short: "Install a toolchain", Args: cobra.MaximumNArgs(1), RunE: func(command *cobra.Command, args []string) error {
+		if err := validateOutputFormat(format); err != nil {
+			return invalidRequest(err)
+		}
 		if file != "" && location != "" {
 			return invalidRequest(fmt.Errorf("--file and --url are mutually exclusive"))
 		}
@@ -154,6 +166,9 @@ func newEnsureCommand() *cobra.Command { return newConsumerCommand("ensure", tru
 func newConsumerCommand(name string, ensure bool) *cobra.Command {
 	var prefix, target, format string
 	command := &cobra.Command{Use: name + " <channel[@version-release]>", Short: "Resolve an exact toolchain for build-system consumers", Args: cobra.ExactArgs(1), RunE: func(command *cobra.Command, args []string) error {
+		if err := validateOutputFormat(format); err != nil {
+			return invalidRequest(err)
+		}
 		if prefix == "" {
 			record, err := installedExact(args[0], target)
 			if err != nil {
@@ -206,6 +221,9 @@ func newConsumerCommand(name string, ensure bool) *cobra.Command {
 func newPathCommand() *cobra.Command {
 	var target, format string
 	command := &cobra.Command{Use: "path <channel[@version-release]>", Short: "Print an installed toolchain path", Args: cobra.ExactArgs(1), RunE: func(command *cobra.Command, args []string) error {
+		if err := validateOutputFormat(format); err != nil {
+			return invalidRequest(err)
+		}
 		if record, err := installedExact(args[0], target); err != nil {
 			return installFailure(err)
 		} else if record != nil {
@@ -328,7 +346,7 @@ func installationResultForRecord(record *toolchain.InstallRecord) *installResult
 		CXX: filepath.Join(record.Prefix, "bin", "clang++"), Driver: record.Driver,
 		Tools: map[string]string{},
 	}
-	for name, executable := range map[string]string{"ar": "llvm-ar", "nm": "llvm-nm", "ranlib": "llvm-ranlib"} {
+	for name, executable := range installedTools() {
 		path := filepath.Join(record.Prefix, "bin", executable)
 		if _, err := os.Stat(path); err == nil {
 			result.Tools[name] = path
@@ -434,7 +452,7 @@ func installSelector(selector, prefix, explicitTarget string, force bool) (*inst
 
 func installationResult(channel string, release toolchain.IndexRelease, artifact *toolchain.Artifact, manifest *toolchain.Manifest, prefix string) *installResult {
 	result := &installResult{Schema: "clangup.install/v1", Channel: channel, Version: release.Version, Release: release.Release, Target: artifact.Target, ManifestSHA256: artifact.Manifest.SHA256, ArtifactSHA256: artifact.Artifact.SHA256, DriverRequirements: manifest.DriverRequirements.ExternalComponents, Prefix: prefix, CC: filepath.Join(prefix, "bin", "clang"), CXX: filepath.Join(prefix, "bin", "clang++"), Driver: manifest.Driver, Tools: map[string]string{}}
-	for name, executable := range map[string]string{"ar": "llvm-ar", "nm": "llvm-nm", "ranlib": "llvm-ranlib"} {
+	for name, executable := range installedTools() {
 		path := filepath.Join(prefix, "bin", executable)
 		if _, err := os.Stat(path); err == nil {
 			result.Tools[name] = path
@@ -444,6 +462,13 @@ func installationResult(channel string, release toolchain.IndexRelease, artifact
 		result.ToolchainFile = path
 	}
 	return result
+}
+
+func installedTools() map[string]string {
+	return map[string]string{
+		"ar": "llvm-ar", "nm": "llvm-nm", "ranlib": "llvm-ranlib",
+		"clang-format": "clang-format", "clang-tidy": "clang-tidy",
+	}
 }
 
 func selectArtifact(client *toolchain.Client, base string, release *toolchain.Release, explicit string) (*toolchain.Artifact, *toolchain.Manifest, error) {

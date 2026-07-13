@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 )
 
 // cmdSync builds the named deps (default: all) and their needs.
@@ -52,6 +53,12 @@ func cmdUpdate(names []string) error {
 
 	dirty := false
 	if all || containsExact(names, "toolchain") {
+		selector := p.toolchainSelector()
+		if selector != "" && !strings.Contains(selector, "@") {
+			if err := runClangupUpdate(); err != nil {
+				return err
+			}
+		}
 		pin := lk.toolchainFor(runtime.GOOS, runtime.GOARCH)
 		if !pin.empty() {
 			*pin = LockToolchain{}
