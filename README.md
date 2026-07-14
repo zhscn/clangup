@@ -30,9 +30,20 @@ A selector is either a channel such as `libcxx` or an exact release such as
 `libcxx@22.1.8-1`. Channel selectors track the current release.
 
 ```sh
+clangup resolve libcxx@22.1.8-1 --format=json
 clangup ensure libcxx@22.1.8-1
 clangup path libcxx@22.1.8-1
 clangup uninstall libcxx@22.1.8-1
+```
+
+An installed exact release is resolved from local installation records, so
+`resolve`, `ensure`, and `path` can use it without a channel index or network
+access. Toolchain archives are also importable from a local file or HTTPS URL;
+the archive must have its artifact manifest beside it.
+
+```sh
+clangup install --file ./toolchain.tar.zst
+clangup install --url https://example.com/toolchain.tar.zst
 ```
 
 ## cmk
@@ -86,7 +97,10 @@ variables; a custom configuration such as `Asan` lists its full flag set.
 
 Toolchains resolve by platform, then OS, then `default`; for example,
 `linux-aarch64` takes precedence over `linux`. `cmk.lock` pins resolved
-toolchains and dependencies.
+toolchains and dependencies. Without a matching selector, `cmk` uses `CC` and
+`CXX` or discovers a matching system compiler pair. Formatting and linting use
+the selected clangup toolchain's `clang-format` and `clang-tidy`; system
+toolchains resolve those commands from `PATH`.
 
 ### Configuration example
 
@@ -175,9 +189,15 @@ cmk update toolchain
 cmk sync
 
 cmk fmt --staged
+cmk lint --commit HEAD
 cmk lint --branch
+cmk lint --branch=origin/release
 cmk lint src/file.cc --fix
 ```
+
+`cmk lint --commit <ref>` selects added and modified C/C++ files from one
+commit. `cmk lint --branch[=<ref>]` selects files changed between `HEAD` and the
+merge base with that ref; without a ref it uses `origin/main` or `main`.
 
 ### Existing CMake build trees
 
