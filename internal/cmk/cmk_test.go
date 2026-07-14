@@ -504,8 +504,6 @@ cmake:
       build-dir: build/default
     minimal:
       build-dir: build/minimal
-      default-configuration: Asan
-      configurations: [Asan]
       variables:
         ENABLE_OPTIONAL: false
     single:
@@ -516,8 +514,7 @@ cmake:
   configurations:
     - name: Debug
     - name: Asan
-      inherits: Debug
-      compile: [-fsanitize=address]
+      compile: [-g, -fsanitize=address]
       link: [-fsanitize=address]
 `
 	if err := os.WriteFile(filepath.Join(root, configFileName), []byte(body), 0o644); err != nil {
@@ -527,26 +524,26 @@ cmake:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(effectiveConfigurations(cfg, nil), ","); got != "Debug,Asan" {
+	if got := strings.Join(configuredConfigurations(cfg), ","); got != "Debug,Asan" {
 		t.Fatalf("configurations = %s", got)
 	}
 	if cfg.Configure.Presets["minimal"].BuildDir != "build/minimal" || cfg.Toolchain.selectorFor("linux", "x86_64") != "libcxx" {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
 	p := &Project{Root: root, Cfg: cfg, Lock: &Lock{}, BuildDirs: map[string]string{}}
+	// Every multi-config preset exposes all configurations.
 	dir, configuration, err := p.resolveVariant("", "minimal", "Asan")
 	if err != nil || dir != filepath.Join(root, "build/minimal") || configuration != "Asan" {
 		t.Fatalf("variant = %q, %q, %v", dir, configuration, err)
 	}
-	if _, _, err := p.resolveVariant("", "minimal", "Debug"); err == nil {
-		t.Fatal("preset accepted a configuration outside its selected subset")
+	if _, _, err := p.resolveVariant("", "minimal", "Debug"); err != nil {
+		t.Fatalf("multi-config preset rejected a known configuration: %v", err)
 	}
 	if _, _, err := p.resolveVariant("", "single", "Asan"); err == nil {
 		t.Fatal("single-config preset accepted --config")
 	}
-	_, content := configFlagsFile(p)
-	if !strings.Contains(content, `cmk_set_config_flag(CMAKE_CXX_FLAGS_ASAN "CMAKE_CXX_FLAGS_DEBUG" "-fsanitize=address"`) {
-		t.Fatalf("configuration flags missing:\n%s", content)
+	if got := strings.Join(configFlagArgs(p), "\n"); !strings.Contains(got, "-DCMAKE_CXX_FLAGS_ASAN=-g -fsanitize=address") {
+		t.Fatalf("configuration flags missing:\n%s", got)
 	}
 }
 
@@ -556,12 +553,12 @@ func TestYAMLConfigValidation(t *testing.T) {
 cmake:
   typo: true
 `,
-		"inheritance cycle": `version: 1
+		"configurations differ only by case": `version: 1
 cmake:
   generator: Ninja Multi-Config
   configurations:
-    - {name: A, inherits: B}
-    - {name: B, inherits: A}
+    - {name: Asan}
+    - {name: asan}
 `,
 		"duplicate build": `version: 1
 cmake:
@@ -574,12 +571,12 @@ cmake:
   variables:
     CMAKE_CONFIGURATION_TYPES: Debug
 `,
-		"unknown preset configuration": `version: 1
+		"unknown default configuration": `version: 1
 cmake:
   generator: Ninja Multi-Config
-  presets:
-    default:
-      configurations: [Unknown]
+  default-configuration: Unknown
+  configurations:
+    - {name: Debug}
 `,
 		"preset inheritance cycle": `version: 1
 cmake:
@@ -646,15 +643,14 @@ func TestWriteUserPresetsMatrix(t *testing.T) {
 		DefaultPreset:        "default",
 		DefaultConfiguration: "Debug",
 		Presets: map[string]*PresetCfg{
-			"default": {
-				Name:                 "default",
-				BuildDir:             "build/default",
-				Configurations:       []string{"Release"},
-				DefaultConfiguration: "Release",
-			},
+			"default": {Name: "default", BuildDir: "build/default"},
 			"minimal": {Name: "minimal", BuildDir: "build/minimal", Generator: "Ninja", BuildType: "Release"},
 		},
-		Configurations: []*ConfigurationCfg{{Name: "Debug"}, {Name: "Release"}},
+		Configurations: []*ConfigurationCfg{
+			{Name: "Debug"},
+			{Name: "Release"},
+			{Name: "Asan", Compile: []string{"-fsanitize=address"}},
+		},
 	}}
 	if err := normalizeConfig(cfg); err != nil {
 		t.Fatal(err)
@@ -672,16 +668,22 @@ func TestWriteUserPresetsMatrix(t *testing.T) {
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatal(err)
 	}
-	if len(got.ConfigurePresets) != 2 || len(got.BuildPresets) != 2 || len(got.TestPresets) != 2 {
+	// default is multi-config (all three configurations); minimal is
+	// single-config. So 2 configure presets, 3+1 build/test presets.
+	if len(got.ConfigurePresets) != 2 || len(got.BuildPresets) != 4 || len(got.TestPresets) != 4 {
 		t.Fatalf("preset matrix sizes = %d/%d/%d", len(got.ConfigurePresets), len(got.BuildPresets), len(got.TestPresets))
 	}
-	if got.BuildPresets[0].Name != "cmk-default-Release" || got.ConfigurePresets[0].CacheVariables["CMAKE_CONFIGURATION_TYPES"] != "Release" {
-		t.Fatalf("preset configuration subset was not preserved: %+v / %+v", got.ConfigurePresets[0], got.BuildPresets[0])
+	if got.BuildPresets[0].Name != "cmk-default-Debug" || got.ConfigurePresets[0].CacheVariables["CMAKE_CONFIGURATION_TYPES"] != "Debug;Release;Asan" {
+		t.Fatalf("default multi-config preset wrong: %+v / %+v", got.ConfigurePresets[0], got.BuildPresets[0])
+	}
+	// Configuration flags now mirror into the configure preset cache.
+	if got.ConfigurePresets[0].CacheVariables["CMAKE_CXX_FLAGS_ASAN"] != "-fsanitize=address" {
+		t.Fatalf("configuration flags not mirrored into preset cache: %+v", got.ConfigurePresets[0].CacheVariables)
 	}
 	if got.ConfigurePresets[1].Generator != "Ninja" ||
 		got.ConfigurePresets[1].CacheVariables["CMAKE_BUILD_TYPE"] != "Release" ||
-		got.BuildPresets[1].Name != "cmk-minimal" {
-		t.Fatalf("preset generator override was not preserved: %+v / %+v", got.ConfigurePresets[1], got.BuildPresets[1])
+		got.BuildPresets[3].Name != "cmk-minimal" {
+		t.Fatalf("preset generator override was not preserved: %+v / %+v", got.ConfigurePresets[1], got.BuildPresets[3])
 	}
 }
 

@@ -338,37 +338,38 @@ func TestPresetForDir(t *testing.T) {
 	}
 }
 
-func TestWriteConfigFlagsFileKeepsMtimeWhenUnchanged(t *testing.T) {
+func TestConfigFlagArgs(t *testing.T) {
 	root := t.TempDir()
 	p := &Project{Root: root, Lock: &Lock{}, Cfg: &Config{
 		Configure: ConfigureCfg{
-			Generator:      "Ninja Multi-Config",
-			Configurations: []*ConfigurationCfg{{Name: "Asan", Compile: []string{"-fsanitize=address"}}},
+			Generator: "Ninja Multi-Config",
+			Configurations: []*ConfigurationCfg{
+				{Name: "Debug"},
+				{Name: "Asan",
+					Compile: []string{"-g", "-fsanitize=address"},
+					CXX:     []string{"-fno-rtti"},
+					Link:    []string{"-fsanitize=address"}},
+			},
 		},
 	}}
 	if err := normalizeConfig(p.Cfg); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeConfigFlagsFile(p); err != nil {
-		t.Fatal(err)
+	got := strings.Join(configFlagArgs(p), "\n")
+	for _, want := range []string{
+		"-DCMAKE_C_FLAGS_ASAN=-g -fsanitize=address",
+		"-DCMAKE_CXX_FLAGS_ASAN=-g -fsanitize=address -fno-rtti",
+		"-DCMAKE_EXE_LINKER_FLAGS_ASAN=-fsanitize=address",
+		"-DCMAKE_SHARED_LINKER_FLAGS_ASAN=-fsanitize=address",
+		"-DCMAKE_MODULE_LINKER_FLAGS_ASAN=-fsanitize=address",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("configFlagArgs missing %q in:\n%s", want, got)
+		}
 	}
-	path, content := configFlagsFile(p)
-	if content == "" {
-		t.Fatal("expected flags content for a custom configuration")
-	}
-	old := time.Now().Add(-time.Hour)
-	if err := os.Chtimes(path, old, old); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeConfigFlagsFile(p); err != nil {
-		t.Fatal(err)
-	}
-	fi, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !fi.ModTime().Equal(old) {
-		t.Errorf("unchanged rewrite bumped mtime: %v -> %v", old, fi.ModTime())
+	// A configuration without flags contributes nothing.
+	if strings.Contains(got, "_DEBUG") {
+		t.Errorf("empty configuration should not emit flag args:\n%s", got)
 	}
 }
 

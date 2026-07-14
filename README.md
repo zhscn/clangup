@@ -72,8 +72,14 @@ cmk install -c Release
 ```
 
 Use `-p` to select a preset and `-c` to select a multi-config configuration.
-Presets may override the generator, CMake variables, configurations, and their
-default configuration. Single-config presets use `build-type` instead of `-c`.
+Presets may override the generator, CMake variables, and args; every
+multi-config preset exposes all `configurations`, and `default-configuration`
+selects the one built without `-c`. Single-config presets use `build-type`
+instead of `-c`.
+
+A configuration's `compile`/`c`/`cxx`/`link` flags are injected as
+`CMAKE_<LANG>_FLAGS_<CONFIG>` / `CMAKE_<KIND>_LINKER_FLAGS_<CONFIG>` cache
+variables; a custom configuration such as `Asan` lists its full flag set.
 
 `inherits` reuses another preset's settings. Each preset has its own
 `build-dir`, which defaults to `build/<preset>`.
@@ -114,8 +120,6 @@ cmake:
     minimal:
       inherits: default
       build-dir: build/minimal
-      configurations: [Debug, Release]
-      default-configuration: Release
       variables:
         ENABLE_OPTIONAL_FEATURES: false
     release:
@@ -128,11 +132,8 @@ cmake:
   configurations:
     - name: Debug
     - name: Release
-    - name: RelWithDebInfo
-      compile: [-fno-omit-frame-pointer]
     - name: Asan
-      inherits: Debug
-      compile: [-fsanitize=address, -fno-omit-frame-pointer]
+      compile: [-g, -O1, -fsanitize=address, -fno-omit-frame-pointer]
       link: [-fsanitize=address]
 
 install:

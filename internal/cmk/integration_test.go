@@ -59,8 +59,7 @@ cmake:
     - {name: Debug}
     - {name: Release}
     - name: Asan
-      inherits: Debug
-      compile: [-fsanitize=address]
+      compile: [-g, -fsanitize=address]
       link: [-fsanitize=address]
 `)
 	t.Chdir(root)

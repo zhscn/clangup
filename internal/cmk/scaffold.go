@@ -88,8 +88,6 @@ cmake:
   #   minimal:
   #     inherits: default
   #     build-dir: build/minimal
-  #     configurations: [Debug, Release]
-  #     default-configuration: Release
   #     variables:
   #       ENABLE_OPTIONAL_FEATURES: false
   #   release:
@@ -97,12 +95,13 @@ cmake:
   #     generator: Ninja
   #     build-type: Release
 
+  # A configuration's compile/link flags become CMAKE_<LANG>_FLAGS_<CONFIG>
+  # cache variables. A custom configuration lists its full flag set.
   # configurations:
   #   - name: Debug
   #   - name: Release
   #   - name: Asan
-  #     inherits: Debug
-  #     compile: [-fsanitize=address, -fno-omit-frame-pointer]
+  #     compile: [-g, -O1, -fsanitize=address, -fno-omit-frame-pointer]
   #     link: [-fsanitize=address]
 
 # External dependencies use immutable sources and project-owned recipes.

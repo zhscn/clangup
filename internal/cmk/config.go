@@ -69,15 +69,13 @@ type DepCfg struct {
 }
 
 type PresetCfg struct {
-	Name                 string         `yaml:"-"`
-	BuildDir             string         `yaml:"build-dir"`
-	BuildType            string         `yaml:"build-type"`
-	Inherits             string         `yaml:"inherits"`
-	Generator            string         `yaml:"generator"`
-	DefaultConfiguration string         `yaml:"default-configuration"`
-	Configurations       []string       `yaml:"configurations"`
-	Variables            map[string]any `yaml:"variables"`
-	Args                 []string       `yaml:"args"`
+	Name      string         `yaml:"-"`
+	BuildDir  string         `yaml:"build-dir"`
+	BuildType string         `yaml:"build-type"`
+	Inherits  string         `yaml:"inherits"`
+	Generator string         `yaml:"generator"`
+	Variables map[string]any `yaml:"variables"`
+	Args      []string       `yaml:"args"`
 }
 
 type ConfigureCfg struct {
@@ -93,15 +91,17 @@ type ConfigureCfg struct {
 	configurationByName  map[string]*ConfigurationCfg
 }
 
-// ConfigurationCfg appends flags to one multi-config configuration. Inherits
-// selects the configuration whose initialized CMake flags form the base.
+// ConfigurationCfg sets the compile and link flags for one multi-config
+// configuration. The flags are injected as CMAKE_<LANG>_FLAGS_<CONFIG> /
+// CMAKE_<KIND>_LINKER_FLAGS_<CONFIG> cache variables at configure time. On a
+// custom configuration (Asan) these define the whole flag set; on a standard
+// configuration (Debug/Release/…) they replace CMake's initialized defaults.
 type ConfigurationCfg struct {
-	Name     string   `yaml:"name"`
-	Inherits string   `yaml:"inherits"`
-	Compile  []string `yaml:"compile"`
-	C        []string `yaml:"c"`
-	CXX      []string `yaml:"cxx"`
-	Link     []string `yaml:"link"`
+	Name    string   `yaml:"name"`
+	Compile []string `yaml:"compile"`
+	C       []string `yaml:"c"`
+	CXX     []string `yaml:"cxx"`
+	Link    []string `yaml:"link"`
 }
 
 type InstallCfg struct {
@@ -263,7 +263,6 @@ func resolvePresetInheritance(cfg *Config) error {
 
 func mergePreset(parent, child *PresetCfg) PresetCfg {
 	merged := *child
-	merged.Configurations = cloneStrings(child.Configurations)
 	merged.Args = append([]string(nil), child.Args...)
 	merged.Variables = mergePresetVariables(nil, child.Variables)
 	if parent == nil {
@@ -275,25 +274,12 @@ func mergePreset(parent, child *PresetCfg) PresetCfg {
 	if merged.Generator == "" {
 		merged.Generator = parent.Generator
 	}
-	if merged.DefaultConfiguration == "" {
-		merged.DefaultConfiguration = parent.DefaultConfiguration
-	}
-	if child.Configurations == nil {
-		merged.Configurations = cloneStrings(parent.Configurations)
-	}
 	merged.Variables = mergePresetVariables(parent.Variables, child.Variables)
 	merged.Args = append(append([]string(nil), parent.Args...), child.Args...)
 	// Every preset owns its build directory. A child never inherits the
 	// parent's path and receives build/<name> when build-dir is omitted.
 	merged.BuildDir = child.BuildDir
 	return merged
-}
-
-func cloneStrings(values []string) []string {
-	if values == nil {
-		return nil
-	}
-	return append([]string{}, values...)
 }
 
 func mergePresetVariables(parent, child map[string]any) map[string]any {
@@ -377,11 +363,6 @@ func validateConfig(cfg *Config, root string) error {
 		if len(cfg.Configure.Configurations) > 0 || cfg.Configure.DefaultConfiguration != "" {
 			return fmt.Errorf("cmake configurations and default-configuration require a multi-config generator")
 		}
-		for name, preset := range cfg.Configure.Presets {
-			if preset.Configurations != nil || preset.DefaultConfiguration != "" {
-				return fmt.Errorf("cmake.presets.%s configurations require a multi-config generator", name)
-			}
-		}
 		if selection := cfg.Configure.CompileCommands; selection != "" && selection != "default" {
 			return fmt.Errorf("cmake.compile-commands must be default with a single-config generator")
 		}
@@ -422,7 +403,7 @@ func validateDeps(cfg *Config) error {
 }
 
 func validateConfigurations(cfg *Config) error {
-	known := map[string]*ConfigurationCfg{}
+	known := map[string]bool{}
 	folded := map[string]string{}
 	for i, configuration := range cfg.Configure.Configurations {
 		if configuration == nil || !configNameRe.MatchString(configuration.Name) {
@@ -433,72 +414,13 @@ func validateConfigurations(cfg *Config) error {
 			return fmt.Errorf("cmake configurations %q and %q differ only by case", previous, configuration.Name)
 		}
 		folded[key] = configuration.Name
-		known[configuration.Name] = configuration
+		known[configuration.Name] = true
 	}
-	for _, configuration := range cfg.Configure.Configurations {
-		if base := configuration.Inherits; base != "" && known[base] == nil && !isStandardConfig(base) {
-			return fmt.Errorf("cmake configuration %q inherits unknown configuration %q", configuration.Name, base)
-		}
-	}
-	visiting, visited := map[string]bool{}, map[string]bool{}
-	var visit func(string) error
-	visit = func(name string) error {
-		if visiting[name] {
-			return fmt.Errorf("cmake configuration inheritance contains a cycle at %q", name)
-		}
-		if visited[name] {
-			return nil
-		}
-		visiting[name] = true
-		if base := known[name].Inherits; known[base] != nil {
-			if err := visit(base); err != nil {
-				return err
-			}
-		}
-		delete(visiting, name)
-		visited[name] = true
-		return nil
-	}
-	for name := range known {
-		if err := visit(name); err != nil {
-			return err
-		}
-	}
-	if known[cfg.Configure.DefaultConfiguration] == nil {
+	if !known[cfg.Configure.DefaultConfiguration] {
 		return fmt.Errorf("cmake.default-configuration %q is not configured", cfg.Configure.DefaultConfiguration)
 	}
-	if selection := cfg.Configure.CompileCommands; selection != "" && selection != "default" && known[selection] == nil {
+	if selection := cfg.Configure.CompileCommands; selection != "" && selection != "default" && !known[selection] {
 		return fmt.Errorf("cmake.compile-commands %q is not configured", selection)
-	}
-	for name, preset := range cfg.Configure.Presets {
-		path := "cmake.presets." + name
-		if !isMultiConfig(cfg, preset) {
-			if preset.Configurations != nil || preset.DefaultConfiguration != "" {
-				return fmt.Errorf("%s configurations require a multi-config generator", path)
-			}
-			continue
-		}
-		selected := effectiveConfigurations(cfg, preset)
-		if len(selected) == 0 {
-			return fmt.Errorf("%s.configurations must not be empty", path)
-		}
-		included := map[string]bool{}
-		for _, configuration := range selected {
-			if known[configuration] == nil {
-				return fmt.Errorf("%s.configurations contains unknown configuration %q", path, configuration)
-			}
-			if included[configuration] {
-				return fmt.Errorf("%s.configurations contains duplicate configuration %q", path, configuration)
-			}
-			included[configuration] = true
-		}
-		defaultConfiguration := effectiveDefaultConfiguration(cfg, preset)
-		if !included[defaultConfiguration] {
-			return fmt.Errorf("%s.default-configuration %q is not selected", path, defaultConfiguration)
-		}
-		if selection := cfg.Configure.CompileCommands; selection != "" && selection != "default" && !included[selection] {
-			return fmt.Errorf("cmake.compile-commands %q is not selected by %s", selection, path)
-		}
 	}
 	return nil
 }

@@ -179,11 +179,11 @@ func doctorConfigurations(c *doctorChecker, p *Project) {
 			continue
 		}
 		c.ok("%s — %s (default: %s)", name,
-			strings.Join(effectiveConfigurations(p.Cfg, preset), ", "),
-			effectiveDefaultConfiguration(p.Cfg, preset))
+			strings.Join(configuredConfigurations(p.Cfg), ", "),
+			p.Cfg.Configure.DefaultConfiguration)
 	}
-	if len(orderedConfigurationEdits(p.Cfg)) > 0 {
-		c.note("configuration flag edits are included via CMAKE_PROJECT_INCLUDE; written to %s", configFlagsFileRel)
+	if len(configFlagArgs(p)) > 0 {
+		c.note("configuration flag edits are injected as CMAKE_<LANG>_FLAGS_<CONFIG> cache variables")
 	}
 }
 

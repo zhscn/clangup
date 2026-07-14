@@ -119,10 +119,6 @@ func runConfigure(p *Project, dir string, preset *PresetCfg, extraArgs []string)
 	}
 	cmakeArgs = append(cmakeArgs, injected...)
 
-	// Materialize the configuration flags include the injection points at.
-	if err := writeConfigFlagsFile(p); err != nil {
-		return err
-	}
 	// Queries must exist before cmake runs so this configure's generate
 	// step writes the reply ensureConfigured reads.
 	if err := p.ensureFileAPI(dir); err != nil {
@@ -176,16 +172,12 @@ type injectionParts struct {
 	// the recipes export).
 	exports []string
 	// multiConfig is the multi-config setup: CMAKE_CONFIGURATION_TYPES,
-	// CMAKE_DEFAULT_BUILD_TYPE, and CMAKE_PROJECT_INCLUDE when there are
-	// configuration flag edits.
+	// CMAKE_DEFAULT_BUILD_TYPE, and the per-configuration flag cache
+	// variables (CMAKE_<LANG>_FLAGS_<CONFIG> etc.).
 	multiConfig []string
 	// userArgs are the expanded CMake variables and arguments, plus the selected
 	// preset's args and ad-hoc CLI args when configuring.
 	userArgs []string
-	// flagsPath/flagsContent is the computed configurations include
-	// (content "" when there is none).
-	flagsPath    string
-	flagsContent string
 	// envStamp folds the [env] overlay into the identity: configure
 	// reads it through $ENV{...}, and no file mtime reflects a change.
 	envStamp []string
@@ -225,16 +217,13 @@ func (p *Project) injectionParts(tc *Toolchain, preset *PresetCfg, extraArgs []s
 	}
 	in.userArgs = append(in.userArgs, extraArgs...)
 	in.toolchain = tc.cmakeArgs(in.userArgs)
-	in.flagsPath, in.flagsContent = configFlagsFile(p)
 	if isMultiConfig(p.Cfg, preset) {
 		in.multiConfig = append(in.multiConfig,
-			"-DCMAKE_CONFIGURATION_TYPES="+strings.Join(effectiveConfigurations(p.Cfg, preset), ";"))
-		if d := effectiveDefaultConfiguration(p.Cfg, preset); d != "" {
+			"-DCMAKE_CONFIGURATION_TYPES="+strings.Join(configuredConfigurations(p.Cfg), ";"))
+		if d := p.Cfg.Configure.DefaultConfiguration; d != "" {
 			in.multiConfig = append(in.multiConfig, "-DCMAKE_DEFAULT_BUILD_TYPE="+d)
 		}
-		if in.flagsContent != "" {
-			in.multiConfig = append(in.multiConfig, "-DCMAKE_PROJECT_INCLUDE="+in.flagsPath)
-		}
+		in.multiConfig = append(in.multiConfig, configFlagArgs(p)...)
 	}
 	return in, nil
 }
@@ -254,16 +243,11 @@ func (in *injectionParts) argv() []string {
 }
 
 // stampArgs is the injection identity recorded in the stamp: the argv
-// plus the content hash of injected files and the [env] overlay.
+// (which already carries the per-configuration flag cache variables) plus
+// the [env] overlay.
 func (in *injectionParts) stampArgs() []string {
 	out := in.argv()
 	out = append(out, "preset:"+in.preset, "generator:"+in.generator)
-	if in.flagsContent != "" {
-		// Hash the computed content, not the on-disk file: the identity
-		// must not depend on whether the file has been materialized yet.
-		sum := sha256.Sum256([]byte(in.flagsContent))
-		out = append(out, "file:"+in.flagsPath+"="+hex.EncodeToString(sum[:]))
-	}
 	return append(out, in.envStamp...)
 }
 

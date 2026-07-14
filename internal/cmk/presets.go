@@ -132,7 +132,7 @@ func writeUserPresets(p *Project, tc *Toolchain) error {
 			Environment:    presetEnv,
 		})
 		if isMultiConfig(p.Cfg, pr) {
-			for _, configuration := range effectiveConfigurations(p.Cfg, pr) {
+			for _, configuration := range configuredConfigurations(p.Cfg) {
 				variantName := prName + "-" + configuration
 				out.BuildPresets = append(out.BuildPresets, buildPreset{Name: variantName, ConfigurePreset: prName, Configuration: configuration})
 				out.TestPresets = append(out.TestPresets, testPreset{Name: variantName, ConfigurePreset: prName, Configuration: configuration})
