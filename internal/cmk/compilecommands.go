@@ -84,16 +84,125 @@ func filterCompileCommands(data []byte, config string) ([]byte, error) {
 		if err := json.Unmarshal(r, &e); err != nil {
 			return nil, err
 		}
-		hay := e.Output
-		if hay == "" {
-			hay = e.Command
+		haystacks := append([]string{e.Output, e.Command}, e.Arguments...)
+		matched := false
+		for _, haystack := range haystacks {
+			haystack = strings.ReplaceAll(haystack, `\`, "/")
+			if strings.Contains(haystack, marker) {
+				matched = true
+				break
+			}
 		}
-		if hay == "" {
-			hay = strings.Join(e.Arguments, " ")
-		}
-		if strings.Contains(hay, marker) {
+		if matched {
 			kept = append(kept, r)
 		}
 	}
 	return json.MarshalIndent(kept, "", "  ")
+}
+
+// lintCompilationDatabase returns a directory containing exactly the compile
+// commands for the configuration clang-tidy should inspect. Single-config
+// builds use CMake's database directly. Multi-config builds get a stable,
+// filtered database under the build tree so clang-tidy does not run once for
+// every configuration recorded for a translation unit.
+func (p *Project) lintCompilationDatabase(buildDir string, preset *PresetCfg, resolvedConfig string) (string, string, error) {
+	config, multi, err := p.lintConfiguration(buildDir, preset, resolvedConfig)
+	if err != nil {
+		return "", "", err
+	}
+	if !multi {
+		return buildDir, "", nil
+	}
+
+	source := filepath.Join(buildDir, "compile_commands.json")
+	data, err := os.ReadFile(source)
+	if err != nil {
+		return "", "", err
+	}
+	filtered, err := filterCompileCommands(data, config)
+	if err != nil {
+		return "", "", fmt.Errorf("filtering compile_commands.json to %s: %w", config, err)
+	}
+	var entries []json.RawMessage
+	if err := json.Unmarshal(filtered, &entries); err != nil {
+		return "", "", err
+	}
+	if len(entries) == 0 {
+		return "", "", fmt.Errorf("no compile commands for configuration %q in %s", config, source)
+	}
+
+	component := "config-" + strings.Map(func(r rune) rune {
+		if r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || strings.ContainsRune("._-", r) {
+			return r
+		}
+		return '_'
+	}, config)
+	dir := filepath.Join(buildDir, ".cmk", "lint", component)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", "", err
+	}
+	destination := filepath.Join(dir, "compile_commands.json")
+	if current, readErr := os.ReadFile(destination); readErr != nil || !bytes.Equal(current, filtered) {
+		if err := os.WriteFile(destination, filtered, 0o644); err != nil {
+			return "", "", err
+		}
+	}
+	return dir, config, nil
+}
+
+func (p *Project) lintConfiguration(buildDir string, preset *PresetCfg, resolved string) (string, bool, error) {
+	if p.hasCmkConfig() {
+		if !isMultiConfig(p.Cfg, preset) {
+			return "", false, nil
+		}
+		return resolved, true, nil
+	}
+
+	cache, err := readCMakeCache(filepath.Join(buildDir, "CMakeCache.txt"))
+	if err != nil {
+		return "", false, err
+	}
+	if !isMultiConfigGenerator(cache["CMAKE_GENERATOR"]) {
+		return "", false, nil
+	}
+	configurations := strings.FieldsFunc(cache["CMAKE_CONFIGURATION_TYPES"], func(r rune) bool { return r == ';' })
+	selected := resolved
+	if selected == "" {
+		selected = cache["CMAKE_DEFAULT_BUILD_TYPE"]
+	}
+	if selected == "" && len(configurations) > 0 {
+		selected = configurations[0]
+	}
+	if selected == "" {
+		return "", true, fmt.Errorf("cannot select a configuration from %s", filepath.Join(buildDir, "CMakeCache.txt"))
+	}
+	if len(configurations) > 0 {
+		known := false
+		for _, configuration := range configurations {
+			known = known || configuration == selected
+		}
+		if !known {
+			return "", true, fmt.Errorf("configuration %q not found (known: %s)", selected, strings.Join(configurations, ", "))
+		}
+	}
+	return selected, true, nil
+}
+
+func readCMakeCache(path string) (map[string]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	values := map[string]string{}
+	for line := range strings.Lines(string(data)) {
+		declaration, value, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if !ok || strings.HasPrefix(declaration, "//") || strings.HasPrefix(declaration, "#") {
+			continue
+		}
+		name, _, ok := strings.Cut(declaration, ":")
+		if ok {
+			values[name] = value
+		}
+	}
+	return values, nil
 }

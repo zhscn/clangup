@@ -47,6 +47,21 @@ func TestFilterCompileCommands(t *testing.T) {
 		t.Fatalf("command fallback should keep the Release entry: %s", out2)
 	}
 
+	// Inspect every representation. An unrelated output must not hide a
+	// configuration marker in the arguments array.
+	dbArgs := `[{"directory":"/b","file":"/s/m.cc","output":"m.cc.o","arguments":["clang","-c","/s/m.cc","-o","CMakeFiles/x.dir/Release/m.cc.o"]}]`
+	outArgs, err := filterCompileCommands([]byte(dbArgs), "Release")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotArgs []map[string]any
+	if err := json.Unmarshal(outArgs, &gotArgs); err != nil {
+		t.Fatal(err)
+	}
+	if len(gotArgs) != 1 {
+		t.Fatalf("arguments marker should keep the Release entry: %s", outArgs)
+	}
+
 	// A configuration nothing was built for yields an empty (but valid) array.
 	out3, err := filterCompileCommands([]byte(db), "MinSizeRel")
 	if err != nil {
@@ -58,6 +73,94 @@ func TestFilterCompileCommands(t *testing.T) {
 	}
 	if len(got3) != 0 {
 		t.Fatalf("want 0 entries, got %d", len(got3))
+	}
+}
+
+func TestLintCompilationDatabaseSelectsOneConfiguration(t *testing.T) {
+	root := t.TempDir()
+	buildDir := filepath.Join(root, "build")
+	if err := os.MkdirAll(buildDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, configFileName), []byte("version: 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	db := `[
+	  {"file":"/s/main.cc","output":"CMakeFiles/x.dir/Debug/main.cc.o","command":"clang -c /s/main.cc"},
+	  {"file":"/s/main.cc","output":"CMakeFiles/x.dir/Release/main.cc.o","command":"clang -O3 -c /s/main.cc"}
+	]`
+	if err := os.WriteFile(filepath.Join(buildDir, "compile_commands.json"), []byte(db), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	preset := &PresetCfg{Generator: "Ninja Multi-Config"}
+	p := &Project{Root: root, Cfg: &Config{Configure: ConfigureCfg{
+		Generator:            "Ninja Multi-Config",
+		DefaultConfiguration: "Debug",
+		Configurations:       []*ConfigurationCfg{{Name: "Debug"}, {Name: "Release"}},
+	}}}
+
+	dir, config, err := p.lintCompilationDatabase(buildDir, preset, "Release")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dir == buildDir || config != "Release" {
+		t.Fatalf("lint database = (%q, %q), want filtered Release database", dir, config)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "compile_commands.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || !strings.Contains(got[0]["output"].(string), "/Release/") {
+		t.Fatalf("filtered database = %s", data)
+	}
+
+	old := time.Now().Add(-time.Hour)
+	destination := filepath.Join(dir, "compile_commands.json")
+	if err := os.Chtimes(destination, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := p.lintCompilationDatabase(buildDir, preset, "Release"); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(destination); err != nil || !info.ModTime().Equal(old) {
+		t.Fatalf("unchanged lint database was rewritten: info=%v err=%v", info, err)
+	}
+}
+
+func TestLintCompilationDatabaseUsesForeignCMakeDefault(t *testing.T) {
+	root := t.TempDir()
+	buildDir := filepath.Join(root, "build")
+	if err := os.MkdirAll(buildDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cache := "CMAKE_GENERATOR:INTERNAL=Ninja Multi-Config\n" +
+		"CMAKE_CONFIGURATION_TYPES:STRING=Debug;Release\n" +
+		"CMAKE_DEFAULT_BUILD_TYPE:STRING=Release\n"
+	if err := os.WriteFile(filepath.Join(buildDir, "CMakeCache.txt"), []byte(cache), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	db := `[
+	  {"file":"/s/main.cc","output":"CMakeFiles/x.dir/Debug/main.cc.o"},
+	  {"file":"/s/main.cc","output":"CMakeFiles/x.dir/Release/main.cc.o"}
+	]`
+	if err := os.WriteFile(filepath.Join(buildDir, "compile_commands.json"), []byte(db), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := &Project{Root: root, Cfg: &Config{}}
+
+	_, config, err := p.lintCompilationDatabase(buildDir, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config != "Release" {
+		t.Fatalf("selected configuration = %q, want Release", config)
+	}
+	if _, _, err := p.lintCompilationDatabase(buildDir, nil, "Asan"); err == nil || !strings.Contains(err.Error(), "known: Debug, Release") {
+		t.Fatalf("unknown configuration error = %v", err)
 	}
 }
 

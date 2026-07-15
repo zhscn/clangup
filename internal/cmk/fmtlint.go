@@ -372,7 +372,10 @@ func cmdLint(explicitFiles []string, options lintOptions) error {
 	if err != nil {
 		return err
 	}
-	dir, err := p.resolveBuildDir(options.BuildDir)
+	if err := bootstrapIfUnconfigured(p, options.BuildDir, options.Preset, configureAuto); err != nil {
+		return err
+	}
+	dir, config, err := p.resolveVariant(options.BuildDir, options.Preset, options.Config)
 	if err != nil {
 		return err
 	}
@@ -394,7 +397,11 @@ func cmdLint(explicitFiles []string, options lintOptions) error {
 			return fmt.Errorf("compile_commands.json still missing after refresh; ensure CMAKE_EXPORT_COMPILE_COMMANDS=ON in %s", dir)
 		}
 	}
-	cdb, err := compileDBFiles(dir)
+	lintDBDir, selectedConfig, err := p.lintCompilationDatabase(dir, presetForDir(p, dir), config)
+	if err != nil {
+		return err
+	}
+	cdb, err := compileDBFiles(lintDBDir)
 	if err != nil {
 		return err
 	}
@@ -403,7 +410,7 @@ func cmdLint(explicitFiles []string, options lintOptions) error {
 	if options.Interactive {
 		cands := append([]string(nil), cdb...)
 		if len(cands) == 0 {
-			return fmt.Errorf("no source files in %s", filepath.Join(dir, "compile_commands.json"))
+			return fmt.Errorf("no source files in %s", filepath.Join(lintDBDir, "compile_commands.json"))
 		}
 		display := make([]string, len(cands))
 		for i, candidate := range cands {
@@ -446,13 +453,17 @@ func cmdLint(explicitFiles []string, options lintOptions) error {
 		return nil
 	}
 	if options.Verbose {
+		if selectedConfig != "" {
+			fmt.Println("CMake configuration:", selectedConfig)
+		}
+		fmt.Println("Compilation database:", filepath.Join(lintDBDir, "compile_commands.json"))
 		for _, file := range files {
 			fmt.Println(file)
 		}
 	}
 
 	useColor := stdoutIsTerminal()
-	tidyArgs := lintCommandArgs(dir, p.Cfg.Lint, options.WarningsAsErrors, options.Fix, useColor)
+	tidyArgs := lintCommandArgs(lintDBDir, p.Cfg.Lint, options.WarningsAsErrors, options.Fix, useColor)
 	tc, err := p.toolchain()
 	if err != nil {
 		return err

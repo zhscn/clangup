@@ -192,12 +192,16 @@ cmk fmt --staged
 cmk lint --commit HEAD
 cmk lint --branch
 cmk lint --branch=origin/release
+cmk lint -p minimal -c Release src/file.cc
 cmk lint src/file.cc --fix
 ```
 
 `cmk lint --commit <ref>` selects added and modified C/C++ files from one
 commit. `cmk lint --branch[=<ref>]` selects files changed between `HEAD` and the
 merge base with that ref; without a ref it uses `origin/main` or `main`.
+For a multi-config build, lint selects `cmake.default-configuration` unless
+`-c/--config` is given and passes clang-tidy a database filtered to that
+configuration. `-p/--preset` selects a managed build tree.
 
 ### Existing CMake build trees
 

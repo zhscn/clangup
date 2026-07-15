@@ -51,7 +51,7 @@ type fmtOptions struct {
 }
 
 type lintOptions struct {
-	BuildDir                  string
+	BuildDir, Preset, Config  string
 	Commit, Branch            string
 	All, Staged, Unstaged     bool
 	Interactive, Fix          bool
@@ -316,6 +316,8 @@ func newLintCommand() *cobra.Command {
 	}}
 	flags := command.Flags()
 	flags.StringVarP(&options.BuildDir, "build", "b", "", "CMake build directory")
+	flags.StringVarP(&options.Preset, "preset", "p", "", "Configure preset")
+	flags.StringVarP(&options.Config, "config", "c", "", "Build configuration")
 	flags.BoolVarP(&options.Interactive, "interactive", "i", false, "Select a file from compile_commands.json")
 	flags.BoolVarP(&options.All, "all", "a", false, "Lint all tracked source files")
 	flags.BoolVarP(&options.Staged, "staged", "s", false, "Lint only staged files")
