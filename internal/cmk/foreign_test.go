@@ -126,7 +126,7 @@ func TestRegenerateForeignLeavesConfigurationAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := regenerate(p, build, "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"); err != nil {
+	if err := p.treeAt(build, "").regenerate("-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"); err != nil {
 		t.Fatal(err)
 	}
 	if want := "-B " + build + " -DCMAKE_EXPORT_COMPILE_COMMANDS=ON"; readLog(t, log) != want {
@@ -150,7 +150,7 @@ func TestRegenerateForeignRequiresAConfiguredTree(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = regenerate(p, filepath.Join(root, "never-configured"))
+	err = p.treeAt(filepath.Join(root, "never-configured"), "").regenerate()
 	if err == nil || !strings.Contains(err.Error(), "cmake -B") {
 		t.Fatalf("error = %v, want advice to configure the tree first", err)
 	}

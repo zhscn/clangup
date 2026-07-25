@@ -80,7 +80,7 @@ func cmdDoctor() error {
 			case tc == nil:
 				c.ok("%s", d) // toolchain unavailable; staleness not assessable
 			default:
-				if reason := p.reconfigureReason(abs, tc, presetForDir(p, abs)); reason != "" {
+				if reason := p.treeAt(abs, "").reconfigureReason(tc); reason != "" {
 					c.note("%s — stale: %s (next build reconfigures)", d, reason)
 				} else {
 					c.ok("%s — configuration current", d)

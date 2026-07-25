@@ -8,74 +8,17 @@ import (
 	"strings"
 )
 
-// buildTarget is one resolved build tree: what every build-time command
-// works on once its flags are parsed.
-type buildTarget struct {
-	p      *Project
-	dir    string
-	config string
-}
-
-// resolveBuildTarget is the shared preamble of build, run, test, install,
-// build-tu and lint: open the project, configure the selected preset's
-// tree when it does not exist yet, resolve the build dir and
-// configuration, and reconfigure a stale one per the policy. Routing all
-// of them through here is what keeps them from drifting apart — a foreign
-// build tree in particular must be treated identically by all six.
-//
-// readOnly mirrors --no-build: the caller only reads an existing tree, so
-// nothing is configured on its behalf.
-func resolveBuildTarget(options variantOptions, readOnly bool) (*buildTarget, error) {
-	policy, err := configurePolicyFromFlags(options.Locked, options.NoConfig)
-	if err != nil {
-		return nil, err
-	}
-	p, err := openProject()
-	if err != nil {
-		return nil, err
-	}
-	if !readOnly {
-		if err := bootstrapIfUnconfigured(p, options.BuildDir, options.Preset, policy); err != nil {
-			return nil, err
-		}
-	}
-	dir, config, err := p.resolveVariant(options.BuildDir, options.Preset, options.Config)
-	if err != nil {
-		return nil, err
-	}
-	if !readOnly {
-		// A foreign tree keeps its own regeneration behavior;
-		// ensureConfigured is a no-op there and cmake runs straight through.
-		if err := ensureConfigured(p, dir, policy); err != nil {
-			return nil, err
-		}
-	}
-	return &buildTarget{p: p, dir: dir, config: config}, nil
-}
-
-// build runs `cmake --build` on the tree. No post-build compile_commands
-// sync is needed: configure suppresses the regen rule, so a build can
-// never reconfigure behind cmk's back — resolveBuildTarget already
-// brought everything in step.
-func (t *buildTarget) build(jobs int, targets []string, cleanFirst, verbose bool, passthrough []string) error {
-	env, err := t.p.buildEnv()
-	if err != nil {
-		return err
-	}
-	return runStreaming(env, "cmake", cmakeBuildArgs(t.dir, t.config, jobs, targets, cleanFirst, verbose, passthrough)...)
-}
-
 // cmdBuild builds target(s), or everything when no target is selected, in the
 // resolved build dir.
 func cmdBuild(positionalTargets, passthrough []string, options buildOptions) error {
 	targets := cleanArgs(append(append([]string(nil), options.TargetFlags...), positionalTargets...))
-	target, err := resolveBuildTarget(options.variantOptions, false)
+	tree, err := resolveBuildTree(options.variantOptions, false)
 	if err != nil {
 		return err
 	}
 
 	if len(targets) == 0 && options.Interactive {
-		allTargets, err := target.p.collectTargets(target.dir, target.config)
+		allTargets, err := tree.collectTargets()
 		if err != nil {
 			return err
 		}
@@ -93,18 +36,18 @@ func cmdBuild(positionalTargets, passthrough []string, options buildOptions) err
 		targets = []string{selected}
 	}
 
-	return target.build(options.Jobs, targets, options.CleanFirst, options.Verbose, passthrough)
+	return tree.build(options.Jobs, targets, options.CleanFirst, options.Verbose, passthrough)
 }
 
 // cmdRun builds and runs an executable target; args after "--" go to
 // the program.
 func cmdRun(targetName string, options runOptions) error {
-	tree, err := resolveBuildTarget(options.variantOptions, options.NoBuild)
+	tree, err := resolveBuildTree(options.variantOptions, options.NoBuild)
 	if err != nil {
 		return err
 	}
 	p := tree.p
-	targets, err := p.executableTargets(tree.dir, tree.config)
+	targets, err := tree.executableTargets()
 	if err != nil {
 		return err
 	}
@@ -170,7 +113,7 @@ func cmdRun(targetName string, options runOptions) error {
 // cmdTU builds a single translation unit via ninja.
 func cmdTU(names []string, options variantOptions) error {
 	names = cleanArgs(names)
-	tree, err := resolveBuildTarget(options, false)
+	tree, err := resolveBuildTree(options, false)
 	if err != nil {
 		return err
 	}
@@ -312,5 +255,5 @@ func cmdRefresh(name string) error {
 	}
 	// Like an automatic reconfigure, refresh keeps the ad-hoc args from
 	// the last explicit configure.
-	return runConfigure(p, dir, presetForDir(p, dir), stampExtra(dir))
+	return p.treeAt(dir, "").configure(stampExtra(dir))
 }

@@ -8,7 +8,7 @@ import (
 // one OR-ed -R regex, args after -- pass through to ctest.
 func cmdTest(patterns []string, options testOptions) error {
 	patterns = cleanArgs(patterns)
-	tree, err := resolveBuildTarget(options.variantOptions, options.NoBuild)
+	tree, err := resolveBuildTree(options.variantOptions, options.NoBuild)
 	if err != nil {
 		return err
 	}

@@ -30,20 +30,16 @@ func cmdConfig(presetName, buildDir string, extraArgs []string) error {
 	if err != nil {
 		return err
 	}
-	dir := buildDir
-	if dir != "" && !filepath.IsAbs(dir) {
-		dir = filepath.Join(p.Root, dir)
+	tree := p.treeFor(preset, "")
+	if buildDir != "" {
+		// -B overrides where the preset's tree lives, without changing
+		// which preset configures it.
+		if !filepath.IsAbs(buildDir) {
+			buildDir = filepath.Join(p.Root, buildDir)
+		}
+		tree.dir = buildDir
 	}
-	if dir == "" {
-		dir = defaultConfigureDir(p, preset)
-	}
-	return runConfigure(p, dir, preset, extraArgs)
-}
-
-// defaultConfigureDir is where configure puts the selected preset's build
-// tree when no -B is given.
-func defaultConfigureDir(p *Project, preset *PresetCfg) string {
-	return presetBuildDir(p, preset)
+	return tree.configure(extraArgs)
 }
 
 func presetBuildDir(p *Project, preset *PresetCfg) string {
@@ -63,11 +59,11 @@ func presetBuildDir(p *Project, preset *PresetCfg) string {
 // A foreign tree is somebody else's: cmk did not choose its generator,
 // compiler or cache variables and must not replace them, so it gets a
 // plain in-place reconfigure that only plants what is missing.
-func regenerate(p *Project, dir string, defines ...string) error {
-	if p.hasCmkConfig() {
-		return runConfigure(p, dir, presetForDir(p, dir), stampExtra(dir))
+func (t *buildTree) regenerate(defines ...string) error {
+	if t.p.hasCmkConfig() {
+		return t.configure(stampExtra(t.dir))
 	}
-	return regenerateForeign(p, dir, defines...)
+	return t.regenerateForeign(defines...)
 }
 
 // regenerateForeign runs `cmake -B <dir>` against a build tree cmk does not
@@ -75,7 +71,8 @@ func regenerate(p *Project, dir string, defines ...string) error {
 // option, so the tree survives intact; cmk adds only the file API queries
 // and the given defines. Deliberately no --fresh, no toolchain injection
 // and no stamp: cmk is a guest here.
-func regenerateForeign(p *Project, dir string, defines ...string) error {
+func (t *buildTree) regenerateForeign(defines ...string) error {
+	dir, p := t.dir, t.p
 	if _, err := os.Stat(filepath.Join(dir, "CMakeCache.txt")); err != nil {
 		return fmt.Errorf("%s is not a configured CMake build directory; configure it with `cmake -B %s` first",
 			dir, p.relToRoot(dir))
@@ -86,7 +83,7 @@ func regenerateForeign(p *Project, dir string, defines ...string) error {
 	}
 	defer unlockFile(lock)
 
-	if err := p.ensureFileAPI(dir); err != nil {
+	if err := t.ensureFileAPI(); err != nil {
 		return err
 	}
 	args := append([]string{"-B", dir}, defines...)
@@ -97,22 +94,25 @@ func regenerateForeign(p *Project, dir string, defines ...string) error {
 	return nil
 }
 
-// runConfigure is the single configure path: resolve the toolchain, sync
+// configure is the single configure path: resolve the toolchain, sync
 // deps, compute the injection, run cmake (--fresh when the injection
 // changed), and refresh the generated artifacts (injection stamp, file
 // API queries, CMakeUserPresets.json, root compile_commands.json). Both
 // `cmk config` and build-time auto-reconfigure (ensureConfigured) land
 // here, so a reconfigure behaves identically no matter what triggered it.
-func runConfigure(p *Project, dir string, preset *PresetCfg, extraArgs []string) error {
+func (t *buildTree) configure(extraArgs []string) error {
 	if err := validateCMakeArgs("cmk config arguments", extraArgs); err != nil {
 		return err
 	}
+	dir, p := t.dir, t.p
+	preset := t.preset()
 	if preset == nil && p.hasCmkConfig() {
 		var err error
 		preset, err = resolvePreset(p.Cfg, "")
 		if err != nil {
 			return err
 		}
+		t.selected = preset
 	}
 	// Serialize configures of one build dir: two concurrent cmk
 	// invocations that both detected staleness must not run cmake into
@@ -161,7 +161,7 @@ func runConfigure(p *Project, dir string, preset *PresetCfg, extraArgs []string)
 
 	// Queries must exist before cmake runs so this configure's generate
 	// step writes the reply ensureConfigured reads.
-	if err := p.ensureFileAPI(dir); err != nil {
+	if err := t.ensureFileAPI(); err != nil {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "+ cmake %s\n", shellQuote(cmakeArgs))
@@ -178,7 +178,7 @@ func runConfigure(p *Project, dir string, preset *PresetCfg, extraArgs []string)
 	if err := writeUserPresets(p, tc); err != nil {
 		return err
 	}
-	return p.syncRootCompileCommands(dir, preset)
+	return t.syncRootCompileCommands()
 }
 
 // injectionParts is the decomposed cmk injection — everything cmk adds on

@@ -52,7 +52,8 @@ func configurePolicyFromFlags(locked, noConfig bool) (configurePolicy, error) {
 //
 // A project is managed only when it has cmk.yaml. Foreign build trees retain
 // their own CMake regeneration behavior.
-func ensureConfigured(p *Project, dir string, policy configurePolicy) error {
+func (t *buildTree) ensureConfigured(policy configurePolicy) error {
+	dir, p := t.dir, t.p
 	if policy == configureSkip {
 		return nil
 	}
@@ -70,7 +71,7 @@ func ensureConfigured(p *Project, dir string, policy configurePolicy) error {
 			return fmt.Errorf("--locked: cmk.lock does not match toolchain in cmk.yaml; run `cmk config` (or `cmk update toolchain`) and commit the lock")
 		}
 		p.tc = tc
-		if reason := p.reconfigureReason(dir, tc, presetForDir(p, dir)); reason != "" {
+		if reason := t.reconfigureReason(tc); reason != "" {
 			return fmt.Errorf("--locked: configuration of %s is stale (%s); run `cmk config`", p.relToRoot(dir), reason)
 		}
 		return nil
@@ -79,15 +80,14 @@ func ensureConfigured(p *Project, dir string, policy configurePolicy) error {
 	if err != nil {
 		return err
 	}
-	preset := presetForDir(p, dir)
-	reason := p.reconfigureReason(dir, tc, preset)
+	reason := t.reconfigureReason(tc)
 	if reason == "" {
 		return nil
 	}
 	fmt.Fprintf(os.Stderr, "cmk: %s; reconfiguring %s\n", reason, dir)
 	// Re-apply the ad-hoc args from the last explicit configure: an
 	// automatic reconfigure must not silently change the configuration.
-	return runConfigure(p, dir, preset, stampExtra(dir))
+	return t.configure(stampExtra(dir))
 }
 
 // bootstrapIfUnconfigured configures the selected preset when its build tree
@@ -109,15 +109,15 @@ func bootstrapIfUnconfigured(p *Project, buildDirFlag, presetName string, policy
 	if err != nil {
 		return err
 	}
-	dir := defaultConfigureDir(p, preset)
-	if _, err := os.Stat(filepath.Join(dir, "CMakeCache.txt")); err == nil {
+	tree := p.treeFor(preset, "")
+	if _, err := os.Stat(filepath.Join(tree.dir, "CMakeCache.txt")); err == nil {
 		return nil // the selected variant is already configured
 	}
 	if policy == configureLocked {
-		return fmt.Errorf("--locked: %s is not configured; run `cmk config` first", p.relToRoot(dir))
+		return fmt.Errorf("--locked: %s is not configured; run `cmk config` first", p.relToRoot(tree.dir))
 	}
-	fmt.Fprintf(os.Stderr, "cmk: %s is not configured yet; configuring\n", dir)
-	if err := runConfigure(p, dir, preset, nil); err != nil {
+	fmt.Fprintf(os.Stderr, "cmk: %s is not configured yet; configuring\n", tree.dir)
+	if err := tree.configure(nil); err != nil {
 		return err
 	}
 	p.scanBuildDirs()
@@ -145,16 +145,17 @@ func presetForDir(p *Project, dir string) *PresetCfg {
 
 // reconfigureReason reports why dir must be reconfigured, or "" when its
 // configuration is current. The baseline is the injection stamp's mtime:
-// runConfigure writes it right after cmake succeeds, so any input younger
+// configure writes it right after cmake succeeds, so any input younger
 // than the stamp changed after the last configure.
-func (p *Project) reconfigureReason(dir string, tc *Toolchain, preset *PresetCfg) string {
+func (t *buildTree) reconfigureReason(tc *Toolchain) string {
+	dir, p := t.dir, t.p
 	cacheInfo, err := os.Stat(filepath.Join(dir, "CMakeCache.txt"))
 	if err != nil {
 		return "build dir is not configured"
 	}
 	// The recorded ad-hoc args are part of the configuration being
 	// checked, not a deviation from it.
-	_, stampArgs, err := computeInjection(p, tc, preset, stampExtra(dir))
+	_, stampArgs, err := computeInjection(p, tc, t.preset(), stampExtra(dir))
 	if err != nil {
 		// e.g. a dep is not synced yet. The configure path syncs deps
 		// itself, so don't parrot the error's "run `cmk sync`" advice
@@ -221,7 +222,7 @@ func (p *Project) reconfigureReason(dir string, tc *Toolchain, preset *PresetCfg
 
 // cmkInputFiles are configure inputs CMake knows nothing about: cmk.yaml
 // itself and each dep's recipe script, patches, and extra_inputs. A dep
-// edit must reconfigure so runConfigure re-syncs the store and injects
+// edit must reconfigure so configure re-syncs the store and injects
 // the new prefixes. An error (a patch/extra_inputs glob matching nothing,
 // typically after a deletion) is itself a dep change and must reconfigure
 // rather than be skipped — sync then reports the underlying problem.

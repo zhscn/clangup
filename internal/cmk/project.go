@@ -1,7 +1,6 @@
 package cmk
 
 import (
-	"encoding/json"
 	"fmt"
 	"maps"
 	"os"
@@ -9,7 +8,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -324,129 +322,4 @@ func (p *Project) ccacheEnv() map[string]string {
 		m["CCACHE_NOHASHDIR"] = "true"
 	}
 	return m
-}
-
-// --- CMake file API ---
-
-type Target struct {
-	Name string `json:"name"`
-	Type string `json:"type"`
-	// Imported is true for targets pulled in from outside the build
-	// (e.g. Git::Git from find_package, whose artifact is /usr/bin/git).
-	// They are not ours to run or build, so they're filtered out.
-	Imported  bool `json:"imported"`
-	Artifacts []struct {
-		Path string `json:"path"`
-	} `json:"artifacts"`
-}
-
-func (t *Target) isExecutable() bool { return t.Type == "EXECUTABLE" }
-
-// ensureFileAPI plants the shared stateless queries cmk relies on:
-// codemodel for target discovery, cmakeFiles for staleness detection
-// (see ensureConfigured). CMake rewrites the replies on every configure.
-func (p *Project) ensureFileAPI(buildDir string) error {
-	queryDir := filepath.Join(buildDir, ".cmake/api/v1/query")
-	if err := os.MkdirAll(queryDir, 0o755); err != nil {
-		return err
-	}
-	for _, query := range []string{"codemodel-v2", "cmakeFiles-v1"} {
-		marker := filepath.Join(queryDir, query)
-		if _, err := os.Stat(marker); os.IsNotExist(err) {
-			if err := os.WriteFile(marker, nil, 0o644); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// codemodelReply is the slice of the CMake file API codemodel we need:
-// the per-configuration target lists, each pointing at a target object
-// file. In multi-config builds the artifact paths differ per config, so
-// targets must be read through the chosen configuration's entry.
-type codemodelReply struct {
-	Configurations []struct {
-		Name    string `json:"name"`
-		Targets []struct {
-			Name     string `json:"name"`
-			JSONFile string `json:"jsonFile"`
-		} `json:"targets"`
-	} `json:"configurations"`
-}
-
-func readCodemodel(replyDir string) (*codemodelReply, error) {
-	var cm codemodelReply
-	if err := readReplyObject(replyDir, "codemodel-v2", &cm); err != nil {
-		return nil, err
-	}
-	return &cm, nil
-}
-
-// collectTargets reads the targets for the given configuration ("" picks the
-// single-config entry). A missing reply triggers a managed reconfigure.
-func (p *Project) collectTargets(buildDir, config string) ([]Target, error) {
-	replyDir := filepath.Join(buildDir, ".cmake/api/v1/reply")
-	cm, err := readCodemodel(replyDir)
-	if err != nil {
-		// No reply yet: a tree that was never configured by cmk (foreign,
-		// or one whose .cmake/ was cleaned). regenerate plants the query
-		// and re-runs cmake without disturbing a foreign configuration.
-		if err := regenerate(p, buildDir); err != nil {
-			return nil, err
-		}
-		cm, err = readCodemodel(replyDir)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if len(cm.Configurations) == 0 {
-		return nil, fmt.Errorf("no configurations in CMake file API reply for %s", buildDir)
-	}
-	idx := 0
-	if config != "" {
-		idx = -1
-		for i, c := range cm.Configurations {
-			if c.Name == config {
-				idx = i
-				break
-			}
-		}
-		if idx < 0 {
-			names := make([]string, len(cm.Configurations))
-			for i, c := range cm.Configurations {
-				names[i] = c.Name
-			}
-			return nil, fmt.Errorf("configuration %q not configured in %s (have: %s); run `cmk config`",
-				config, buildDir, strings.Join(names, ", "))
-		}
-	}
-	var targets []Target
-	for _, ref := range cm.Configurations[idx].Targets {
-		data, err := os.ReadFile(filepath.Join(replyDir, ref.JSONFile))
-		if err != nil {
-			return nil, err
-		}
-		var t Target
-		if err := json.Unmarshal(data, &t); err != nil {
-			continue
-		}
-		targets = append(targets, t)
-	}
-	sort.Slice(targets, func(i, j int) bool { return targets[i].Name < targets[j].Name })
-	return targets, nil
-}
-
-func (p *Project) executableTargets(buildDir, config string) ([]Target, error) {
-	all, err := p.collectTargets(buildDir, config)
-	if err != nil {
-		return nil, err
-	}
-	var out []Target
-	for _, t := range all {
-		if t.isExecutable() && !t.Imported && len(t.Artifacts) > 0 {
-			out = append(out, t)
-		}
-	}
-	return out, nil
 }

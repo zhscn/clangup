@@ -11,7 +11,7 @@ import (
 // see fresh artifacts. The prefix defaults to the one baked at configure
 // time (CMAKE_INSTALL_PREFIX); [install] prefix or --prefix override it.
 func cmdInstall(options installOptions) error {
-	tree, err := resolveBuildTarget(options.variantOptions, options.NoBuild)
+	tree, err := resolveBuildTree(options.variantOptions, options.NoBuild)
 	if err != nil {
 		return err
 	}

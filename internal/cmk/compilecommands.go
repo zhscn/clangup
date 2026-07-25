@@ -20,7 +20,8 @@ import (
 // database carries one entry per file *per configuration*, and clangd would
 // use whichever comes first (the first configuration, not the default);
 // narrowing the root copy to a single configuration fixes that.
-func (p *Project) syncRootCompileCommands(buildDir string, preset *PresetCfg) error {
+func (t *buildTree) syncRootCompileCommands() error {
+	p, buildDir, preset := t.p, t.dir, t.preset()
 	sel := p.Cfg.Configure.CompileCommands
 	if sel == "" {
 		return nil
@@ -105,8 +106,9 @@ func filterCompileCommands(data []byte, config string) ([]byte, error) {
 // builds use CMake's database directly. Multi-config builds get a stable,
 // filtered database under the build tree so clang-tidy does not run once for
 // every configuration recorded for a translation unit.
-func (p *Project) lintCompilationDatabase(buildDir string, preset *PresetCfg, resolvedConfig string) (string, string, error) {
-	config, multi := p.lintConfiguration(preset, resolvedConfig)
+func (t *buildTree) lintCompilationDatabase() (string, string, error) {
+	buildDir := t.dir
+	config, multi := t.lintConfiguration()
 	if !multi {
 		return buildDir, "", nil
 	}
@@ -151,14 +153,14 @@ func (p *Project) lintCompilationDatabase(buildDir string, preset *PresetCfg, re
 // clang-tidy should read, and whether the tree is multi-config at all. In a
 // foreign tree resolveVariant already resolved it against the cache, and it
 // is non-empty exactly for multi-config trees.
-func (p *Project) lintConfiguration(preset *PresetCfg, resolved string) (string, bool) {
-	if !p.hasCmkConfig() {
-		return resolved, resolved != ""
+func (t *buildTree) lintConfiguration() (string, bool) {
+	if !t.p.hasCmkConfig() {
+		return t.config, t.config != ""
 	}
-	if !isMultiConfig(p.Cfg, preset) {
+	if !isMultiConfig(t.p.Cfg, t.preset()) {
 		return "", false
 	}
-	return resolved, true
+	return t.config, true
 }
 
 func readCMakeCache(path string) (map[string]string, error) {

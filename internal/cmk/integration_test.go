@@ -90,7 +90,7 @@ func itReason(t *testing.T, p *Project, dir string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return p.reconfigureReason(dir, tc, presetForDir(p, dir))
+	return p.treeAt(dir, "").reconfigureReason(tc)
 }
 
 func TestIntegrationReconfigureLifecycle(t *testing.T) {
@@ -140,7 +140,7 @@ func TestIntegrationReconfigureLifecycle(t *testing.T) {
 	if got := itReason(t, p, dir); !strings.Contains(got, "CMakeLists.txt changed") {
 		t.Fatalf("touched CMakeLists: reason %q", got)
 	}
-	if err := ensureConfigured(p, dir, configureAuto); err != nil {
+	if err := p.treeAt(dir, "").ensureConfigured(configureAuto); err != nil {
 		t.Fatal(err)
 	}
 	if got := itReason(t, p, dir); got != "" {
@@ -154,7 +154,7 @@ func TestIntegrationReconfigureLifecycle(t *testing.T) {
 	if got := itReason(t, p, dir); !strings.Contains(got, "file(GLOB)") {
 		t.Fatalf("glob drift: reason %q", got)
 	}
-	if err := ensureConfigured(p, dir, configureAuto); err != nil {
+	if err := p.treeAt(dir, "").ensureConfigured(configureAuto); err != nil {
 		t.Fatal(err)
 	}
 	if got := itReason(t, p, dir); got != "" {
@@ -167,7 +167,7 @@ func TestIntegrationExtraArgsSurviveAutoReconfigure(t *testing.T) {
 	dir := filepath.Join(root, "build")
 
 	// An explicit configure with ad-hoc args...
-	if err := runConfigure(p, dir, nil, []string{"-DCMK_IT_EXTRA=yes"}); err != nil {
+	if err := p.treeAt(dir, "").configure([]string{"-DCMK_IT_EXTRA=yes"}); err != nil {
 		t.Fatal(err)
 	}
 	cache, err := os.ReadFile(filepath.Join(dir, "CMakeCache.txt"))
@@ -183,7 +183,7 @@ func TestIntegrationExtraArgsSurviveAutoReconfigure(t *testing.T) {
 
 	// ...survives the automatic reconfigure triggered by an input edit.
 	touchAfterStamp(t, root, dir, "CMakeLists.txt")
-	if err := ensureConfigured(p, dir, configureAuto); err != nil {
+	if err := p.treeAt(dir, "").ensureConfigured(configureAuto); err != nil {
 		t.Fatal(err)
 	}
 	cache, err = os.ReadFile(filepath.Join(dir, "CMakeCache.txt"))
@@ -208,18 +208,18 @@ func TestIntegrationLockedFailsInsteadOfHealing(t *testing.T) {
 	}
 
 	// Locked + current -> fine.
-	if err := ensureConfigured(p, dir, configureLocked); err != nil {
+	if err := p.treeAt(dir, "").ensureConfigured(configureLocked); err != nil {
 		t.Fatalf("locked on a current configuration: %v", err)
 	}
 
 	// Locked + stale -> error naming the reason, not a reconfigure.
 	touchAfterStamp(t, root, dir, "CMakeLists.txt")
-	err := ensureConfigured(p, dir, configureLocked)
+	err := p.treeAt(dir, "").ensureConfigured(configureLocked)
 	if err == nil || !strings.Contains(err.Error(), "--locked") {
 		t.Fatalf("locked on a stale configuration: %v", err)
 	}
 	// --no-config skips the check entirely.
-	if err := ensureConfigured(p, dir, configureSkip); err != nil {
+	if err := p.treeAt(dir, "").ensureConfigured(configureSkip); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -242,7 +242,7 @@ func TestIntegrationForeignProjectLeftAlone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ensureConfigured(p, dir, configureAuto); err != nil {
+	if err := p.treeAt(dir, "").ensureConfigured(configureAuto); err != nil {
 		t.Fatal(err)
 	}
 	cache, err := os.ReadFile(filepath.Join(dir, "CMakeCache.txt"))

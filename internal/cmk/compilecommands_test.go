@@ -99,7 +99,7 @@ func TestLintCompilationDatabaseSelectsOneConfiguration(t *testing.T) {
 		Configurations:       []*ConfigurationCfg{{Name: "Debug"}, {Name: "Release"}},
 	}}}
 
-	dir, config, err := p.lintCompilationDatabase(buildDir, preset, "Release")
+	dir, config, err := p.treeFor(preset, "Release").lintCompilationDatabase()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestLintCompilationDatabaseSelectsOneConfiguration(t *testing.T) {
 	if err := os.Chtimes(destination, old, old); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := p.lintCompilationDatabase(buildDir, preset, "Release"); err != nil {
+	if _, _, err := p.treeFor(preset, "Release").lintCompilationDatabase(); err != nil {
 		t.Fatal(err)
 	}
 	if info, err := os.Stat(destination); err != nil || !info.ModTime().Equal(old) {
@@ -149,7 +149,7 @@ func TestLintCompilationDatabaseFiltersForeignConfiguration(t *testing.T) {
 	}
 	p := &Project{Root: root, Cfg: &Config{}}
 
-	dir, config, err := p.lintCompilationDatabase(buildDir, nil, "Release")
+	dir, config, err := p.treeAt(buildDir, "Release").lintCompilationDatabase()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestLintCompilationDatabaseFiltersForeignConfiguration(t *testing.T) {
 		t.Fatalf("lint database is not narrowed to Release: %s", data)
 	}
 
-	dir, config, err = p.lintCompilationDatabase(buildDir, nil, "")
+	dir, config, err = p.treeAt(buildDir, "").lintCompilationDatabase()
 	if err != nil || dir != buildDir || config != "" {
 		t.Fatalf("single-config tree = (%q, %q, %v), want the build dir unfiltered", dir, config, err)
 	}
@@ -194,7 +194,7 @@ func TestSyncRootCompileCommands(t *testing.T) {
 	rootDB := filepath.Join(root, "compile_commands.json")
 
 	// First sync narrows the root copy to the default (Asan) configuration.
-	if err := p.syncRootCompileCommands(buildDir, nil); err != nil {
+	if err := p.treeAt(buildDir, "").syncRootCompileCommands(); err != nil {
 		t.Fatal(err)
 	}
 	var got []map[string]any
@@ -212,7 +212,7 @@ func TestSyncRootCompileCommands(t *testing.T) {
 	if err := os.Chtimes(rootDB, old, old); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.syncRootCompileCommands(buildDir, nil); err != nil {
+	if err := p.treeAt(buildDir, "").syncRootCompileCommands(); err != nil {
 		t.Fatal(err)
 	}
 	if fi, _ := os.Stat(rootDB); !fi.ModTime().Equal(old) {
@@ -224,7 +224,7 @@ func TestSyncRootCompileCommands(t *testing.T) {
 	if err := os.WriteFile(buildDB, []byte(db2), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.syncRootCompileCommands(buildDir, nil); err != nil {
+	if err := p.treeAt(buildDir, "").syncRootCompileCommands(); err != nil {
 		t.Fatal(err)
 	}
 	if fi, _ := os.Stat(rootDB); fi.ModTime().Equal(old) {

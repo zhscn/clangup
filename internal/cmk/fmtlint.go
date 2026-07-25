@@ -367,11 +367,11 @@ func cmdLint(explicitFiles []string, options lintOptions) error {
 	// clang-tidy reads this build dir's compile_commands.json; on a stale
 	// configuration its diagnostics reflect flags nobody builds with, so
 	// lint resolves its tree exactly like the build commands do.
-	tree, err := resolveBuildTarget(variantOptions{treeOptions: options.treeOptions}, false)
+	tree, err := resolveBuildTree(variantOptions{treeOptions: options.treeOptions}, false)
 	if err != nil {
 		return err
 	}
-	p, dir, config := tree.p, tree.dir, tree.config
+	p, dir := tree.p, tree.dir
 	cdbPath := filepath.Join(dir, "compile_commands.json")
 	if _, err := os.Stat(cdbPath); err != nil {
 		if !os.IsNotExist(err) {
@@ -380,14 +380,14 @@ func cmdLint(explicitFiles []string, options lintOptions) error {
 		fmt.Fprintf(os.Stderr, "compile_commands.json missing in %s — running `cmake` to generate it.\n", dir)
 		// In a foreign tree the export is simply off; turning it on is the
 		// one change cmk makes, and it leaves the rest of the cache alone.
-		if err := regenerate(p, dir, "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"); err != nil {
+		if err := tree.regenerate("-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"); err != nil {
 			return err
 		}
 		if _, err := os.Stat(cdbPath); err != nil {
 			return fmt.Errorf("compile_commands.json still missing after refresh; ensure CMAKE_EXPORT_COMPILE_COMMANDS=ON in %s", dir)
 		}
 	}
-	lintDBDir, selectedConfig, err := p.lintCompilationDatabase(dir, presetForDir(p, dir), config)
+	lintDBDir, selectedConfig, err := tree.lintCompilationDatabase()
 	if err != nil {
 		return err
 	}

@@ -190,7 +190,7 @@ func TestReconfigureReason(t *testing.T) {
 		return path
 	}
 
-	if got := p.reconfigureReason(dir, tc, nil); got != "build dir is not configured" {
+	if got := p.treeAt(dir, "").reconfigureReason(tc); got != "build dir is not configured" {
 		t.Fatalf("unconfigured dir: got %q", got)
 	}
 
@@ -198,7 +198,7 @@ func TestReconfigureReason(t *testing.T) {
 	write("build/CMakeCache.txt", past)
 	fakeReply(t, root, dir, []string{"CMakeLists.txt"}, nil)
 
-	if got := p.reconfigureReason(dir, tc, nil); got != "injected configuration changed" {
+	if got := p.treeAt(dir, "").reconfigureReason(tc); got != "injected configuration changed" {
 		t.Fatalf("before stamp: got %q", got)
 	}
 
@@ -211,7 +211,7 @@ func TestReconfigureReason(t *testing.T) {
 	}
 	stamp()
 
-	if got := p.reconfigureReason(dir, tc, nil); got != "" {
+	if got := p.treeAt(dir, "").reconfigureReason(tc); got != "" {
 		t.Fatalf("fresh config: got %q, want no reason", got)
 	}
 
@@ -219,7 +219,7 @@ func TestReconfigureReason(t *testing.T) {
 	if err := os.Chtimes(cmakeLists, future, future); err != nil {
 		t.Fatal(err)
 	}
-	if got := p.reconfigureReason(dir, tc, nil); !strings.Contains(got, "CMakeLists.txt changed") {
+	if got := p.treeAt(dir, "").reconfigureReason(tc); !strings.Contains(got, "CMakeLists.txt changed") {
 		t.Fatalf("touched CMakeLists: got %q", got)
 	}
 	if err := os.Chtimes(cmakeLists, past, past); err != nil {
@@ -230,7 +230,7 @@ func TestReconfigureReason(t *testing.T) {
 	if err := os.Rename(cmakeLists, cmakeLists+".bak"); err != nil {
 		t.Fatal(err)
 	}
-	if got := p.reconfigureReason(dir, tc, nil); !strings.Contains(got, "is gone") {
+	if got := p.treeAt(dir, "").reconfigureReason(tc); !strings.Contains(got, "is gone") {
 		t.Fatalf("removed CMakeLists: got %q", got)
 	}
 	if err := os.Rename(cmakeLists+".bak", cmakeLists); err != nil {
@@ -242,24 +242,24 @@ func TestReconfigureReason(t *testing.T) {
 
 	// cmk.yaml is a cmk-side input CMake knows nothing about.
 	write(configFileName, future)
-	if got := p.reconfigureReason(dir, tc, nil); !strings.Contains(got, configFileName+" changed") {
+	if got := p.treeAt(dir, "").reconfigureReason(tc); !strings.Contains(got, configFileName+" changed") {
 		t.Fatalf("touched cmk.yaml: got %q", got)
 	}
 	write(configFileName, past)
 
 	// An [env] change alters the injection identity.
 	p.Cfg.Env = map[string]string{"FOO": "bar"}
-	if got := p.reconfigureReason(dir, tc, nil); got != "injected configuration changed" {
+	if got := p.treeAt(dir, "").reconfigureReason(tc); got != "injected configuration changed" {
 		t.Fatalf("env change: got %q", got)
 	}
 	stamp()
-	if got := p.reconfigureReason(dir, tc, nil); got != "" {
+	if got := p.treeAt(dir, "").reconfigureReason(tc); got != "" {
 		t.Fatalf("restamped after env change: got %q", got)
 	}
 
 	// A hand-edited cache (ccmake and friends) must reconfigure too.
 	write("build/CMakeCache.txt", future)
-	if got := p.reconfigureReason(dir, tc, nil); !strings.Contains(got, "CMakeCache.txt") {
+	if got := p.treeAt(dir, "").reconfigureReason(tc); !strings.Contains(got, "CMakeCache.txt") {
 		t.Fatalf("touched cache: got %q", got)
 	}
 	write("build/CMakeCache.txt", past)
@@ -276,11 +276,11 @@ func TestReconfigureReason(t *testing.T) {
 		Paths:           []string{filepath.ToSlash(root) + "/src/a.cc"},
 	}
 	fakeReply(t, root, dir, []string{"CMakeLists.txt"}, []globDependent{glob})
-	if got := p.reconfigureReason(dir, tc, nil); got != "" {
+	if got := p.treeAt(dir, "").reconfigureReason(tc); got != "" {
 		t.Fatalf("glob in sync: got %q", got)
 	}
 	write("src/b.cc", past) // new file matches the glob
-	if got := p.reconfigureReason(dir, tc, nil); !strings.Contains(got, "file(GLOB)") {
+	if got := p.treeAt(dir, "").reconfigureReason(tc); !strings.Contains(got, "file(GLOB)") {
 		t.Fatalf("glob drift: got %q", got)
 	}
 	fakeReply(t, root, dir, []string{"CMakeLists.txt"}, nil)
@@ -293,7 +293,7 @@ func TestReconfigureReason(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeInjectionStamp(dir, extraStamp, extra, "")
-	if got := p.reconfigureReason(dir, tc, nil); got != "" {
+	if got := p.treeAt(dir, "").reconfigureReason(tc); got != "" {
 		t.Fatalf("stamped extra args: got %q, want no reason", got)
 	}
 	if got := stampExtra(dir); len(got) != 1 || got[0] != "-DFOO=ON" {
