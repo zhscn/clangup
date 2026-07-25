@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	channel "github.com/zhscn/clangup/internal/clangup/channel"
+	"github.com/zhscn/clangup/internal/release"
 )
 
 func main() {
@@ -12,17 +12,17 @@ func main() {
 		fmt.Fprintln(os.Stderr, "usage: channel-plan <release.yaml> <plan.json>")
 		os.Exit(2)
 	}
-	loaded, err := channel.Load(os.Args[1])
+	loaded, err := release.Load(os.Args[1])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	plan, err := channel.Lock(loaded)
+	plan, err := release.Lock(loaded)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	contents, err := channel.MarshalCanonical(plan)
+	contents, err := release.MarshalCanonical(plan)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

@@ -1,4 +1,4 @@
-package channel
+package release
 
 import (
 	"crypto/sha256"
@@ -10,7 +10,7 @@ import (
 )
 
 func TestDefaultReleasePlan(t *testing.T) {
-	loaded, err := Load(filepath.Join("..", "..", "..", "channels", "default", "22.1.8", "release.yaml"))
+	loaded, err := Load(filepath.Join("..", "..", "channels", "default", "22.1.8", "release.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +27,7 @@ func TestDefaultReleasePlan(t *testing.T) {
 }
 
 func TestLibcxxReleasePlan(t *testing.T) {
-	loaded, err := Load(filepath.Join("..", "..", "..", "channels", "libcxx", "22.1.8", "release.yaml"))
+	loaded, err := Load(filepath.Join("..", "..", "channels", "libcxx", "22.1.8", "release.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}

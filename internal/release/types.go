@@ -1,4 +1,8 @@
-package channel
+// Package release reads and locks a channel's release.yaml into the
+// build plan the channel CI consumes. It is authoring-side only: the
+// clangup CLI never touches it — it reads the published index and
+// artifact manifests instead — and cmd/channel-plan is its one consumer.
+package release
 
 type Spec struct {
 	Schema          string                     `yaml:"schema"`
