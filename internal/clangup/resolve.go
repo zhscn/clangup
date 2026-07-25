@@ -31,6 +31,21 @@ type selection struct {
 	manifest             *toolchain.Manifest
 }
 
+// record is the install record this selection installs to prefix: the
+// identity every result document and the on-disk record are built from.
+// A resolve that installs nothing passes an empty prefix.
+func (s *selection) record(prefix string) toolchain.InstallRecord {
+	return toolchain.InstallRecord{
+		Channel: s.channel, Version: s.release.Version, Release: s.release.Release,
+		Target: s.artifact.Target, Prefix: prefix,
+		ManifestSHA256: s.artifact.Manifest.SHA256, ArtifactSHA256: s.artifact.Artifact.SHA256,
+		DriverRequirements: s.manifest.DriverRequirements.ExternalComponents,
+		ArchiveSHA256:      s.manifest.Source.Archive.SHA256,
+		PatchsetSHA256:     s.manifest.Source.PatchsetSHA256,
+		Driver:             s.manifest.Driver, Optimization: s.manifest.Optimization,
+	}
+}
+
 func resolveSelector(selector, explicitTarget string) (*selection, error) {
 	index, err := loadIndex()
 	if err != nil {

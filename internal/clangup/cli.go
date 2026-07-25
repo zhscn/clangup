@@ -154,59 +154,68 @@ func newResolveCommand() *cobra.Command { return newConsumerCommand("resolve", f
 
 func newEnsureCommand() *cobra.Command { return newConsumerCommand("ensure", true) }
 
+// newConsumerCommand builds `resolve` and `ensure`, the interface build
+// systems call: resolve reports the exact release a selector names,
+// ensure additionally installs it. An exact selector that is already
+// installed is answered from the install record, without the index.
 func newConsumerCommand(name string, ensure bool) *cobra.Command {
 	var prefix, target, format string
 	command := &cobra.Command{Use: name + " <channel[@version-release]>", Short: "Resolve an exact toolchain for build-system consumers", Args: cobra.ExactArgs(1), RunE: func(command *cobra.Command, args []string) error {
 		if err := validateOutputFormat(format); err != nil {
 			return invalidRequest(err)
 		}
-		if prefix == "" {
-			record, err := installedExact(args[0], target)
-			if err != nil {
-				return installFailure(err)
-			}
-			if record != nil {
-				result := resolveResultForInstalled(args[0], record)
-				if ensure {
-					result.Install = installationResultForRecord(record)
-				}
-				if format == "json" {
-					return writeJSON(command, result)
-				}
-				if result.Install != nil {
-					fmt.Fprintln(command.OutOrStdout(), result.Install.Prefix)
-				} else {
-					fmt.Fprintf(command.OutOrStdout(), "%s@%s-%d\t%s\n", result.Channel, result.Version, result.Release, result.Target)
-				}
-				return nil
-			}
-		}
-		selected, err := resolveSelector(args[0], target)
+		result, err := consumerResult(args[0], prefix, target, ensure)
 		if err != nil {
 			return installFailure(err)
-		}
-		result := resolveResultFor(args[0], selected)
-		if ensure {
-			installed, err := installSelector(args[0], prefix, target, false)
-			if err != nil {
-				return installFailure(err)
-			}
-			result.Install = installed
 		}
 		if format == "json" {
 			return writeJSON(command, result)
 		}
 		if result.Install != nil {
 			fmt.Fprintln(command.OutOrStdout(), result.Install.Prefix)
-		} else {
-			fmt.Fprintf(command.OutOrStdout(), "%s@%s-%d\t%s\n", result.Channel, result.Version, result.Release, result.Target)
+			return nil
 		}
+		fmt.Fprintf(command.OutOrStdout(), "%s@%s-%d\t%s\n", result.Channel, result.Version, result.Release, result.Target)
 		return nil
 	}}
 	command.Flags().StringVar(&prefix, "prefix", "", "installation prefix")
 	command.Flags().StringVar(&target, "target", "", "target triple")
 	command.Flags().StringVar(&format, "format", "text", outputFormatHelp)
 	return command
+}
+
+// consumerResult answers resolve/ensure. An already-installed exact
+// selector is served from its install record — no channel index, so no
+// network — unless an explicit --prefix asks for a fresh installation
+// somewhere else.
+func consumerResult(selector, prefix, target string, ensure bool) (*resolveResult, error) {
+	if prefix == "" {
+		record, err := installedExact(selector, target)
+		if err != nil {
+			return nil, err
+		}
+		if record != nil {
+			result := resolveResultFor(selector, record)
+			if ensure {
+				result.Install = installationResult(record)
+			}
+			return result, nil
+		}
+	}
+	selected, err := resolveSelector(selector, target)
+	if err != nil {
+		return nil, err
+	}
+	record := selected.record("")
+	result := resolveResultFor(selector, &record)
+	if ensure {
+		installed, err := installSelector(selector, prefix, target, false)
+		if err != nil {
+			return nil, err
+		}
+		result.Install = installed
+	}
+	return result, nil
 }
 
 func newPathCommand() *cobra.Command {

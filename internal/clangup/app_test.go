@@ -50,7 +50,7 @@ func TestInstalledExactResolvesImportedChannel(t *testing.T) {
 	if err != nil || installed == nil || installed.Channel != "libcxx" {
 		t.Fatalf("installed = %#v, %v", installed, err)
 	}
-	result := resolveResultForInstalled("libcxx@22.1.8-1", installed)
+	result := resolveResultFor("libcxx@22.1.8-1", installed)
 	if result.Channel != "libcxx" || result.Driver["cxx_stdlib"] == nil {
 		t.Fatalf("result = %#v", result)
 	}

@@ -135,3 +135,45 @@ func TestCollectGarbageRemovesPartialsAndStaleRecords(t *testing.T) {
 		t.Errorf("dangling install record survived: %#v", records)
 	}
 }
+
+// An exact selector that is already installed is answered from the
+// install record: no channel index, so no network. resolve and ensure
+// agree on the identity; only ensure carries the install block.
+func TestConsumerResultServesInstalledExactWithoutTheIndex(t *testing.T) {
+	t.Setenv("CLANGUP_HOME", t.TempDir())
+	t.Setenv("CLANGUP_INDEX_URL", "https://index.invalid/index.json")
+	t.Setenv("CLANGUP_CONFIG_HOME", t.TempDir())
+	prefix := installFixture(t, "libcxx", "22.1.8", 1, "x86_64-unknown-linux-gnu")
+
+	resolved, err := consumerResult("libcxx@22.1.8-1", "", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Channel != "libcxx" || resolved.Version != "22.1.8" || resolved.Release != 1 {
+		t.Fatalf("resolve result = %#v", resolved)
+	}
+	if resolved.Install != nil {
+		t.Errorf("resolve carried an install block: %#v", resolved.Install)
+	}
+
+	ensured, err := consumerResult("libcxx@22.1.8-1", "", "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ensured.Install == nil || ensured.Install.Prefix != prefix {
+		t.Fatalf("ensure result = %#v", ensured.Install)
+	}
+	if ensured.Install.CC != filepath.Join(prefix, "bin", "clang") {
+		t.Errorf("cc = %q", ensured.Install.CC)
+	}
+	if ensured.Channel != resolved.Channel || ensured.Target != resolved.Target {
+		t.Errorf("resolve and ensure disagree: %#v vs %#v", resolved, ensured)
+	}
+
+	// Nothing is installed for this selector, so it has to reach the
+	// index — which is unreachable here, and that is the error we expect
+	// rather than a silent empty result.
+	if _, err := consumerResult("libcxx@21.0.0-1", "", "", false); err == nil {
+		t.Fatal("an uninstalled selector resolved without the index")
+	}
+}

@@ -44,11 +44,11 @@ type installResult struct {
 	Driver             map[string]any    `json:"driver"`
 }
 
-func resolveResultFor(selector string, selected *selection) *resolveResult {
-	return &resolveResult{Schema: "clangup.resolve/v1", Selector: selector, Channel: selected.channel, Version: selected.release.Version, Release: selected.release.Release, Target: selected.artifact.Target, ManifestSHA256: selected.artifact.Manifest.SHA256, ArtifactSHA256: selected.artifact.Artifact.SHA256, DriverRequirements: selected.manifest.DriverRequirements.ExternalComponents, ArchiveSHA256: selected.manifest.Source.Archive.SHA256, PatchsetSHA256: selected.manifest.Source.PatchsetSHA256, Driver: selected.manifest.Driver, Optimization: selected.manifest.Optimization}
-}
-
-func resolveResultForInstalled(selector string, record *toolchain.InstallRecord) *resolveResult {
+// resolveResultFor renders the resolve document for an install record.
+// A selector that was only resolved and one that is already installed
+// describe the same toolchain, so both go through here and cannot
+// disagree about what a resolve result contains.
+func resolveResultFor(selector string, record *toolchain.InstallRecord) *resolveResult {
 	return &resolveResult{
 		Schema: "clangup.resolve/v1", Selector: selector,
 		Channel: record.Channel, Version: record.Version, Release: record.Release, Target: record.Target,
@@ -74,7 +74,7 @@ func installSelector(selector, prefix, explicitTarget string, force bool) (*inst
 	if err != nil {
 		return nil, err
 	}
-	record := toolchain.InstallRecord{Channel: selected.channel, Version: selected.release.Version, Release: selected.release.Release, Target: selected.artifact.Target, Prefix: prefix, ManifestSHA256: selected.artifact.Manifest.SHA256, ArtifactSHA256: selected.artifact.Artifact.SHA256, DriverRequirements: selected.manifest.DriverRequirements.ExternalComponents, ArchiveSHA256: selected.manifest.Source.Archive.SHA256, PatchsetSHA256: selected.manifest.Source.PatchsetSHA256, Driver: selected.manifest.Driver, Optimization: selected.manifest.Optimization}
+	record := selected.record(prefix)
 	if !force && toolchain.IsInstalled(prefix, record.ManifestSHA256, record.ArtifactSHA256) {
 		if err := toolchain.RecordInstall(record); err != nil {
 			return nil, err
@@ -82,7 +82,7 @@ func installSelector(selector, prefix, explicitTarget string, force bool) (*inst
 		if err := ensureFirstDefault(prefix); err != nil {
 			return nil, err
 		}
-		return installationResult(selected.channel, selected.release, selected.artifact, selected.manifest, prefix), nil
+		return installationResult(&record), nil
 	}
 	archive, err := toolchain.NewClient().Object(selected.base, selected.artifact.Artifact)
 	if err != nil {
@@ -98,24 +98,14 @@ func installSelector(selector, prefix, explicitTarget string, force bool) (*inst
 	if err := ensureFirstDefault(prefix); err != nil {
 		return nil, err
 	}
-	return installationResult(selected.channel, selected.release, selected.artifact, selected.manifest, prefix), nil
+	return installationResult(&record), nil
 }
 
-func installationResult(channel string, release toolchain.IndexRelease, artifact *toolchain.Artifact, manifest *toolchain.Manifest, prefix string) *installResult {
-	result := &installResult{Schema: "clangup.install/v1", Channel: channel, Version: release.Version, Release: release.Release, Target: artifact.Target, ManifestSHA256: artifact.Manifest.SHA256, ArtifactSHA256: artifact.Artifact.SHA256, DriverRequirements: manifest.DriverRequirements.ExternalComponents, Prefix: prefix, CC: filepath.Join(prefix, "bin", "clang"), CXX: filepath.Join(prefix, "bin", "clang++"), Driver: manifest.Driver, Tools: map[string]string{}}
-	for name, executable := range installedTools() {
-		path := filepath.Join(prefix, "bin", executable)
-		if _, err := os.Stat(path); err == nil {
-			result.Tools[name] = path
-		}
-	}
-	if path := filepath.Join(prefix, "toolchain.cmake"); func() bool { _, err := os.Stat(path); return err == nil }() {
-		result.ToolchainFile = path
-	}
-	return result
-}
-
-func installationResultForRecord(record *toolchain.InstallRecord) *installResult {
+// installationResult renders the install document for a record: its
+// identity plus what is actually present under the prefix — the
+// compilers, whichever tools the artifact shipped, and the toolchain
+// file if it has one.
+func installationResult(record *toolchain.InstallRecord) *installResult {
 	result := &installResult{
 		Schema: "clangup.install/v1", Channel: record.Channel, Version: record.Version,
 		Release: record.Release, Target: record.Target, ManifestSHA256: record.ManifestSHA256,
@@ -125,12 +115,11 @@ func installationResultForRecord(record *toolchain.InstallRecord) *installResult
 		Tools: map[string]string{},
 	}
 	for name, executable := range installedTools() {
-		path := filepath.Join(record.Prefix, "bin", executable)
-		if _, err := os.Stat(path); err == nil {
+		if path := filepath.Join(record.Prefix, "bin", executable); fileExists(path) {
 			result.Tools[name] = path
 		}
 	}
-	if path := filepath.Join(record.Prefix, "toolchain.cmake"); func() bool { _, err := os.Stat(path); return err == nil }() {
+	if path := filepath.Join(record.Prefix, "toolchain.cmake"); fileExists(path) {
 		result.ToolchainFile = path
 	}
 	return result
@@ -141,6 +130,12 @@ func installedTools() map[string]string {
 		"ar": "llvm-ar", "nm": "llvm-nm", "ranlib": "llvm-ranlib",
 		"clang-format": "clang-format", "clang-tidy": "clang-tidy",
 	}
+}
+
+// fileExists reports whether path is an existing regular file.
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
 }
 
 func ensureFirstDefault(prefix string) error {

@@ -100,9 +100,7 @@ func installDirect(file, location, prefix, explicitTarget string, force bool) (*
 	if err := ensureFirstDefault(prefix); err != nil {
 		return nil, err
 	}
-	release := toolchain.IndexRelease{Version: record.Version, Release: record.Release}
-	artifact := &toolchain.Artifact{Target: record.Target, Artifact: object, Manifest: toolchain.Object{SHA256: record.ManifestSHA256}}
-	return installationResult(channel, release, artifact, &manifest, prefix), nil
+	return installationResult(&record), nil
 }
 
 func siblingManifestNames(value string) []string {
