@@ -28,11 +28,10 @@ func cmdBuild(positionalTargets, passthrough []string, options buildOptions) err
 	if err != nil {
 		return err
 	}
-	passThrough := !p.hasCmkConfig()
-	if !passThrough {
-		if err := ensureConfigured(p, dir, policy); err != nil {
-			return err
-		}
+	// A foreign tree keeps its own regeneration behavior; ensureConfigured
+	// is a no-op there and the build below runs cmake straight through.
+	if err := ensureConfigured(p, dir, policy); err != nil {
+		return err
 	}
 
 	if len(targets) == 0 && options.Interactive {
@@ -58,15 +57,11 @@ func cmdBuild(positionalTargets, passthrough []string, options buildOptions) err
 	cmd := exec.Command("cmake", cmakeArgs...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	if passThrough {
-		cmd.Env = p.commandEnv()
-	} else {
-		env, err := p.commandEnvWithToolchain()
-		if err != nil {
-			return err
-		}
-		cmd.Env = env
+	env, err := p.buildEnv()
+	if err != nil {
+		return err
 	}
+	cmd.Env = env
 	// No post-build compile_commands sync: configure suppresses the regen
 	// rule, so a build can never reconfigure behind cmk's back —
 	// ensureConfigured above already brought everything in step.
@@ -146,7 +141,7 @@ func cmdRun(targetName string, options runOptions) error {
 		build := exec.Command("cmake", buildArgs...)
 		build.Stdout = os.Stdout
 		build.Stderr = os.Stderr
-		env, err := p.commandEnvWithToolchain()
+		env, err := p.buildEnv()
 		if err != nil {
 			return err
 		}
@@ -201,7 +196,7 @@ func cmdTU(names []string, options tuOptions) error {
 	}
 
 	list := exec.Command("ninja", append(append([]string{}, ninjaBase...), "-t", "targets", "all")...)
-	env, err := p.commandEnvWithToolchain()
+	env, err := p.buildEnv()
 	if err != nil {
 		return err
 	}

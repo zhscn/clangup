@@ -106,10 +106,7 @@ func filterCompileCommands(data []byte, config string) ([]byte, error) {
 // filtered database under the build tree so clang-tidy does not run once for
 // every configuration recorded for a translation unit.
 func (p *Project) lintCompilationDatabase(buildDir string, preset *PresetCfg, resolvedConfig string) (string, string, error) {
-	config, multi, err := p.lintConfiguration(buildDir, preset, resolvedConfig)
-	if err != nil {
-		return "", "", err
-	}
+	config, multi := p.lintConfiguration(preset, resolvedConfig)
 	if !multi {
 		return buildDir, "", nil
 	}
@@ -150,42 +147,18 @@ func (p *Project) lintCompilationDatabase(buildDir string, preset *PresetCfg, re
 	return dir, config, nil
 }
 
-func (p *Project) lintConfiguration(buildDir string, preset *PresetCfg, resolved string) (string, bool, error) {
-	if p.hasCmkConfig() {
-		if !isMultiConfig(p.Cfg, preset) {
-			return "", false, nil
-		}
-		return resolved, true, nil
+// lintConfiguration reports the configuration whose compile commands
+// clang-tidy should read, and whether the tree is multi-config at all. In a
+// foreign tree resolveVariant already resolved it against the cache, and it
+// is non-empty exactly for multi-config trees.
+func (p *Project) lintConfiguration(preset *PresetCfg, resolved string) (string, bool) {
+	if !p.hasCmkConfig() {
+		return resolved, resolved != ""
 	}
-
-	cache, err := readCMakeCache(filepath.Join(buildDir, "CMakeCache.txt"))
-	if err != nil {
-		return "", false, err
+	if !isMultiConfig(p.Cfg, preset) {
+		return "", false
 	}
-	if !isMultiConfigGenerator(cache["CMAKE_GENERATOR"]) {
-		return "", false, nil
-	}
-	configurations := strings.FieldsFunc(cache["CMAKE_CONFIGURATION_TYPES"], func(r rune) bool { return r == ';' })
-	selected := resolved
-	if selected == "" {
-		selected = cache["CMAKE_DEFAULT_BUILD_TYPE"]
-	}
-	if selected == "" && len(configurations) > 0 {
-		selected = configurations[0]
-	}
-	if selected == "" {
-		return "", true, fmt.Errorf("cannot select a configuration from %s", filepath.Join(buildDir, "CMakeCache.txt"))
-	}
-	if len(configurations) > 0 {
-		known := false
-		for _, configuration := range configurations {
-			known = known || configuration == selected
-		}
-		if !known {
-			return "", true, fmt.Errorf("configuration %q not found (known: %s)", selected, strings.Join(configurations, ", "))
-		}
-	}
-	return selected, true, nil
+	return resolved, true
 }
 
 func readCMakeCache(path string) (map[string]string, error) {

@@ -250,11 +250,7 @@ func cmdFmt(explicitFiles []string, options fmtOptions) error {
 			fmt.Println(file)
 		}
 	}
-	tc, err := p.toolchain()
-	if err != nil {
-		return err
-	}
-	clangFormat, err := tc.command("clang-format")
+	clangFormat, err := p.tool("clang-format")
 	if err != nil {
 		return err
 	}
@@ -390,7 +386,9 @@ func cmdLint(explicitFiles []string, options lintOptions) error {
 			return err
 		}
 		fmt.Fprintf(os.Stderr, "compile_commands.json missing in %s — running `cmake` to generate it.\n", dir)
-		if err := runConfigure(p, dir, presetForDir(p, dir), stampExtra(dir)); err != nil {
+		// In a foreign tree the export is simply off; turning it on is the
+		// one change cmk makes, and it leaves the rest of the cache alone.
+		if err := regenerate(p, dir, "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"); err != nil {
 			return err
 		}
 		if _, err := os.Stat(cdbPath); err != nil {
@@ -464,11 +462,7 @@ func cmdLint(explicitFiles []string, options lintOptions) error {
 
 	useColor := stdoutIsTerminal()
 	tidyArgs := lintCommandArgs(lintDBDir, p.Cfg.Lint, options.WarningsAsErrors, options.Fix, useColor)
-	tc, err := p.toolchain()
-	if err != nil {
-		return err
-	}
-	clangTidy, err := tc.command("clang-tidy")
+	clangTidy, err := p.tool("clang-tidy")
 	if err != nil {
 		return err
 	}

@@ -33,7 +33,7 @@ func cmdDoctor() error {
 	fmt.Println("project:")
 	c.ok("root %s", p.Root)
 	if !p.hasCmkConfig() {
-		c.note("foreign CMake project (cmk build uses existing build trees)")
+		c.note("foreign CMake project (cmk drives existing build trees; cmake configures them)")
 	} else if _, err := os.Stat(filepath.Join(p.Root, lockFileName)); err == nil {
 		c.ok("cmk.yaml + cmk.lock present")
 	} else {
@@ -138,6 +138,14 @@ func doctorToolchain(c *doctorChecker, p *Project) {
 	if selector == "" {
 		tc, err := systemToolchain()
 		if err != nil {
+			if !p.hasCmkConfig() {
+				// Nothing here needs a compiler of cmk's own: existing
+				// build trees carry theirs in the cache, and fmt/lint
+				// take clang-format/clang-tidy from PATH.
+				c.note("%v", err)
+				c.note("existing build directories keep their configured compiler")
+				return
+			}
 			c.fail("%v", err)
 			return
 		}

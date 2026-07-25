@@ -131,16 +131,13 @@ func TestLintCompilationDatabaseSelectsOneConfiguration(t *testing.T) {
 	}
 }
 
-func TestLintCompilationDatabaseUsesForeignCMakeDefault(t *testing.T) {
+// In a foreign tree the configuration is resolved once, from the cache
+// (see foreignConfig); lint filters the database to whatever came back and
+// treats a single-config tree — which resolves to "" — as unfiltered.
+func TestLintCompilationDatabaseFiltersForeignConfiguration(t *testing.T) {
 	root := t.TempDir()
 	buildDir := filepath.Join(root, "build")
 	if err := os.MkdirAll(buildDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	cache := "CMAKE_GENERATOR:INTERNAL=Ninja Multi-Config\n" +
-		"CMAKE_CONFIGURATION_TYPES:STRING=Debug;Release\n" +
-		"CMAKE_DEFAULT_BUILD_TYPE:STRING=Release\n"
-	if err := os.WriteFile(filepath.Join(buildDir, "CMakeCache.txt"), []byte(cache), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	db := `[
@@ -152,15 +149,24 @@ func TestLintCompilationDatabaseUsesForeignCMakeDefault(t *testing.T) {
 	}
 	p := &Project{Root: root, Cfg: &Config{}}
 
-	_, config, err := p.lintCompilationDatabase(buildDir, nil, "")
+	dir, config, err := p.lintCompilationDatabase(buildDir, nil, "Release")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if config != "Release" {
 		t.Fatalf("selected configuration = %q, want Release", config)
 	}
-	if _, _, err := p.lintCompilationDatabase(buildDir, nil, "Asan"); err == nil || !strings.Contains(err.Error(), "known: Debug, Release") {
-		t.Fatalf("unknown configuration error = %v", err)
+	data, err := os.ReadFile(filepath.Join(dir, "compile_commands.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "/Release/") || strings.Contains(string(data), "/Debug/") {
+		t.Fatalf("lint database is not narrowed to Release: %s", data)
+	}
+
+	dir, config, err = p.lintCompilationDatabase(buildDir, nil, "")
+	if err != nil || dir != buildDir || config != "" {
+		t.Fatalf("single-config tree = (%q, %q, %v), want the build dir unfiltered", dir, config, err)
 	}
 }
 

@@ -50,6 +50,26 @@ func (p *Project) toolchainSelector() string {
 	return p.Cfg.Toolchain.selectorFor(runtime.GOOS, runtime.GOARCH)
 }
 
+// tool resolves a toolchain program such as clang-format or clang-tidy.
+// With a selector it comes from the pinned clangup toolchain; without one
+// there is no toolchain to resolve and PATH decides directly — going
+// through Project.toolchain would insist on discovering a C/C++ compiler,
+// which formatting and linting have no use for.
+func (p *Project) tool(name string) (string, error) {
+	if p.toolchainSelector() == "" {
+		path, err := exec.LookPath(name)
+		if err != nil {
+			return "", fmt.Errorf("%s not found on PATH", name)
+		}
+		return path, nil
+	}
+	tc, err := p.toolchain()
+	if err != nil {
+		return "", err
+	}
+	return tc.command(name)
+}
+
 func openProject() (*Project, error) {
 	root, err := findProjectRoot()
 	if err != nil {
@@ -199,6 +219,11 @@ func (p *Project) resolveBuildDir(name string) (string, error) {
 		}
 	}
 	if len(p.BuildDirs) == 0 {
+		if !p.hasCmkConfig() {
+			// `cmk config` is not an option here — it requires cmk.yaml.
+			return "", fmt.Errorf("no CMake build directories found under %s; configure one with `cmake -B build`, or add %s and run `cmk config`",
+				p.Root, configFileName)
+		}
 		return "", fmt.Errorf("no CMake build directories found; pass --build or run `cmk config`")
 	}
 	if len(p.BuildDirs) == 1 {
@@ -267,13 +292,21 @@ func (p *Project) commandEnv(layers ...map[string]string) []string {
 	return env
 }
 
-func (p *Project) commandEnvWithToolchain(layers ...map[string]string) ([]string, error) {
+// buildEnv is the environment for driving a build tool (cmake --build,
+// ninja). A cmk project builds inside its pinned toolchain. A foreign build
+// tree records its own compiler in its cache and cmk overrides nothing
+// there, so it needs no toolchain at all — resolving one would make
+// `cmk build` in an existing tree fail on hosts where cmk can find no
+// compiler of its own.
+func (p *Project) buildEnv(layers ...map[string]string) ([]string, error) {
+	if !p.hasCmkConfig() {
+		return p.commandEnv(layers...), nil
+	}
 	tc, err := p.toolchain()
 	if err != nil {
 		return nil, err
 	}
-	all := append([]map[string]string{tc.envMap()}, layers...)
-	return p.commandEnv(all...), nil
+	return p.commandEnv(append([]map[string]string{tc.envMap()}, layers...)...), nil
 }
 
 // ccacheEnv configures ccache for cross-worktree reuse when the CMake
@@ -359,7 +392,10 @@ func (p *Project) collectTargets(buildDir, config string) ([]Target, error) {
 	replyDir := filepath.Join(buildDir, ".cmake/api/v1/reply")
 	cm, err := readCodemodel(replyDir)
 	if err != nil {
-		if err := runConfigure(p, buildDir, presetForDir(p, buildDir), stampExtra(buildDir)); err != nil {
+		// No reply yet: a tree that was never configured by cmk (foreign,
+		// or one whose .cmake/ was cleaned). regenerate plants the query
+		// and re-runs cmake without disturbing a foreign configuration.
+		if err := regenerate(p, buildDir); err != nil {
 			return nil, err
 		}
 		cm, err = readCodemodel(replyDir)

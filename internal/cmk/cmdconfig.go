@@ -57,6 +57,50 @@ func presetBuildDir(p *Project, preset *PresetCfg) string {
 	return filepath.Clean(dir)
 }
 
+// regenerate re-runs cmake on an existing build tree to bring back a
+// generated artifact cmk needs but did not find — a file API reply, a
+// compile database. A managed tree goes through the full configure path.
+// A foreign tree is somebody else's: cmk did not choose its generator,
+// compiler or cache variables and must not replace them, so it gets a
+// plain in-place reconfigure that only plants what is missing.
+func regenerate(p *Project, dir string, defines ...string) error {
+	if p.hasCmkConfig() {
+		return runConfigure(p, dir, presetForDir(p, dir), stampExtra(dir))
+	}
+	return regenerateForeign(p, dir, defines...)
+}
+
+// regenerateForeign runs `cmake -B <dir>` against a build tree cmk does not
+// own. The existing cache supplies the source dir, the generator and every
+// option, so the tree survives intact; cmk adds only the file API queries
+// and the given defines. Deliberately no --fresh, no toolchain injection
+// and no stamp: cmk is a guest here.
+func regenerateForeign(p *Project, dir string, defines ...string) error {
+	if _, err := os.Stat(filepath.Join(dir, "CMakeCache.txt")); err != nil {
+		return fmt.Errorf("%s is not a configured CMake build directory; configure it with `cmake -B %s` first",
+			dir, p.relToRoot(dir))
+	}
+	lock, err := lockBuildDir(dir)
+	if err != nil {
+		return err
+	}
+	defer unlockBuildDir(lock)
+
+	if err := p.ensureFileAPI(dir); err != nil {
+		return err
+	}
+	args := append([]string{"-B", dir}, defines...)
+	fmt.Fprintf(os.Stderr, "+ cmake %s\n", shellQuote(args))
+	cmd := exec.Command("cmake", args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = p.commandEnv()
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("cmake reconfigure of %s failed: %w", dir, err)
+	}
+	return nil
+}
+
 // runConfigure is the single configure path: resolve the toolchain, sync
 // deps, compute the injection, run cmake (--fresh when the injection
 // changed), and refresh the generated artifacts (injection stamp, file

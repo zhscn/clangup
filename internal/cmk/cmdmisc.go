@@ -47,7 +47,7 @@ func cmdTest(patterns []string, options testOptions) error {
 		build := exec.Command("cmake", buildArgs...)
 		build.Stdout = os.Stdout
 		build.Stderr = os.Stderr
-		env, err := p.commandEnvWithToolchain()
+		env, err := p.buildEnv()
 		if err != nil {
 			return err
 		}
@@ -110,7 +110,7 @@ func cmdInstall(options installOptions) error {
 		buildArgs := cmakeBuildArgs(dir, cfgName, options.Jobs, nil, false, options.Verbose, nil)
 		build := exec.Command("cmake", buildArgs...)
 		build.Stdout, build.Stderr = os.Stdout, os.Stderr
-		env, err := p.commandEnvWithToolchain()
+		env, err := p.buildEnv()
 		if err != nil {
 			return err
 		}

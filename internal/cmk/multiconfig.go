@@ -2,7 +2,9 @@ package cmk
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -60,24 +62,62 @@ func (p *Project) resolveConfig(preset *PresetCfg, explicit string) (string, err
 	if explicit == "" {
 		return p.Cfg.Configure.DefaultConfiguration, nil
 	}
-	for _, configuration := range configurations {
-		if configuration == explicit {
-			return explicit, nil
-		}
+	if !slices.Contains(configurations, explicit) {
+		return "", fmt.Errorf("configuration %q not found (known: %s)", explicit, strings.Join(configurations, ", "))
 	}
-	return "", fmt.Errorf("configuration %q not found (known: %s)", explicit, strings.Join(configurations, ", "))
+	return explicit, nil
+}
+
+// foreignConfig resolves the configuration of a build tree cmk did not
+// configure, reading it out of the tree's own cache: an explicit --config
+// must name one of CMAKE_CONFIGURATION_TYPES, otherwise
+// CMAKE_DEFAULT_BUILD_TYPE (then the first configured type) decides — the
+// same configuration a bare `cmake --build` would use. Single-config trees
+// have none, so --config is an error there, exactly as in a managed project.
+// Every command resolves through here, so build, run, test and lint of one
+// foreign tree can never address different configurations.
+func foreignConfig(buildDir, explicit string) (string, error) {
+	cache, err := readCMakeCache(filepath.Join(buildDir, "CMakeCache.txt"))
+	if err != nil {
+		return "", err
+	}
+	if !isMultiConfigGenerator(cache["CMAKE_GENERATOR"]) {
+		if explicit != "" {
+			return "", fmt.Errorf("--config %q requires a multi-config generator (%s uses %s)",
+				explicit, buildDir, cache["CMAKE_GENERATOR"])
+		}
+		return "", nil
+	}
+	configurations := strings.FieldsFunc(cache["CMAKE_CONFIGURATION_TYPES"], func(r rune) bool { return r == ';' })
+	selected := explicit
+	if selected == "" {
+		selected = cache["CMAKE_DEFAULT_BUILD_TYPE"]
+	}
+	if selected == "" && len(configurations) > 0 {
+		selected = configurations[0]
+	}
+	if selected == "" {
+		return "", fmt.Errorf("cannot select a configuration from %s", filepath.Join(buildDir, "CMakeCache.txt"))
+	}
+	if len(configurations) > 0 && !slices.Contains(configurations, selected) {
+		return "", fmt.Errorf("configuration %q not found (known: %s)", selected, strings.Join(configurations, ", "))
+	}
+	return selected, nil
 }
 
 // resolveVariant selects a managed preset and an optional multi-config
 // configuration. Without cmk.yaml it selects an existing foreign CMake build
-// tree and passes --config through unchanged.
+// tree and reads the configuration out of that tree (see foreignConfig).
 func (p *Project) resolveVariant(buildDir, presetName, configName string) (dir, configuration string, err error) {
 	if !p.hasCmkConfig() {
 		if presetName != "" {
 			return "", "", fmt.Errorf("--preset requires a cmk.yaml project")
 		}
-		dir, err = p.resolveBuildDir(buildDir)
-		return dir, configName, err
+		if dir, err = p.resolveBuildDir(buildDir); err != nil {
+			return "", "", err
+		}
+		configuration, err = foreignConfig(dir, configName)
+		return dir, configuration, err
 	}
 	if buildDir != "" && presetName != "" {
 		return "", "", fmt.Errorf("pass either --build <dir> or --preset <preset>, not both")

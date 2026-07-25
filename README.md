@@ -205,15 +205,31 @@ configuration. `-p/--preset` selects a managed build tree.
 
 ### Existing CMake build trees
 
-`cmk build` can also invoke CMake for a project without `cmk.yaml`:
+Without `cmk.yaml`, `cmk` drives build trees configured by something else:
 
 ```sh
 cmk build -b build
 cmk build -b build -c Release app -- -v
+cmk run app -- --help
+cmk test
+cmk fmt --staged
+cmk lint --branch
 ```
 
-Targets, configuration, parallelism, and arguments after `--` are forwarded to
-`cmake --build`.
+`build`, `run`, `test`, `install`, and `build-tu` forward targets,
+configuration, parallelism, and arguments after `--` to CMake; `fmt` and `lint`
+take `clang-format` and `clang-tidy` from `PATH`. A single build tree is picked
+automatically, `-b` selects one otherwise.
+
+Such a tree belongs to whoever configured it: `cmk` never re-runs configure
+with its own toolchain, generator, or cache variables there. When it needs
+something the tree has not generated — a CMake file API reply for `run`, a
+compile database for `lint` — it re-runs plain `cmake -B <dir>`, which keeps
+the existing cache. `cmk config`, presets, and dependencies require `cmk.yaml`.
+
+`-c` selects a configuration of a multi-config tree and is read back from the
+tree's cache: without it, `cmk` builds, runs, tests, and lints the
+configuration that tree's `CMAKE_DEFAULT_BUILD_TYPE` names.
 
 Run `clangup --help`, `cmk --help`, `clangup doctor`, or `cmk doctor` for the
 complete command reference and diagnostics.
