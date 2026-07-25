@@ -8,98 +8,111 @@ import (
 	"strings"
 )
 
+// buildTarget is one resolved build tree: what every build-time command
+// works on once its flags are parsed.
+type buildTarget struct {
+	p      *Project
+	dir    string
+	config string
+}
+
+// resolveBuildTarget is the shared preamble of build, run, test, install,
+// build-tu and lint: open the project, configure the selected preset's
+// tree when it does not exist yet, resolve the build dir and
+// configuration, and reconfigure a stale one per the policy. Routing all
+// of them through here is what keeps them from drifting apart — a foreign
+// build tree in particular must be treated identically by all six.
+//
+// readOnly mirrors --no-build: the caller only reads an existing tree, so
+// nothing is configured on its behalf.
+func resolveBuildTarget(options variantOptions, readOnly bool) (*buildTarget, error) {
+	policy, err := configurePolicyFromFlags(options.Locked, options.NoConfig)
+	if err != nil {
+		return nil, err
+	}
+	p, err := openProject()
+	if err != nil {
+		return nil, err
+	}
+	if !readOnly {
+		if err := bootstrapIfUnconfigured(p, options.BuildDir, options.Preset, policy); err != nil {
+			return nil, err
+		}
+	}
+	dir, config, err := p.resolveVariant(options.BuildDir, options.Preset, options.Config)
+	if err != nil {
+		return nil, err
+	}
+	if !readOnly {
+		// A foreign tree keeps its own regeneration behavior;
+		// ensureConfigured is a no-op there and cmake runs straight through.
+		if err := ensureConfigured(p, dir, policy); err != nil {
+			return nil, err
+		}
+	}
+	return &buildTarget{p: p, dir: dir, config: config}, nil
+}
+
+// build runs `cmake --build` on the tree. No post-build compile_commands
+// sync is needed: configure suppresses the regen rule, so a build can
+// never reconfigure behind cmk's back — resolveBuildTarget already
+// brought everything in step.
+func (t *buildTarget) build(jobs int, targets []string, cleanFirst, verbose bool, passthrough []string) error {
+	env, err := t.p.buildEnv()
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command("cmake", cmakeBuildArgs(t.dir, t.config, jobs, targets, cleanFirst, verbose, passthrough)...)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	cmd.Env = env
+	return cmd.Run()
+}
+
 // cmdBuild builds target(s), or everything when no target is selected, in the
 // resolved build dir.
 func cmdBuild(positionalTargets, passthrough []string, options buildOptions) error {
-	policy, err := configurePolicyFromFlags(options.Locked, options.NoConfig)
-	if err != nil {
-		return err
-	}
 	targets := cleanArgs(append(append([]string(nil), options.TargetFlags...), positionalTargets...))
-
-	p, err := openProject()
+	target, err := resolveBuildTarget(options.variantOptions, false)
 	if err != nil {
-		return err
-	}
-	if err := bootstrapIfUnconfigured(p, options.BuildDir, options.Preset, policy); err != nil {
-		return err
-	}
-	dir, cfgName, err := p.resolveVariant(options.BuildDir, options.Preset, options.Config)
-	if err != nil {
-		return err
-	}
-	// A foreign tree keeps its own regeneration behavior; ensureConfigured
-	// is a no-op there and the build below runs cmake straight through.
-	if err := ensureConfigured(p, dir, policy); err != nil {
 		return err
 	}
 
 	if len(targets) == 0 && options.Interactive {
-		allTargets, err := p.collectTargets(dir, cfgName)
+		allTargets, err := target.p.collectTargets(target.dir, target.config)
 		if err != nil {
 			return err
 		}
-		names := make([]string, 0, len(targets))
+		names := make([]string, 0, len(allTargets))
 		for _, t := range allTargets {
 			if t.Imported {
 				continue // e.g. Git::Git — not ours to build
 			}
 			names = append(names, t.Name)
 		}
-		target, err := completingRead(names)
+		selected, err := completingRead(names)
 		if err != nil {
 			return err
 		}
-		targets = []string{target}
+		targets = []string{selected}
 	}
 
-	cmakeArgs := cmakeBuildArgs(dir, cfgName, options.Jobs, targets, options.CleanFirst, options.Verbose, passthrough)
-	cmd := exec.Command("cmake", cmakeArgs...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	env, err := p.buildEnv()
-	if err != nil {
-		return err
-	}
-	cmd.Env = env
-	// No post-build compile_commands sync: configure suppresses the regen
-	// rule, so a build can never reconfigure behind cmk's back —
-	// ensureConfigured above already brought everything in step.
-	return cmd.Run()
+	return target.build(options.Jobs, targets, options.CleanFirst, options.Verbose, passthrough)
 }
 
 // cmdRun builds and runs an executable target; args after "--" go to
 // the program.
 func cmdRun(targetName string, options runOptions) error {
-	policy, err := configurePolicyFromFlags(options.Locked, options.NoConfig)
+	tree, err := resolveBuildTarget(options.variantOptions, options.NoBuild)
 	if err != nil {
 		return err
 	}
-
-	p, err := openProject()
-	if err != nil {
-		return err
-	}
-	if !options.NoBuild {
-		if err := bootstrapIfUnconfigured(p, options.BuildDir, options.Preset, policy); err != nil {
-			return err
-		}
-	}
-	dir, cfgName, err := p.resolveVariant(options.BuildDir, options.Preset, options.Config)
-	if err != nil {
-		return err
-	}
-	if !options.NoBuild {
-		if err := ensureConfigured(p, dir, policy); err != nil {
-			return err
-		}
-	}
-	targets, err := p.executableTargets(dir, cfgName)
+	p := tree.p
+	targets, err := p.executableTargets(tree.dir, tree.config)
 	if err != nil {
 		return err
 	}
 	if len(targets) == 0 {
-		return fmt.Errorf("no executable targets in %s", dir)
+		return fmt.Errorf("no executable targets in %s", tree.dir)
 	}
 
 	var target *Target
@@ -137,21 +150,12 @@ func cmdRun(targetName string, options runOptions) error {
 	}
 
 	if !options.NoBuild {
-		buildArgs := cmakeBuildArgs(dir, cfgName, options.Jobs, []string{target.Name}, false, options.Verbose, nil)
-		build := exec.Command("cmake", buildArgs...)
-		build.Stdout = os.Stdout
-		build.Stderr = os.Stderr
-		env, err := p.buildEnv()
-		if err != nil {
-			return err
-		}
-		build.Env = env
-		if err := build.Run(); err != nil {
+		if err := tree.build(options.Jobs, []string{target.Name}, false, options.Verbose, nil); err != nil {
 			return fmt.Errorf("build of %s failed: %w", target.Name, err)
 		}
 	}
 
-	bin := filepath.Join(dir, target.Artifacts[0].Path)
+	bin := filepath.Join(tree.dir, target.Artifacts[0].Path)
 	run := exec.Command(bin, options.ProgramArgs...)
 	run.Stdout = os.Stdout
 	run.Stderr = os.Stderr
@@ -167,39 +171,25 @@ func cmdRun(targetName string, options runOptions) error {
 }
 
 // cmdTU builds a single translation unit via ninja.
-func cmdTU(names []string, options tuOptions) error {
-	policy, err := configurePolicyFromFlags(options.Locked, options.NoConfig)
-	if err != nil {
-		return err
-	}
+func cmdTU(names []string, options variantOptions) error {
 	names = cleanArgs(names)
-
-	p, err := openProject()
+	tree, err := resolveBuildTarget(options, false)
 	if err != nil {
 		return err
 	}
-	if err := bootstrapIfUnconfigured(p, options.BuildDir, options.Preset, policy); err != nil {
-		return err
-	}
-	dir, cfgName, err := p.resolveVariant(options.BuildDir, options.Preset, options.Config)
-	if err != nil {
-		return err
-	}
-	if err := ensureConfigured(p, dir, policy); err != nil {
-		return err
-	}
+	dir := tree.dir
 	// In multi-config, ninja writes one build-<Config>.ninja per
 	// configuration; -f selects it. Single-config uses the default file.
 	ninjaBase := []string{"-C", dir}
-	if cfgName != "" {
-		ninjaBase = append(ninjaBase, "-f", "build-"+cfgName+".ninja")
+	if tree.config != "" {
+		ninjaBase = append(ninjaBase, "-f", "build-"+tree.config+".ninja")
 	}
 
-	list := exec.Command("ninja", append(append([]string{}, ninjaBase...), "-t", "targets", "all")...)
-	env, err := p.buildEnv()
+	env, err := tree.p.buildEnv()
 	if err != nil {
 		return err
 	}
+	list := exec.Command("ninja", append(append([]string{}, ninjaBase...), "-t", "targets", "all")...)
 	list.Env = env
 	out, err := list.Output()
 	if err != nil {
@@ -257,6 +247,9 @@ func cmdTU(names []string, options tuOptions) error {
 	selected = uniqueStrings(selected)
 
 	ninjaArgs := append(append([]string{}, ninjaBase...), "-j", fmt.Sprint(options.Jobs))
+	if options.Verbose {
+		ninjaArgs = append(ninjaArgs, "-v")
+	}
 	ninjaArgs = append(ninjaArgs, selected...)
 	cmd := exec.Command("ninja", ninjaArgs...)
 	cmd.Stdout = os.Stdout

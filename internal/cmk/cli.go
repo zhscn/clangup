@@ -5,44 +5,49 @@ import (
 	"io"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
+// treeOptions selects which build tree a command acts on: a managed
+// preset, an explicit directory, and the configuration within it.
+type treeOptions struct {
+	BuildDir, Preset, Config string
+}
+
+// variantOptions is treeOptions plus the knobs every build-time command
+// shares. Commands embed it and register its flags with addVariantFlags,
+// so `-b/-p/-c/-j/-v/--locked/--no-config` mean the same thing everywhere.
+type variantOptions struct {
+	treeOptions
+	Jobs             int
+	Verbose          bool
+	Locked, NoConfig bool
+}
+
 type buildOptions struct {
-	BuildDir, Preset, Config  string
-	TargetFlags               []string
-	Jobs                      int
-	CleanFirst, Interactive   bool
-	Verbose, Locked, NoConfig bool
+	variantOptions
+	TargetFlags             []string
+	CleanFirst, Interactive bool
 }
 
 type runOptions struct {
-	BuildDir, Preset, Config, Target string
-	Jobs                             int
-	NoBuild, Verbose                 bool
-	Locked, NoConfig                 bool
-	ProgramArgs                      []string
+	variantOptions
+	Target      string
+	NoBuild     bool
+	ProgramArgs []string
 }
 
 type testOptions struct {
-	BuildDir, Preset, Config string
-	BuildTargets, Labels     []string
-	Jobs                     int
-	NoBuild, Verbose         bool
-	Locked, NoConfig         bool
-	CTestArgs                []string
+	variantOptions
+	BuildTargets, Labels []string
+	NoBuild              bool
+	CTestArgs            []string
 }
 
 type installOptions struct {
-	BuildDir, Preset, Config, Prefix, Component string
-	Jobs                                        int
-	NoBuild, Strip, Verbose                     bool
-	Locked, NoConfig                            bool
-}
-
-type tuOptions struct {
-	BuildDir, Preset, Config string
-	Jobs                     int
-	Locked, NoConfig         bool
+	variantOptions
+	Prefix, Component string
+	NoBuild, Strip    bool
 }
 
 type fmtOptions struct {
@@ -51,11 +56,28 @@ type fmtOptions struct {
 }
 
 type lintOptions struct {
-	BuildDir, Preset, Config  string
+	treeOptions
 	Commit, Branch            string
 	All, Staged, Unstaged     bool
 	Interactive, Fix          bool
 	WarningsAsErrors, Verbose bool
+}
+
+func addTreeFlags(flags *pflag.FlagSet, options *treeOptions) {
+	flags.StringVarP(&options.BuildDir, "build", "b", "", "Build directory")
+	flags.StringVarP(&options.Preset, "preset", "p", "", "Configure preset")
+	flags.StringVarP(&options.Config, "config", "c", "", "Build configuration")
+}
+
+func addVariantFlags(command *cobra.Command, options *variantOptions) {
+	options.Jobs = defaultJobs()
+	flags := command.Flags()
+	addTreeFlags(flags, &options.treeOptions)
+	flags.IntVarP(&options.Jobs, "jobs", "j", options.Jobs, "Parallel jobs")
+	flags.BoolVarP(&options.Verbose, "verbose", "v", false, "Show verbose build commands")
+	flags.BoolVar(&options.Locked, "locked", false, "Fail when configuration is stale")
+	flags.BoolVar(&options.NoConfig, "no-config", false, "Skip configuration staleness checks")
+	command.MarkFlagsMutuallyExclusive("locked", "no-config")
 }
 
 type addOptions struct {
@@ -165,28 +187,21 @@ func newConfigCommand() *cobra.Command {
 }
 
 func newBuildCommand() *cobra.Command {
-	options := buildOptions{Jobs: defaultJobs()}
+	var options buildOptions
 	command := &cobra.Command{Use: "build [target...] [-- build-tool-args...]", Aliases: []string{"b"}, Short: "Build the project", RunE: func(command *cobra.Command, args []string) error {
 		targets, passthrough := splitPassthrough(command, args)
 		return cmdBuild(targets, passthrough, options)
 	}}
+	addVariantFlags(command, &options.variantOptions)
 	flags := command.Flags()
-	flags.StringVarP(&options.BuildDir, "build", "b", "", "Build directory")
-	flags.StringVarP(&options.Preset, "preset", "p", "", "Configure preset")
-	flags.StringVarP(&options.Config, "config", "c", "", "Build configuration")
 	flags.StringArrayVarP(&options.TargetFlags, "target", "t", nil, "Build target (repeatable)")
-	flags.IntVarP(&options.Jobs, "jobs", "j", options.Jobs, "Parallel jobs")
 	flags.BoolVar(&options.CleanFirst, "clean-first", false, "Clean targets before building")
 	flags.BoolVarP(&options.Interactive, "interactive", "i", false, "Select a target interactively")
-	flags.BoolVarP(&options.Verbose, "verbose", "v", false, "Show verbose build commands")
-	flags.BoolVar(&options.Locked, "locked", false, "Fail when configuration is stale")
-	flags.BoolVar(&options.NoConfig, "no-config", false, "Skip configuration staleness checks")
-	command.MarkFlagsMutuallyExclusive("locked", "no-config")
 	return command
 }
 
 func newRunCommand() *cobra.Command {
-	options := runOptions{Jobs: defaultJobs()}
+	var options runOptions
 	command := &cobra.Command{Use: "run [target] [-- program-args...]", Aliases: []string{"r"}, Short: "Build and run an executable", RunE: func(command *cobra.Command, args []string) error {
 		positional, passthrough := splitPassthrough(command, args)
 		if len(positional) > 1 {
@@ -205,76 +220,49 @@ func newRunCommand() *cobra.Command {
 		options.ProgramArgs = passthrough
 		return cmdRun(target, options)
 	}}
+	addVariantFlags(command, &options.variantOptions)
 	flags := command.Flags()
-	flags.StringVarP(&options.BuildDir, "build", "b", "", "Build directory")
-	flags.StringVarP(&options.Preset, "preset", "p", "", "Configure preset")
-	flags.StringVarP(&options.Config, "config", "c", "", "Build configuration")
 	flags.StringVarP(&options.Target, "target", "t", "", "Executable target")
-	flags.IntVarP(&options.Jobs, "jobs", "j", options.Jobs, "Parallel jobs")
 	flags.BoolVar(&options.NoBuild, "no-build", false, "Run without building")
-	flags.BoolVarP(&options.Verbose, "verbose", "v", false, "Show verbose build commands")
-	flags.BoolVar(&options.Locked, "locked", false, "Fail when configuration is stale")
-	flags.BoolVar(&options.NoConfig, "no-config", false, "Skip configuration staleness checks")
-	command.MarkFlagsMutuallyExclusive("locked", "no-config")
 	return command
 }
 
 func newTestCommand() *cobra.Command {
-	options := testOptions{Jobs: defaultJobs()}
+	var options testOptions
 	command := &cobra.Command{Use: "test [pattern...] [-- ctest-args...]", Aliases: []string{"t"}, Short: "Build and run tests", RunE: func(command *cobra.Command, args []string) error {
 		patterns, passthrough := splitPassthrough(command, args)
 		options.CTestArgs = passthrough
 		return cmdTest(patterns, options)
 	}}
+	addVariantFlags(command, &options.variantOptions)
 	flags := command.Flags()
-	flags.StringVarP(&options.BuildDir, "build", "b", "", "Build directory")
-	flags.StringVarP(&options.Preset, "preset", "p", "", "Configure preset")
-	flags.StringVarP(&options.Config, "config", "c", "", "Build configuration")
+	flags.Lookup("verbose").Usage = "Enable verbose CTest output"
 	flags.StringArrayVarP(&options.BuildTargets, "target", "t", nil, "Build target (repeatable)")
 	flags.StringArrayVarP(&options.Labels, "label", "L", nil, "CTest label (repeatable)")
-	flags.IntVarP(&options.Jobs, "jobs", "j", options.Jobs, "Parallel jobs")
 	flags.BoolVar(&options.NoBuild, "no-build", false, "Run tests without building")
-	flags.BoolVarP(&options.Verbose, "verbose", "v", false, "Enable verbose CTest output")
-	flags.BoolVar(&options.Locked, "locked", false, "Fail when configuration is stale")
-	flags.BoolVar(&options.NoConfig, "no-config", false, "Skip configuration staleness checks")
-	command.MarkFlagsMutuallyExclusive("locked", "no-config")
 	return command
 }
 
 func newInstallCommand() *cobra.Command {
-	options := installOptions{Jobs: defaultJobs()}
+	var options installOptions
 	command := &cobra.Command{Use: "install", Short: "Build and install the project", Args: cobra.NoArgs, RunE: func(_ *cobra.Command, _ []string) error {
 		return cmdInstall(options)
 	}}
+	addVariantFlags(command, &options.variantOptions)
 	flags := command.Flags()
-	flags.StringVarP(&options.BuildDir, "build", "b", "", "Build directory")
-	flags.StringVarP(&options.Preset, "preset", "p", "", "Configure preset")
-	flags.StringVarP(&options.Config, "config", "c", "", "Build configuration")
 	flags.StringVar(&options.Prefix, "prefix", "", "Installation prefix")
 	flags.StringVar(&options.Component, "component", "", "Installation component")
-	flags.IntVarP(&options.Jobs, "jobs", "j", options.Jobs, "Parallel jobs")
 	flags.BoolVar(&options.NoBuild, "no-build", false, "Install without building")
 	flags.BoolVar(&options.Strip, "strip", false, "Strip installed binaries")
-	flags.BoolVarP(&options.Verbose, "verbose", "v", false, "Show verbose build commands")
-	flags.BoolVar(&options.Locked, "locked", false, "Fail when configuration is stale")
-	flags.BoolVar(&options.NoConfig, "no-config", false, "Skip configuration staleness checks")
-	command.MarkFlagsMutuallyExclusive("locked", "no-config")
 	return command
 }
 
 func newTUCommand() *cobra.Command {
-	options := tuOptions{Jobs: defaultJobs()}
+	var options variantOptions
 	command := &cobra.Command{Use: "build-tu [name...]", Aliases: []string{"tu"}, Short: "Build translation units", Args: cobra.ArbitraryArgs, RunE: func(_ *cobra.Command, args []string) error {
 		return cmdTU(args, options)
 	}}
-	flags := command.Flags()
-	flags.StringVarP(&options.BuildDir, "build", "b", "", "Build directory")
-	flags.StringVarP(&options.Preset, "preset", "p", "", "Configure preset")
-	flags.StringVarP(&options.Config, "config", "c", "", "Build configuration")
-	flags.IntVarP(&options.Jobs, "jobs", "j", options.Jobs, "Parallel jobs")
-	flags.BoolVar(&options.Locked, "locked", false, "Fail when configuration is stale")
-	flags.BoolVar(&options.NoConfig, "no-config", false, "Skip configuration staleness checks")
-	command.MarkFlagsMutuallyExclusive("locked", "no-config")
+	addVariantFlags(command, &options)
 	return command
 }
 
@@ -315,9 +303,7 @@ func newLintCommand() *cobra.Command {
 		return cmdLint(args, options)
 	}}
 	flags := command.Flags()
-	flags.StringVarP(&options.BuildDir, "build", "b", "", "CMake build directory")
-	flags.StringVarP(&options.Preset, "preset", "p", "", "Configure preset")
-	flags.StringVarP(&options.Config, "config", "c", "", "Build configuration")
+	addTreeFlags(flags, &options.treeOptions)
 	flags.BoolVarP(&options.Interactive, "interactive", "i", false, "Select a file from compile_commands.json")
 	flags.BoolVarP(&options.All, "all", "a", false, "Lint all tracked source files")
 	flags.BoolVarP(&options.Staged, "staged", "s", false, "Lint only staged files")

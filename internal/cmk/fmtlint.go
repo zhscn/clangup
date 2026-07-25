@@ -364,22 +364,14 @@ func lintCommandArgs(dir string, cfg LintCfg, warningsAsErrors, fix, useColor bo
 }
 
 func cmdLint(explicitFiles []string, options lintOptions) error {
-	p, err := openProject()
-	if err != nil {
-		return err
-	}
-	if err := bootstrapIfUnconfigured(p, options.BuildDir, options.Preset, configureAuto); err != nil {
-		return err
-	}
-	dir, config, err := p.resolveVariant(options.BuildDir, options.Preset, options.Config)
-	if err != nil {
-		return err
-	}
 	// clang-tidy reads this build dir's compile_commands.json; on a stale
-	// configuration its diagnostics reflect flags nobody builds with.
-	if err := ensureConfigured(p, dir, configureAuto); err != nil {
+	// configuration its diagnostics reflect flags nobody builds with, so
+	// lint resolves its tree exactly like the build commands do.
+	tree, err := resolveBuildTarget(variantOptions{treeOptions: options.treeOptions}, false)
+	if err != nil {
 		return err
 	}
+	p, dir, config := tree.p, tree.dir, tree.config
 	cdbPath := filepath.Join(dir, "compile_commands.json")
 	if _, err := os.Stat(cdbPath); err != nil {
 		if !os.IsNotExist(err) {

@@ -19,49 +19,23 @@ import (
 // cmdTest runs ctest in the resolved build dir. Positional arguments become
 // one OR-ed -R regex, args after -- pass through to ctest.
 func cmdTest(patterns []string, options testOptions) error {
-	policy, err := configurePolicyFromFlags(options.Locked, options.NoConfig)
-	if err != nil {
-		return err
-	}
 	patterns = cleanArgs(patterns)
-
-	p, err := openProject()
-	if err != nil {
-		return err
-	}
-	if !options.NoBuild {
-		if err := bootstrapIfUnconfigured(p, options.BuildDir, options.Preset, policy); err != nil {
-			return err
-		}
-	}
-	dir, cfgName, err := p.resolveVariant(options.BuildDir, options.Preset, options.Config)
+	tree, err := resolveBuildTarget(options.variantOptions, options.NoBuild)
 	if err != nil {
 		return err
 	}
 
 	if !options.NoBuild {
-		if err := ensureConfigured(p, dir, policy); err != nil {
-			return err
-		}
-		buildArgs := cmakeBuildArgs(dir, cfgName, options.Jobs, options.BuildTargets, false, false, nil)
-		build := exec.Command("cmake", buildArgs...)
-		build.Stdout = os.Stdout
-		build.Stderr = os.Stderr
-		env, err := p.buildEnv()
-		if err != nil {
-			return err
-		}
-		build.Env = env
-		if err := build.Run(); err != nil {
+		if err := tree.build(options.Jobs, options.BuildTargets, false, false, nil); err != nil {
 			return fmt.Errorf("build failed: %w", err)
 		}
 	}
 
-	ctestArgs := []string{"--test-dir", dir, "--output-on-failure", "-j", fmt.Sprint(options.Jobs)}
-	if cfgName != "" {
+	ctestArgs := []string{"--test-dir", tree.dir, "--output-on-failure", "-j", fmt.Sprint(options.Jobs)}
+	if tree.config != "" {
 		// Multi-config requires -C to select which configuration's tests
 		// to run; ctest finds none without it.
-		ctestArgs = append(ctestArgs, "-C", cfgName)
+		ctestArgs = append(ctestArgs, "-C", tree.config)
 	}
 	if pattern := joinRegexAlternatives(patterns); pattern != "" {
 		ctestArgs = append(ctestArgs, "-R", pattern)
@@ -76,7 +50,7 @@ func cmdTest(patterns []string, options testOptions) error {
 	cmd := exec.Command("ctest", ctestArgs...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.Env = p.commandEnv()
+	cmd.Env = tree.p.commandEnv()
 	return cmd.Run()
 }
 
@@ -85,46 +59,23 @@ func cmdTest(patterns []string, options testOptions) error {
 // see fresh artifacts. The prefix defaults to the one baked at configure
 // time (CMAKE_INSTALL_PREFIX); [install] prefix or --prefix override it.
 func cmdInstall(options installOptions) error {
-	policy, err := configurePolicyFromFlags(options.Locked, options.NoConfig)
+	tree, err := resolveBuildTarget(options.variantOptions, options.NoBuild)
 	if err != nil {
 		return err
 	}
-	p, err := openProject()
-	if err != nil {
-		return err
-	}
-	if !options.NoBuild {
-		if err := bootstrapIfUnconfigured(p, options.BuildDir, options.Preset, policy); err != nil {
-			return err
-		}
-	}
-	dir, cfgName, err := p.resolveVariant(options.BuildDir, options.Preset, options.Config)
-	if err != nil {
-		return err
-	}
+	p := tree.p
 
 	if !options.NoBuild {
-		if err := ensureConfigured(p, dir, policy); err != nil {
-			return err
-		}
-		buildArgs := cmakeBuildArgs(dir, cfgName, options.Jobs, nil, false, options.Verbose, nil)
-		build := exec.Command("cmake", buildArgs...)
-		build.Stdout, build.Stderr = os.Stdout, os.Stderr
-		env, err := p.buildEnv()
-		if err != nil {
-			return err
-		}
-		build.Env = env
-		if err := build.Run(); err != nil {
+		if err := tree.build(options.Jobs, nil, false, options.Verbose, nil); err != nil {
 			return fmt.Errorf("build failed: %w", err)
 		}
 	}
 
-	installArgs := []string{"--install", dir}
-	if cfgName != "" {
+	installArgs := []string{"--install", tree.dir}
+	if tree.config != "" {
 		// Multi-config requires --config so cmake knows which
 		// configuration's artifacts to install.
-		installArgs = append(installArgs, "--config", cfgName)
+		installArgs = append(installArgs, "--config", tree.config)
 	}
 	pfx, err := p.installPrefix(options.Prefix)
 	if err != nil {

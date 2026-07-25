@@ -36,6 +36,12 @@ func foreignTree(t *testing.T, cache string) (root, build, log string) {
 	return root, build, log
 }
 
+// variantFor is the build-time flag set a command would see for one
+// tree: -b <build> [-c <config>] -j <jobs>.
+func variantFor(build, config string, jobs int) variantOptions {
+	return variantOptions{treeOptions: treeOptions{BuildDir: build, Config: config}, Jobs: jobs}
+}
+
 func readLog(t *testing.T, log string) string {
 	t.Helper()
 	data, err := os.ReadFile(log)
@@ -55,7 +61,7 @@ const singleConfigCache = "CMAKE_GENERATOR:INTERNAL=Ninja\n" +
 func TestBuildUsesExistingCMakeTreeWithoutManagedToolchain(t *testing.T) {
 	_, build, log := foreignTree(t, singleConfigCache)
 
-	if err := cmdBuild([]string{"app"}, []string{"-v"}, buildOptions{BuildDir: build, Jobs: 3}); err != nil {
+	if err := cmdBuild([]string{"app"}, []string{"-v"}, buildOptions{variantOptions: variantFor(build, "", 3)}); err != nil {
 		t.Fatal(err)
 	}
 	want := "--build " + build + " -j 3 --target app -- -v"
@@ -73,14 +79,14 @@ func TestBuildUsesExistingCMakeTreeWithoutManagedToolchain(t *testing.T) {
 func TestBuildSelectsForeignDefaultConfiguration(t *testing.T) {
 	_, build, log := foreignTree(t, multiConfigCache)
 
-	if err := cmdBuild(nil, nil, buildOptions{BuildDir: build, Jobs: 1}); err != nil {
+	if err := cmdBuild(nil, nil, buildOptions{variantOptions: variantFor(build, "", 1)}); err != nil {
 		t.Fatal(err)
 	}
 	if want := "--build " + build + " -j 1 --config Release"; readLog(t, log) != want {
 		t.Fatalf("cmake arguments = %q, want %q", readLog(t, log), want)
 	}
 
-	if err := cmdBuild(nil, nil, buildOptions{BuildDir: build, Config: "Debug", Jobs: 1}); err != nil {
+	if err := cmdBuild(nil, nil, buildOptions{variantOptions: variantFor(build, "Debug", 1)}); err != nil {
 		t.Fatal(err)
 	}
 	if want := "--build " + build + " -j 1 --config Debug"; readLog(t, log) != want {
