@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/zhscn/clangup/internal/clangup/toolchain"
+	"github.com/zhscn/clangup/internal/platform"
 )
 
 // Resolving a selector to an exact release: the channel index, the
@@ -124,16 +125,8 @@ func selectArtifact(client *toolchain.Client, base string, release *toolchain.Re
 }
 
 func hostMatches(manifest *toolchain.Manifest) bool {
-	expectedOS := runtime.GOOS
-	if expectedOS == "darwin" {
-		expectedOS = "macos"
-	}
-	expectedArch := runtime.GOARCH
-	if expectedArch == "amd64" {
-		expectedArch = "x86_64"
-	} else if expectedArch == "arm64" {
-		expectedArch = "aarch64"
-	}
+	expectedOS := platform.OS(runtime.GOOS)
+	expectedArch := platform.Arch(runtime.GOARCH)
 	if manifest.RuntimeRequirements.OS != expectedOS || manifest.RuntimeRequirements.Arch != expectedArch {
 		return false
 	}

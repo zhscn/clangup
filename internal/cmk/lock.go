@@ -6,9 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/zhscn/clangup/internal/platform"
 )
 
 const lockFileName = "cmk.lock"
@@ -145,34 +146,14 @@ func (pin LockToolchain) empty() bool {
 	return pin.Selector == "" && pin.Target == "" && pin.ManifestSHA256 == "" && pin.ArtifactSHA256 == ""
 }
 
+// hostPlatform and platformForTarget are the platform keys cmk.lock is
+// indexed by; the naming is shared with clangup (see internal/platform).
 func hostPlatform(goos, goarch string) string {
-	osName := goos
-	if osName == "darwin" {
-		osName = "macos"
-	}
-	arch := goarch
-	switch arch {
-	case "amd64":
-		arch = "x86_64"
-	case "arm64":
-		arch = "aarch64"
-	}
-	return osName + "-" + arch
+	return platform.Name(goos, goarch)
 }
 
 func platformForTarget(target string) string {
-	switch {
-	case strings.Contains(target, "apple-darwin"):
-		return "macos-aarch64"
-	case strings.HasPrefix(target, "x86_64-") && strings.Contains(target, "linux"):
-		return "linux-x86_64"
-	case strings.HasPrefix(target, "aarch64-") && strings.Contains(target, "linux"):
-		return "linux-aarch64"
-	case strings.Contains(target, "linux"):
-		return "linux-unknown"
-	default:
-		return ""
-	}
+	return platform.FromTarget(target)
 }
 
 func (lk *Lock) toolchainFor(goos, goarch string) *LockToolchain {

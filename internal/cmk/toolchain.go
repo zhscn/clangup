@@ -10,6 +10,8 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+
+	"github.com/zhscn/clangup/internal/platform"
 )
 
 // Toolchain is the compiler set returned by clangup's consumer interface.
@@ -234,18 +236,7 @@ func targetFlag(target string) []string {
 	return []string{"--target", target}
 }
 
-func hostTarget() string {
-	switch hostPlatform(runtime.GOOS, runtime.GOARCH) {
-	case "linux-x86_64":
-		return "x86_64-unknown-linux-gnu"
-	case "linux-aarch64":
-		return "aarch64-unknown-linux-gnu"
-	case "macos-aarch64":
-		return "arm64-apple-darwin"
-	default:
-		return ""
-	}
-}
+func hostTarget() string { return platform.HostTarget() }
 
 func runClangupUpdate() error {
 	bin := clangupBin()
