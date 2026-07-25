@@ -2,8 +2,6 @@ package cmk
 
 import (
 	"fmt"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -48,10 +46,7 @@ func cmdInstall(options installOptions) error {
 	if options.Strip || p.Cfg.Install.Strip {
 		installArgs = append(installArgs, "--strip")
 	}
-	cmd := exec.Command("cmake", installArgs...)
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	cmd.Env = p.commandEnv()
-	return cmd.Run()
+	return runStreaming(p.commandEnv(), "cmake", installArgs...)
 }
 
 func joinRegexAlternatives(patterns []string) string {

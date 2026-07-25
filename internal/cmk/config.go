@@ -3,10 +3,11 @@ package cmk
 import (
 	"bytes"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -472,11 +473,7 @@ func validateCMakeArgs(path string, args []string) error {
 }
 
 func variableArgs(variables map[string]any, vars map[string]string) []string {
-	keys := make([]string, 0, len(variables))
-	for key := range variables {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
+	keys := slices.Sorted(maps.Keys(variables))
 	args := make([]string, 0, len(keys))
 	for _, key := range keys {
 		value, _ := cacheValueString(variables[key])

@@ -2,16 +2,12 @@ package cmk
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
-	"time"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -61,7 +57,7 @@ func cmdUpdate(names []string) error {
 	}
 
 	dirty := false
-	if all || containsExact(names, "toolchain") {
+	if all || slices.Contains(names, "toolchain") {
 		selector := p.toolchainSelector()
 		if selector != "" && !strings.Contains(selector, "@") {
 			if err := runClangupUpdate(); err != nil {
@@ -111,15 +107,6 @@ func cmdUpdate(names []string) error {
 	return nil
 }
 
-func containsExact(s []string, v string) bool {
-	for _, x := range s {
-		if x == v {
-			return true
-		}
-	}
-	return false
-}
-
 // cmdAdd adds a dependency entry, computing archive hashes and validating git
 // refs, then creates a recipe stub.
 func cmdAdd(name string, options addOptions) error {
@@ -157,8 +144,7 @@ func cmdAdd(name string, options addOptions) error {
 
 	if url != "" && sha == "" {
 		fmt.Fprintf(os.Stderr, "cmk: downloading %s to compute its sha256\n", url)
-		sha, err = downloadAndHash(url)
-		if err != nil {
+		if _, sha, err = download(url, ""); err != nil {
 			return err
 		}
 		fmt.Fprintf(os.Stderr, "cmk: sha256 %s\n", sha)
@@ -259,40 +245,3 @@ cmake -S "$CMK_SRC" -B . -G Ninja \
 cmake --build . -j "$CMK_JOBS"
 cmake --install . >/dev/null
 `
-
-// downloadAndHash fetches url into the downloads dir, returning its
-// sha256 (the file is stored under that name, ready for fetchTarball).
-func downloadAndHash(url string) (string, error) {
-	dir := downloadsDir()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
-	}
-	client := &http.Client{Timeout: 30 * time.Minute}
-	resp, err := client.Get(url)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("GET %s: %s", url, resp.Status)
-	}
-	tmp, err := os.CreateTemp(dir, ".partial-*")
-	if err != nil {
-		return "", err
-	}
-	defer os.Remove(tmp.Name())
-	h := sha256.New()
-	if _, err := io.Copy(io.MultiWriter(tmp, h), resp.Body); err != nil {
-		tmp.Close()
-		return "", err
-	}
-	if err := tmp.Close(); err != nil {
-		return "", err
-	}
-	sha := hex.EncodeToString(h.Sum(nil))
-	dest := filepath.Join(dir, sha)
-	if _, err := os.Stat(dest); err == nil {
-		return sha, nil
-	}
-	return sha, os.Rename(tmp.Name(), dest)
-}

@@ -12,6 +12,16 @@ import (
 	"sync"
 )
 
+// runStreaming runs a build tool with its output on the terminal and the
+// given environment — the shape of every tool cmk drives on a build
+// tree's behalf (cmake, ninja, ctest).
+func runStreaming(env []string, name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	cmd.Env = env
+	return cmd.Run()
+}
+
 func defaultJobs() int {
 	if s := os.Getenv("CMK_JOBS"); s != "" {
 		if n, err := strconv.Atoi(s); err == nil && n > 0 {

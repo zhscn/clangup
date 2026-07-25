@@ -5,12 +5,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
-	"syscall"
 )
 
 // cmdConfig runs cmake configure with the toolchain and dep exports
@@ -84,18 +84,14 @@ func regenerateForeign(p *Project, dir string, defines ...string) error {
 	if err != nil {
 		return err
 	}
-	defer unlockBuildDir(lock)
+	defer unlockFile(lock)
 
 	if err := p.ensureFileAPI(dir); err != nil {
 		return err
 	}
 	args := append([]string{"-B", dir}, defines...)
 	fmt.Fprintf(os.Stderr, "+ cmake %s\n", shellQuote(args))
-	cmd := exec.Command("cmake", args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Env = p.commandEnv()
-	if err := cmd.Run(); err != nil {
+	if err := runStreaming(p.commandEnv(), "cmake", args...); err != nil {
 		return fmt.Errorf("cmake reconfigure of %s failed: %w", dir, err)
 	}
 	return nil
@@ -127,7 +123,7 @@ func runConfigure(p *Project, dir string, preset *PresetCfg, extraArgs []string)
 	if err != nil {
 		return err
 	}
-	defer unlockBuildDir(lock)
+	defer unlockFile(lock)
 
 	tc, err := p.toolchain()
 	if err != nil {
@@ -169,11 +165,7 @@ func runConfigure(p *Project, dir string, preset *PresetCfg, extraArgs []string)
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "+ cmake %s\n", shellQuote(cmakeArgs))
-	cmd := exec.Command("cmake", cmakeArgs...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Env = p.commandEnv(tc.envMap())
-	if err := cmd.Run(); err != nil {
+	if err := runStreaming(p.commandEnv(tc.envMap()), "cmake", cmakeArgs...); err != nil {
 		return fmt.Errorf("cmake configure failed: %w", err)
 	}
 	// The stamp's mtime doubles as the staleness baseline: written after
@@ -312,11 +304,7 @@ func envStampEntries(p *Project) []string {
 		return nil
 	}
 	vars := p.vars()
-	keys := make([]string, 0, len(p.Cfg.Env))
-	for k := range p.Cfg.Env {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
+	keys := slices.Sorted(maps.Keys(p.Cfg.Env))
 	out := make([]string, 0, len(keys))
 	for _, k := range keys {
 		out = append(out, "env:"+k+"="+expandVars(p.Cfg.Env[k], vars))
@@ -341,29 +329,6 @@ func launcherArgs(launcher string) []string {
 		"-DCMAKE_C_COMPILER_LAUNCHER=" + path,
 		"-DCMAKE_CXX_COMPILER_LAUNCHER=" + path,
 	}
-}
-
-// lockBuildDir takes an exclusive flock on <dir>/.cmk-lock, creating the
-// dir if this is its first configure. The store has its own entry locks
-// (deps.go); this one only covers the build tree.
-func lockBuildDir(dir string) (*os.File, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, err
-	}
-	f, err := os.OpenFile(filepath.Join(dir, ".cmk-lock"), os.O_CREATE|os.O_RDWR, 0o644)
-	if err != nil {
-		return nil, err
-	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		f.Close()
-		return nil, fmt.Errorf("locking build dir %s: %w", dir, err)
-	}
-	return f, nil
-}
-
-func unlockBuildDir(f *os.File) {
-	syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-	f.Close()
 }
 
 const injectionStampFile = ".cmk-injection"
@@ -462,10 +427,5 @@ func resolvePreset(cfg *Config, name string) (*PresetCfg, error) {
 }
 
 func presetNames(presets map[string]*PresetCfg) []string {
-	names := make([]string, 0, len(presets))
-	for n := range presets {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	return names
+	return slices.Sorted(maps.Keys(presets))
 }

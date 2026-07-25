@@ -3,10 +3,12 @@ package cmk
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -183,12 +185,7 @@ func (p *Project) collectBuildDirs(dir string, depth, maxDepth int) {
 }
 
 func (p *Project) listBuildDirs() []string {
-	keys := make([]string, 0, len(p.BuildDirs))
-	for k := range p.BuildDirs {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
+	return slices.Sorted(maps.Keys(p.BuildDirs))
 }
 
 // resolveBuildDir follows the cascade: explicit name, PWD inside a build

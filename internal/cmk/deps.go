@@ -5,15 +5,16 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -80,55 +81,6 @@ func downloadsDir() string {
 		return ".cmk-downloads"
 	}
 	return filepath.Join(home, ".cache", "cmk", "downloads")
-}
-
-// lockStoreEntry serializes concurrent builds of the same entry (two
-// worktrees syncing at once build it exactly once). The lock file lives
-// outside the entry so wiping a half-built entry can't drop the lock.
-func lockStoreEntry(name, stamp string) (*os.File, error) {
-	dir := filepath.Join(storeDir(), ".locks")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, err
-	}
-	if len(stamp) > 16 {
-		stamp = stamp[:16]
-	}
-	f, err := os.OpenFile(filepath.Join(dir, name+"-"+stamp+".lock"), os.O_CREATE|os.O_RDWR, 0o644)
-	if err != nil {
-		return nil, err
-	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		f.Close()
-		return nil, fmt.Errorf("locking store entry %s: %w", name, err)
-	}
-	return f, nil
-}
-
-func unlockStoreEntry(f *os.File) {
-	syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-	f.Close()
-}
-
-// tryLockStoreEntry is the non-blocking form of lockStoreEntry: ok is
-// false (with no error) when another process holds the lock, so callers
-// like `cmk clean --prune` can skip entries a concurrent sync is building.
-func tryLockStoreEntry(name, stamp string) (f *os.File, ok bool, err error) {
-	dir := filepath.Join(storeDir(), ".locks")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, false, err
-	}
-	if len(stamp) > 16 {
-		stamp = stamp[:16]
-	}
-	f, err = os.OpenFile(filepath.Join(dir, name+"-"+stamp+".lock"), os.O_CREATE|os.O_RDWR, 0o644)
-	if err != nil {
-		return nil, false, err
-	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		f.Close()
-		return nil, false, nil
-	}
-	return f, true, nil
 }
 
 // topoOrder returns want (or all deps when want is empty) plus their
@@ -272,12 +224,7 @@ func depStamp(root, name string, d *DepCfg, tcID string, ld *LockDep, needStamps
 	w("cmk-stamp-v3", name, tcID, sourceID(d, ld))
 	h.Write(script)
 	h.Write([]byte{0})
-	envKeys := make([]string, 0, len(d.Env))
-	for k := range d.Env {
-		envKeys = append(envKeys, k)
-	}
-	sort.Strings(envKeys)
-	for _, k := range envKeys {
+	for _, k := range slices.Sorted(maps.Keys(d.Env)) {
 		w("env", k, d.Env[k]) // raw (pre-expansion) values: stable across checkouts
 	}
 	for _, group := range []struct {
@@ -365,45 +312,60 @@ func ensureLockEntries(cfg *Config, lk *Lock, names []string) (bool, error) {
 	return dirty, nil
 }
 
-// fetchTarball downloads url into the downloads dir (named by its
-// sha256), hashing on the wire. An existing verified file is reused.
+// fetchTarball downloads url into the downloads dir, verifying it against
+// the expected sha256. An already-downloaded file is reused.
 func fetchTarball(url, sha string) (string, error) {
+	path, _, err := download(url, sha)
+	return path, err
+}
+
+// download fetches url into the downloads dir, where files are named by
+// their sha256, hashing on the wire. A non-empty want is verified and a
+// mismatch is an error; an empty want means "whatever it hashes to"
+// (`cmk add` computing the sha256 of a new source). An already-present
+// file with the wanted digest is reused without a request.
+func download(url, want string) (path, sha string, err error) {
 	dir := downloadsDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
+		return "", "", err
 	}
-	dest := filepath.Join(dir, sha)
-	if _, err := os.Stat(dest); err == nil {
-		return dest, nil
+	if want != "" {
+		if dest := filepath.Join(dir, want); fileExists(dest) {
+			return dest, want, nil
+		}
 	}
 	fmt.Fprintf(os.Stderr, "cmk: downloading %s\n", url)
 	client := &http.Client{Timeout: 30 * time.Minute}
 	resp, err := client.Get(url)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("GET %s: %s", url, resp.Status)
+		return "", "", fmt.Errorf("GET %s: %s", url, resp.Status)
 	}
 	tmp, err := os.CreateTemp(dir, ".partial-*")
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer os.Remove(tmp.Name())
-	h := sha256.New()
-	if _, err := io.Copy(io.MultiWriter(tmp, h), resp.Body); err != nil {
+	digest := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(tmp, digest), resp.Body); err != nil {
 		tmp.Close()
-		return "", err
+		return "", "", err
 	}
 	if err := tmp.Close(); err != nil {
-		return "", err
+		return "", "", err
 	}
-	got := hex.EncodeToString(h.Sum(nil))
-	if got != sha {
-		return "", fmt.Errorf("sha256 mismatch for %s\n  expected %s\n  got      %s", url, sha, got)
+	sha = hex.EncodeToString(digest.Sum(nil))
+	if want != "" && sha != want {
+		return "", "", fmt.Errorf("sha256 mismatch for %s\n  expected %s\n  got      %s", url, want, sha)
 	}
-	return dest, os.Rename(tmp.Name(), dest)
+	dest := filepath.Join(dir, sha)
+	if fileExists(dest) {
+		return dest, sha, nil // raced with another cmk, or already had it
+	}
+	return dest, sha, os.Rename(tmp.Name(), dest)
 }
 
 // prepareSrc materializes the dep source under <entry>/src, applies the
@@ -557,7 +519,7 @@ func buildDep(p *Project, name string, tc *Toolchain, needStamps map[string]stri
 	if err != nil {
 		return false, lockDirty, err
 	}
-	defer unlockStoreEntry(flk)
+	defer unlockFile(flk)
 	if !force {
 		// a concurrent cmk (another worktree) may have built it while
 		// we waited for the lock
@@ -599,12 +561,7 @@ func buildDep(p *Project, name string, tc *Toolchain, needStamps map[string]stri
 		env = append(env, "CMK_SRC="+src)
 	}
 	vars := p.vars()
-	envKeys := make([]string, 0, len(d.Env))
-	for k := range d.Env {
-		envKeys = append(envKeys, k)
-	}
-	sort.Strings(envKeys)
-	for _, k := range envKeys {
+	for _, k := range slices.Sorted(maps.Keys(d.Env)) {
 		env = append(env, k+"="+expandVars(d.Env[k], vars))
 	}
 	for _, n := range d.Needs {
@@ -694,7 +651,10 @@ func syncDeps(p *Project, tc *Toolchain, want []string, force bool) (lockDirty b
 	needStamps := map[string]string{}
 	built := 0
 	for _, name := range order {
-		did, dirty, err := buildDep(p, name, tc, needStamps, force && contains(want, name))
+		// An empty want means "sync everything", so --force applies to
+		// every dep in the order; a named want forces only what was named.
+		forced := force && (len(want) == 0 || slices.Contains(want, name))
+		did, dirty, err := buildDep(p, name, tc, needStamps, forced)
 		lockDirty = lockDirty || dirty
 		if err != nil {
 			return lockDirty, err
@@ -707,18 +667,6 @@ func syncDeps(p *Project, tc *Toolchain, want []string, force bool) (lockDirty b
 		fmt.Fprintf(os.Stderr, "cmk: deps up to date (%d)\n", len(order))
 	}
 	return lockDirty, nil
-}
-
-func contains(s []string, v string) bool {
-	if len(s) == 0 {
-		return true // empty want means "all requested"
-	}
-	for _, x := range s {
-		if x == v {
-			return true
-		}
-	}
-	return false
 }
 
 // depExports returns the cmake args contributed by a built dep: the
@@ -748,12 +696,7 @@ func depExports(p *Project, name string, d *DepCfg) ([]string, error) {
 }
 
 func sortedDepNames(deps map[string]*DepCfg) []string {
-	names := make([]string, 0, len(deps))
-	for name := range deps {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
+	return slices.Sorted(maps.Keys(deps))
 }
 
 func allDepExports(p *Project) ([]string, error) {

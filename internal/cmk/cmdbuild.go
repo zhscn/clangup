@@ -62,10 +62,7 @@ func (t *buildTarget) build(jobs int, targets []string, cleanFirst, verbose bool
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command("cmake", cmakeBuildArgs(t.dir, t.config, jobs, targets, cleanFirst, verbose, passthrough)...)
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	cmd.Env = env
-	return cmd.Run()
+	return runStreaming(env, "cmake", cmakeBuildArgs(t.dir, t.config, jobs, targets, cleanFirst, verbose, passthrough)...)
 }
 
 // cmdBuild builds target(s), or everything when no target is selected, in the
@@ -251,11 +248,7 @@ func cmdTU(names []string, options variantOptions) error {
 		ninjaArgs = append(ninjaArgs, "-v")
 	}
 	ninjaArgs = append(ninjaArgs, selected...)
-	cmd := exec.Command("ninja", ninjaArgs...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Env = env
-	return cmd.Run()
+	return runStreaming(env, "ninja", ninjaArgs...)
 }
 
 func cmakeBuildArgs(dir, cfgName string, jobs int, targets []string, cleanFirst, verbose bool, rest []string) []string {

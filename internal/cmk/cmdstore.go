@@ -95,10 +95,10 @@ func pruneStore(sd string, entries []os.DirEntry, referenced map[string]bool) er
 		path := filepath.Join(sd, e.Name())
 		size := dirSize(path)
 		if err := os.RemoveAll(path); err != nil {
-			unlockStoreEntry(lock)
+			unlockFile(lock)
 			return err
 		}
-		unlockStoreEntry(lock)
+		unlockFile(lock)
 		freed += size
 		removed++
 		fmt.Printf("removed %s\n", path)

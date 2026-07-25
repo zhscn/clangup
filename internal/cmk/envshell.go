@@ -3,10 +3,11 @@ package cmk
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -70,12 +71,7 @@ func composeEnv(p *Project, tc *Toolchain) []envEntry {
 	}
 
 	vars := p.vars()
-	keys := make([]string, 0, len(p.Cfg.Env))
-	for k := range p.Cfg.Env {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
+	for _, k := range slices.Sorted(maps.Keys(p.Cfg.Env)) {
 		entries = append(entries, envEntry{k, expandVars(p.Cfg.Env[k], vars), false})
 	}
 	return entries

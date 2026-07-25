@@ -2,8 +2,6 @@ package cmk
 
 import (
 	"fmt"
-	"os"
-	"os/exec"
 )
 
 // cmdTest runs ctest in the resolved build dir. Positional arguments become
@@ -37,9 +35,5 @@ func cmdTest(patterns []string, options testOptions) error {
 		ctestArgs = append(ctestArgs, "--verbose")
 	}
 	ctestArgs = append(ctestArgs, options.CTestArgs...)
-	cmd := exec.Command("ctest", ctestArgs...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Env = tree.p.commandEnv()
-	return cmd.Run()
+	return runStreaming(tree.p.commandEnv(), "ctest", ctestArgs...)
 }
