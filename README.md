@@ -188,6 +188,9 @@ cmk build -p release
 cmk update toolchain
 cmk sync
 
+cmk dev zlib ~/code/zlib
+cmk dev --drop zlib
+
 cmk fmt --staged
 cmk lint --commit HEAD
 cmk lint --branch
@@ -195,6 +198,15 @@ cmk lint --branch=origin/release
 cmk lint -p minimal -c Release src/file.cc
 cmk lint src/file.cc --fix
 ```
+
+`cmk dev <dep> <path>` redirects a dependency to a local checkout — for
+iterating on a fork without touching `cmk.yaml` or `cmk.lock`. The dep
+rebuilds incrementally from the checkout on every build or sync (its work
+tree survives, and unchanged trees are skipped via a git-aware hash);
+dependents rebuild only when its install tree actually changes. State
+lives in `cmk.dev.yaml` (machine-local, add it to `.gitignore`);
+`cmk dev --drop` restores the pinned world, and `--locked` refuses to
+build while overrides are active.
 
 `cmk lint --commit <ref>` selects added and modified C/C++ files from one
 commit. `cmk lint --branch[=<ref>]` selects files changed between `HEAD` and the

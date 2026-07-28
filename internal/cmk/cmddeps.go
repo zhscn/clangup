@@ -53,6 +53,10 @@ func cmdUpdate(names []string) error {
 		if _, ok := p.Cfg.Deps[n]; !ok {
 			return fmt.Errorf("unknown dep %q", n)
 		}
+		if path, ok := p.devPath(n); ok {
+			return fmt.Errorf("%s has a dev override (-> %s); drop it first with `cmk dev --drop %s`",
+				n, path, n)
+		}
 		depNames = append(depNames, n)
 	}
 
@@ -82,6 +86,12 @@ func cmdUpdate(names []string) error {
 	targets := depNames
 	if all {
 		for n := range p.Cfg.Deps {
+			// An overridden dep builds from its checkout; keep its pin so
+			// dropping the override falls back to it.
+			if _, ok := p.devPath(n); ok {
+				fmt.Fprintf(os.Stderr, "cmk: skipping %s (dev override active)\n", n)
+				continue
+			}
 			targets = append(targets, n)
 		}
 	}
@@ -92,7 +102,7 @@ func cmdUpdate(names []string) error {
 	if err != nil {
 		return err
 	}
-	depsDirty, err := ensureLockEntries(p.Cfg, lk, order)
+	depsDirty, err := ensureLockEntries(p.Cfg, lk, order, p.Dev.Deps)
 	if err != nil {
 		return err
 	}

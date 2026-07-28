@@ -61,6 +61,11 @@ func (t *buildTree) ensureConfigured(policy configurePolicy) error {
 		return nil
 	}
 	if policy == configureLocked {
+		// --locked promises the committed pins; builds against local
+		// checkouts are exactly what it exists to reject.
+		if names := p.devOverrideNames(); len(names) > 0 {
+			return fmt.Errorf("--locked: dev overrides active for %s; drop them with `cmk dev --drop`", strings.Join(names, ", "))
+		}
 		// Bypass the memoized save: a lock pin that would change is
 		// exactly what --locked exists to catch.
 		tc, dirty, err := resolveToolchain(p.toolchainSelector(), p.Lock)
@@ -79,6 +84,22 @@ func (t *buildTree) ensureConfigured(policy configurePolicy) error {
 	tc, err := p.toolchain()
 	if err != nil {
 		return err
+	}
+	// Keep dev overrides in step with their checkouts before judging
+	// staleness: an edited fork must land in its (path-stable) dev entry
+	// first — usually with no reconfigure at all — and a dependent that
+	// rebuilt into a new store entry must be visible to the injection
+	// comparison below.
+	if p.hasDevOverrides() {
+		depsDirty, err := syncDeps(p, tc, p.devAffectedNames(), false)
+		if depsDirty {
+			if saveErr := saveLock(p.Root, p.Lock); saveErr != nil && err == nil {
+				err = saveErr
+			}
+		}
+		if err != nil {
+			return err
+		}
 	}
 	reason := t.reconfigureReason(tc)
 	if reason == "" {

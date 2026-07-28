@@ -114,10 +114,10 @@ func newRootCommand(version string) *cobra.Command {
 	root.CompletionOptions.DisableDefaultCmd = true
 	root.AddCommand(
 		newNewCommand(), newInitCommand(), newSyncCommand(), newUpdateCommand(),
-		newAddCommand(), newConfigCommand(), newBuildCommand(), newRunCommand(),
-		newTestCommand(), newInstallCommand(), newTUCommand(), newRefreshCommand(),
-		newFmtCommand(), newLintCommand(), newEnvCommand(), newShellCommand(),
-		newCleanCommand(), newDoctorCommand(), newVersionCommand(version),
+		newAddCommand(), newDevCommand(), newConfigCommand(), newBuildCommand(),
+		newRunCommand(), newTestCommand(), newInstallCommand(), newTUCommand(),
+		newRefreshCommand(), newFmtCommand(), newLintCommand(), newEnvCommand(),
+		newShellCommand(), newCleanCommand(), newDoctorCommand(), newVersionCommand(version),
 	)
 	return root
 }

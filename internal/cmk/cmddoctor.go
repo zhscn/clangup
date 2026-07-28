@@ -213,8 +213,15 @@ func doctorLauncher(c *doctorChecker, p *Project, launcher string) {
 
 func doctorDeps(c *doctorChecker, p *Project) {
 	for _, name := range sortedDepNames(p.Cfg.Deps) {
-		ld := p.Lock.Deps[name]
-		stamp := ld.stampFor(runtime.GOOS, runtime.GOARCH)
+		if path, ok := p.devPath(name); ok {
+			if loadDevMarker(devEntryDir(p.Root, name, path)) != nil {
+				c.warn("%s dev override -> %s (drop with `cmk dev --drop %s`)", name, path, name)
+			} else {
+				c.warn("%s dev override -> %s (not built; run cmk sync)", name, path)
+			}
+			continue
+		}
+		stamp := p.depStampFor(name)
 		if stamp == "" {
 			c.warn("%s not synced (run cmk sync)", name)
 			continue

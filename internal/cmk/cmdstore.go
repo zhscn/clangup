@@ -51,7 +51,7 @@ func cmdClean(all, prune bool) error {
 
 	listed := 0
 	for _, e := range entries {
-		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") || e.Name() == "dev" {
 			continue
 		}
 		mark := " "
@@ -61,22 +61,34 @@ func cmdClean(all, prune bool) error {
 		fmt.Printf("%s %s\n", mark, filepath.Join(sd, e.Name()))
 		listed++
 	}
+	if devEntries, err := os.ReadDir(filepath.Join(sd, "dev")); err == nil {
+		for _, e := range devEntries {
+			if !e.IsDir() {
+				continue
+			}
+			fmt.Printf("d %s\n", filepath.Join(sd, "dev", e.Name()))
+			listed++
+		}
+	}
 	if listed == 0 {
 		fmt.Fprintln(os.Stderr, "cmk: store is empty")
 	} else {
 		fmt.Fprintf(os.Stderr, "cmk: * = referenced by this project's cmk.lock; other projects may use the rest\n"+
+			"cmk: d = mutable dev-override entry (removed by `cmk dev --drop`, never pruned)\n"+
 			"cmk: prune the rest with `cmk clean --prune`, or wipe everything with `cmk clean --all` (rebuilt on next sync)\n")
 	}
 	return nil
 }
 
 // pruneStore removes store entries not in referenced, skipping any an
-// in-flight build holds locked.
+// in-flight build holds locked. Dev entries (store/dev) are never
+// pruned: they are another checkout's active mutable state, removed
+// explicitly by `cmk dev --drop`.
 func pruneStore(sd string, entries []os.DirEntry, referenced map[string]bool) error {
 	var removed, skipped int
 	var freed int64
 	for _, e := range entries {
-		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") || referenced[e.Name()] {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") || e.Name() == "dev" || referenced[e.Name()] {
 			continue
 		}
 		name, stamp, ok := splitEntryName(e.Name())

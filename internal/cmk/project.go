@@ -18,11 +18,103 @@ type Project struct {
 	// Lock is the loaded cmk.lock; dep store paths resolve through its
 	// pinned stamps.
 	Lock *Lock
+	// Dev is the machine-local dev override state (cmk.dev.yaml): deps
+	// redirected to local checkouts, plus the quarantined stamps of
+	// everything downstream of them. Never nil.
+	Dev *DevState
 	// BuildDirs maps root-relative paths to absolute paths of
 	// directories containing a CMakeCache.txt.
 	BuildDirs map[string]string
+	// devAffected marks deps whose stamp depends on a dev override: the
+	// overridden deps themselves and their transitive dependents. Their
+	// stamps live in Dev, not Lock.
+	devAffected map[string]bool
 	// tc caches the resolved toolchain (see Project.toolchain).
 	tc *Toolchain
+}
+
+// devOverrides is the nil-safe view of the override map (tests build
+// Projects by hand without a DevState).
+func (p *Project) devOverrides() map[string]*DevDep {
+	if p.Dev == nil {
+		return nil
+	}
+	return p.Dev.Deps
+}
+
+func (p *Project) devPath(name string) (string, bool) {
+	if d := p.devOverrides()[name]; d != nil {
+		return d.Path, true
+	}
+	return "", false
+}
+
+func (p *Project) hasDevOverrides() bool { return len(p.devOverrides()) > 0 }
+
+func (p *Project) devOverrideNames() []string {
+	return slices.Sorted(maps.Keys(p.devOverrides()))
+}
+
+// devAffectedNames is the sync subset that keeps dev overrides fresh: the
+// overridden deps and everything downstream of them.
+func (p *Project) devAffectedNames() []string {
+	return slices.Sorted(maps.Keys(p.devAffected))
+}
+
+func (p *Project) computeDevAffected() {
+	p.devAffected = map[string]bool{}
+	overrides := p.devOverrides()
+	if len(overrides) == 0 {
+		return
+	}
+	for name := range p.Cfg.Deps {
+		if _, ok := overrides[name]; ok {
+			p.devAffected[name] = true
+			continue
+		}
+		for _, n := range needsClosure(p.Cfg.Deps, name) {
+			if _, ok := overrides[n]; ok {
+				p.devAffected[name] = true
+				break
+			}
+		}
+	}
+}
+
+// depStampFor is the single stamp lookup: dev-affected deps read the
+// quarantined stamp in cmk.dev.yaml, everything else the pin in cmk.lock.
+func (p *Project) depStampFor(name string) string {
+	if p.devAffected[name] {
+		return p.Dev.stampFor(hostPlatform(runtime.GOOS, runtime.GOARCH), name)
+	}
+	return p.Lock.Deps[name].stampFor(runtime.GOOS, runtime.GOARCH)
+}
+
+// setDepStamp records a freshly computed stamp, reporting whether
+// cmk.lock changed. A dev-affected stamp goes to the quarantine instead:
+// the committed lock must keep describing the pinned world.
+func (p *Project) setDepStamp(name, stamp string) (lockChanged bool) {
+	if p.devAffected[name] {
+		p.Dev.setStampFor(hostPlatform(runtime.GOOS, runtime.GOARCH), name, stamp)
+		return false
+	}
+	ld := p.Lock.Deps[name]
+	if ld == nil {
+		ld = &LockDep{}
+		p.Lock.Deps[name] = ld
+	}
+	if ld.stampFor(runtime.GOOS, runtime.GOARCH) != stamp {
+		ld.setStampFor(runtime.GOOS, runtime.GOARCH, stamp)
+		return true
+	}
+	return false
+}
+
+func (p *Project) saveDevState() error {
+	if p.Dev == nil || !p.Dev.dirty {
+		return nil
+	}
+	return saveDevFile(p.Root, p.Dev)
 }
 
 // toolchain resolves the pinned toolchain once per invocation, persisting
@@ -83,7 +175,12 @@ func openProject() (*Project, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := &Project{Root: root, Cfg: cfg, Lock: lk, BuildDirs: map[string]string{}}
+	dev, err := loadDevState(root, cfg)
+	if err != nil {
+		return nil, err
+	}
+	p := &Project{Root: root, Cfg: cfg, Lock: lk, Dev: dev, BuildDirs: map[string]string{}}
+	p.computeDevAffected()
 	p.scanBuildDirs()
 	p.registerManagedBuildDirs()
 	return p, nil

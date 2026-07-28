@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -52,10 +51,18 @@ func entryDir(name, stamp string) string {
 const completeMarker = ".cmk-complete"
 
 // depEntry resolves a dep to its store entry via the stamp pinned in
-// cmk.lock, so build/run/env never have to recompute stamps.
+// cmk.lock (or quarantined in cmk.dev.yaml for dev-affected deps), so
+// build/run/env never have to recompute stamps. A dev-overridden dep
+// resolves to its mutable dev entry, whose path is stable across edits.
 func (p *Project) depEntry(name string) (string, error) {
-	ld := p.Lock.Deps[name]
-	stamp := ld.stampFor(runtime.GOOS, runtime.GOARCH)
+	if path, ok := p.devPath(name); ok {
+		entry := devEntryDir(p.Root, name, path)
+		if loadDevMarker(entry) == nil {
+			return "", fmt.Errorf("dep %s (dev override) is not built (run `cmk sync`)", name)
+		}
+		return entry, nil
+	}
+	stamp := p.depStampFor(name)
 	if stamp == "" {
 		return "", fmt.Errorf("dep %s is not synced (run `cmk sync`)", name)
 	}
@@ -207,9 +214,12 @@ func hashFiles(root string, rels []string) (string, error) {
 
 // depStamp hashes everything that should trigger a rebuild: the recipe
 // script, the source identity, the toolchain, the declared env knobs,
-// patch/extra-input contents, and the stamps of all needs (so upstream
-// rebuilds cascade).
-func depStamp(root, name string, d *DepCfg, tcID string, ld *LockDep, needStamps map[string]string, patches, extras []string) (string, error) {
+// patch/extra-input contents, and the OUTPUT hash of every need. Keying
+// on outputs rather than the needs' own stamps is the early cutoff: an
+// upstream rebuild whose install tree comes out byte-identical (a recipe
+// comment, a rebased fork with the same result) stops cascading right
+// there.
+func depStamp(root, name string, d *DepCfg, tcID string, ld *LockDep, needOut map[string]string, patches, extras []string) (string, error) {
 	script, err := os.ReadFile(filepath.Join(root, d.Script))
 	if err != nil {
 		return "", fmt.Errorf("dependencies.%s: %w", name, err)
@@ -244,7 +254,7 @@ func depStamp(root, name string, d *DepCfg, tcID string, ld *LockDep, needStamps
 	needs := append([]string(nil), d.Needs...)
 	sort.Strings(needs)
 	for _, n := range needs {
-		w(n, needStamps[n])
+		w("need-out", n, needOut[n])
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
@@ -279,8 +289,10 @@ func resolveGitCommit(url, ref string) (string, error) {
 
 // ensureLockEntries pins every floating git dep and drops entries for
 // dependencies no longer in cmk.yaml, returning whether the lock changed.
-// Stamps are filled in later, during the sync itself.
-func ensureLockEntries(cfg *Config, lk *Lock, names []string) (bool, error) {
+// Stamps are filled in later, during the sync itself. A dev-overridden
+// dep builds from its local checkout, so its pin is left exactly as it
+// was — dropping the override falls back to it.
+func ensureLockEntries(cfg *Config, lk *Lock, names []string, overridden map[string]*DevDep) (bool, error) {
 	dirty := false
 	for name := range lk.Deps {
 		if _, ok := cfg.Deps[name]; !ok {
@@ -291,6 +303,9 @@ func ensureLockEntries(cfg *Config, lk *Lock, names []string) (bool, error) {
 	for _, name := range names {
 		d := cfg.Deps[name]
 		if d.Source == nil || d.Source.Git == "" {
+			continue
+		}
+		if _, ok := overridden[name]; ok {
 			continue
 		}
 		ld := lk.Deps[name]
@@ -480,76 +495,37 @@ func gitCheckout(dir, url, ref, commit string) error {
 	return nil
 }
 
-// buildDep brings one dep's store entry into existence, returning
-// whether work was done and whether the lock changed. needStamps must
-// already contain entries for all needs. Entries are immutable once
-// complete: a stamp change lands in a NEW entry, so build dirs that
-// reference the old one stay valid.
-func buildDep(p *Project, name string, tc *Toolchain, needStamps map[string]string, force bool) (built, lockDirty bool, err error) {
-	d := p.Cfg.Deps[name]
-	lk := p.Lock
-	patches, extras, err := depInputs(p.Root, name, d)
-	if err != nil {
-		return false, false, err
-	}
-	stamp, err := depStamp(p.Root, name, d, tc.ID, lk.Deps[name], needStamps, patches, extras)
-	if err != nil {
-		return false, false, err
-	}
-	needStamps[name] = stamp
-	ld := lk.Deps[name]
-	if ld == nil {
-		ld = &LockDep{}
-		lk.Deps[name] = ld
-	}
-	if ld.stampFor(runtime.GOOS, runtime.GOARCH) != stamp {
-		ld.setStampFor(runtime.GOOS, runtime.GOARCH, stamp)
-		lockDirty = true
-	}
+// outHashFile records a store entry's output identity — the hash of its
+// install tree — computed once after the recipe succeeds. Dependents key
+// their stamps on it (see depStamp).
+const outHashFile = ".cmk-out"
 
-	entry := entryDir(name, stamp)
-	marker := filepath.Join(entry, completeMarker)
-	if !force {
-		if _, err := os.Stat(marker); err == nil {
-			return false, lockDirty, nil
+// entryOutHash returns a built entry's output hash, computing and
+// caching it for entries that predate the file.
+func entryOutHash(entry string) (string, error) {
+	path := filepath.Join(entry, outHashFile)
+	if data, err := os.ReadFile(path); err == nil {
+		if out := strings.TrimSpace(string(data)); out != "" {
+			return out, nil
 		}
 	}
+	return writeEntryOutHash(entry)
+}
 
-	flk, err := lockStoreEntry(name, stamp)
+func writeEntryOutHash(entry string) (string, error) {
+	out, err := hashTree(filepath.Join(entry, "prefix"), false)
 	if err != nil {
-		return false, lockDirty, err
+		return "", err
 	}
-	defer unlockFile(flk)
-	if !force {
-		// a concurrent cmk (another worktree) may have built it while
-		// we waited for the lock
-		if _, err := os.Stat(marker); err == nil {
-			fmt.Fprintf(os.Stderr, "cmk: dep %s was built by a concurrent cmk\n", name)
-			return false, lockDirty, nil
-		}
+	if err := os.WriteFile(filepath.Join(entry, outHashFile), []byte(out+"\n"), 0o644); err != nil {
+		return "", err
 	}
+	return out, nil
+}
 
-	fmt.Fprintf(os.Stderr, "cmk: building dep %s\n", name)
-	if err := os.RemoveAll(entry); err != nil {
-		return false, lockDirty, err
-	}
-	prefix := filepath.Join(entry, "prefix")
-	work := filepath.Join(entry, "work")
-	for _, dir := range []string{prefix, work} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return false, lockDirty, err
-		}
-	}
-	src, err := prepareSrc(entry, p.Root, d, lk.Deps[name], patches)
-	if err != nil {
-		return false, lockDirty, err
-	}
-
-	script := filepath.Join(p.Root, d.Script)
-	cmd := exec.Command("bash", script)
-	cmd.Dir = work
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+// recipeEnv is the environment a dep recipe runs in, shared by pinned
+// and dev builds so a recipe behaves identically in both.
+func recipeEnv(p *Project, name string, d *DepCfg, tc *Toolchain, prefix, work, src string) ([]string, error) {
 	env := append(recipeBaseEnv(), tc.scriptEnv()...)
 	env = append(env,
 		"CMK_PREFIX="+prefix,
@@ -567,22 +543,98 @@ func buildDep(p *Project, name string, tc *Toolchain, needStamps map[string]stri
 	for _, n := range d.Needs {
 		pfx, err := p.depPrefix(n)
 		if err != nil {
-			return false, lockDirty, fmt.Errorf("dep %s: %w", name, err)
+			return nil, fmt.Errorf("dep %s: %w", name, err)
 		}
 		env = append(env, "CMK_DEP_"+envName(n)+"_PREFIX="+pfx)
 	}
-	env = append(env, needsSearchEnv(p, name)...)
-	cmd.Env = env
+	return append(env, needsSearchEnv(p, name)...), nil
+}
 
+// runRecipe executes a dep's recipe script in work with env.
+func runRecipe(p *Project, name string, d *DepCfg, work string, env []string) error {
+	cmd := exec.Command("bash", filepath.Join(p.Root, d.Script))
+	cmd.Dir = work
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = env
 	start := time.Now()
 	if err := cmd.Run(); err != nil {
-		return false, lockDirty, fmt.Errorf("dep %s: %s failed: %w", name, d.Script, err)
-	}
-	if err := os.WriteFile(marker, []byte(stamp+"\n"), 0o644); err != nil {
-		return false, lockDirty, err
+		return fmt.Errorf("dep %s: %s failed: %w", name, d.Script, err)
 	}
 	fmt.Fprintf(os.Stderr, "cmk: dep %s done in %s\n", name, time.Since(start).Round(time.Second))
-	return true, lockDirty, nil
+	return nil
+}
+
+// buildDep brings one dep's store entry into existence, returning the
+// entry path, whether work was done and whether the lock changed.
+// needOut must already contain output hashes for all needs. Entries are
+// immutable once complete: a stamp change lands in a NEW entry, so build
+// dirs that reference the old one stay valid.
+func buildDep(p *Project, name string, tc *Toolchain, needOut map[string]string, force bool) (entry string, built, lockDirty bool, err error) {
+	d := p.Cfg.Deps[name]
+	lk := p.Lock
+	patches, extras, err := depInputs(p.Root, name, d)
+	if err != nil {
+		return "", false, false, err
+	}
+	stamp, err := depStamp(p.Root, name, d, tc.ID, lk.Deps[name], needOut, patches, extras)
+	if err != nil {
+		return "", false, false, err
+	}
+	lockDirty = p.setDepStamp(name, stamp)
+
+	entry = entryDir(name, stamp)
+	marker := filepath.Join(entry, completeMarker)
+	if !force {
+		if _, err := os.Stat(marker); err == nil {
+			return entry, false, lockDirty, nil
+		}
+	}
+
+	flk, err := lockStoreEntry(name, stamp)
+	if err != nil {
+		return "", false, lockDirty, err
+	}
+	defer unlockFile(flk)
+	if !force {
+		// a concurrent cmk (another worktree) may have built it while
+		// we waited for the lock
+		if _, err := os.Stat(marker); err == nil {
+			fmt.Fprintf(os.Stderr, "cmk: dep %s was built by a concurrent cmk\n", name)
+			return entry, false, lockDirty, nil
+		}
+	}
+
+	fmt.Fprintf(os.Stderr, "cmk: building dep %s\n", name)
+	if err := os.RemoveAll(entry); err != nil {
+		return "", false, lockDirty, err
+	}
+	prefix := filepath.Join(entry, "prefix")
+	work := filepath.Join(entry, "work")
+	for _, dir := range []string{prefix, work} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return "", false, lockDirty, err
+		}
+	}
+	src, err := prepareSrc(entry, p.Root, d, lk.Deps[name], patches)
+	if err != nil {
+		return "", false, lockDirty, err
+	}
+
+	env, err := recipeEnv(p, name, d, tc, prefix, work, src)
+	if err != nil {
+		return "", false, lockDirty, err
+	}
+	if err := runRecipe(p, name, d, work, env); err != nil {
+		return "", false, lockDirty, err
+	}
+	if _, err := writeEntryOutHash(entry); err != nil {
+		return "", false, lockDirty, err
+	}
+	if err := os.WriteFile(marker, []byte(stamp+"\n"), 0o644); err != nil {
+		return "", false, lockDirty, err
+	}
+	return entry, true, lockDirty, nil
 }
 
 // needsClosure returns the transitive needs of name (excluding name
@@ -638,27 +690,53 @@ func pkgconfigDirs(prefix string) []string {
 }
 
 // syncDeps brings the requested deps (default: all) up to date in the
-// store, pinning their stamps in cmk.lock.
+// store, pinning their stamps in cmk.lock — except dev-affected stamps,
+// which are quarantined in cmk.dev.yaml (saved here, since it is
+// machine-local state no caller needs to coordinate).
 func syncDeps(p *Project, tc *Toolchain, want []string, force bool) (lockDirty bool, err error) {
 	order, err := topoOrder(p.Cfg.Deps, want)
 	if err != nil {
 		return false, err
 	}
-	lockDirty, err = ensureLockEntries(p.Cfg, p.Lock, order)
+	if names := p.devOverrideNames(); len(names) > 0 {
+		var lines []string
+		for _, n := range names {
+			lines = append(lines, n+" -> "+p.devOverrides()[n].Path)
+		}
+		fmt.Fprintf(os.Stderr, "cmk: dev overrides active: %s\n", strings.Join(lines, ", "))
+	}
+	defer func() {
+		if saveErr := p.saveDevState(); saveErr != nil && err == nil {
+			err = saveErr
+		}
+	}()
+	lockDirty, err = ensureLockEntries(p.Cfg, p.Lock, order, p.devOverrides())
 	if err != nil {
 		return lockDirty, err
 	}
-	needStamps := map[string]string{}
+	needOut := map[string]string{}
 	built := 0
 	for _, name := range order {
 		// An empty want means "sync everything", so --force applies to
 		// every dep in the order; a named want forces only what was named.
 		forced := force && (len(want) == 0 || slices.Contains(want, name))
-		did, dirty, err := buildDep(p, name, tc, needStamps, forced)
-		lockDirty = lockDirty || dirty
+		var out string
+		var did bool
+		if path, ok := p.devPath(name); ok {
+			out, did, err = buildDevDep(p, name, path, tc, needOut, forced)
+		} else {
+			var entry string
+			var dirty bool
+			entry, did, dirty, err = buildDep(p, name, tc, needOut, forced)
+			lockDirty = lockDirty || dirty
+			if err == nil {
+				out, err = entryOutHash(entry)
+			}
+		}
 		if err != nil {
 			return lockDirty, err
 		}
+		needOut[name] = out
 		if did {
 			built++
 		}
@@ -666,6 +744,7 @@ func syncDeps(p *Project, tc *Toolchain, want []string, force bool) (lockDirty b
 	if built == 0 && len(order) > 0 {
 		fmt.Fprintf(os.Stderr, "cmk: deps up to date (%d)\n", len(order))
 	}
+	p.Dev.pruneStamps(p.devAffected)
 	return lockDirty, nil
 }
 
