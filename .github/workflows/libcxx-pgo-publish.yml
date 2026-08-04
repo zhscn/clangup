@@ -1,0 +1,65 @@
+name: libcxx-pgo publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      x86_bolt_run_id:
+        description: Run ID of the libcxx-pgo x86 BOLT workflow
+        required: true
+        type: string
+      aarch64_final_run_id:
+        description: Run ID of the libcxx-pgo aarch64 final workflow
+        required: true
+        type: string
+
+concurrency:
+  group: libcxx-pgo-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: libcxx-pgo-x86-target
+          path: out/targets/x86_64-unknown-linux-gnu
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.x86_bolt_run_id }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: libcxx-pgo-aarch64-target
+          path: out/targets/aarch64-unknown-linux-gnu
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.aarch64_final_run_id }}
+      - name: Select upstream commit
+        id: upstream
+        run: |
+          cmp -s out/targets/x86_64-unknown-linux-gnu/channel-plan.json out/targets/aarch64-unknown-linux-gnu/channel-plan.json
+          cmp -s out/targets/x86_64-unknown-linux-gnu/build-commit.txt out/targets/aarch64-unknown-linux-gnu/build-commit.txt
+          echo "commit=$(cat out/targets/x86_64-unknown-linux-gnu/build-commit.txt)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ steps.upstream.outputs.commit }}
+          clean: false
+      - name: Assemble release
+        run: python3 channels/build/assemble.py --targets out/targets --output out/release
+      - name: Publish release
+        env:
+          UPLOAD_ENDPOINT: ${{ vars.CLANGUP_UPLOAD_ENDPOINT }}
+        run: |
+          token="$(curl -fsSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=clangup-r2-uploader" | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+          python3 channels/build/publish.py --endpoint "$UPLOAD_ENDPOINT" --token "$token" --release out/release/release.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: libcxx-pgo-release
+          path: out/release/release.json
+          if-no-files-found: error
+          retention-days: 14

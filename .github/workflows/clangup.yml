@@ -6,7 +6,8 @@ on:
       - .github/workflows/clangup.yml
       - .github/workflows/default-channel.yml
       - .github/workflows/libcxx-channel.yml
-      - .github/workflows/libcxx-pgo-channel.yml
+      - .github/workflows/libcxx-pgo-*.yml
+      - .github/scripts/libcxx-pgo-*.sh
       - .github/workflows/clangup-release.yml
       - cmd/**
       - internal/**
@@ -20,7 +21,8 @@ on:
       - .github/workflows/clangup.yml
       - .github/workflows/default-channel.yml
       - .github/workflows/libcxx-channel.yml
-      - .github/workflows/libcxx-pgo-channel.yml
+      - .github/workflows/libcxx-pgo-*.yml
+      - .github/scripts/libcxx-pgo-*.sh
       - .github/workflows/clangup-release.yml
       - cmd/**
       - internal/**

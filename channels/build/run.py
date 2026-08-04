@@ -165,6 +165,8 @@ def prepare_work(
     resume: bool,
     jobs: int,
     link_jobs: int,
+    profile: Path | None,
+    prefix_archive: Path | None,
 ) -> tuple[Path, Path, str]:
     identity = {
         "schema": "clangup.build-input/v1",
@@ -179,6 +181,10 @@ def prepare_work(
         "bootstrap_identity": os.environ.get("CLANGUP_BOOTSTRAP_IDENTITY", "unknown"),
         "jobs": jobs,
         "link_jobs": link_jobs,
+        "profile_sha256": sha256_file(profile) if profile else None,
+        "prefix_archive_sha256": sha256_file(prefix_archive)
+        if prefix_archive
+        else None,
     }
     identity_path = work / "build-input.json"
     if resume and identity_path.is_file():
@@ -199,6 +205,47 @@ def prepare_work(
     prefix = work / "prefix"
     prefix.mkdir()
     source, digest = prepare_source(lock, archive, channel_root, work)
+    if profile:
+        if not profile.is_file() or not profile.stat().st_size:
+            fail(f"PGO profile input is missing or empty: {profile}")
+        pgo_dir = work / "pgo"
+        pgo_dir.mkdir()
+        shutil.copyfile(profile, pgo_dir / "clang.profdata")
+    if prefix_archive:
+        if not prefix_archive.is_file():
+            fail(f"final-prefix archive is missing: {prefix_archive}")
+        entries = subprocess.check_output(
+            ["tar", "--use-compress-program=unzstd", "-tf", str(prefix_archive)],
+            text=True,
+        ).splitlines()
+        allowed_files = {
+            "pgo",
+            "pgo/",
+            "pgo/clang.profdata",
+            "cmake-arguments.final.txt",
+            "cmake-arguments.compiler-rt.txt",
+        }
+        for entry in entries:
+            path = Path(entry)
+            if path.is_absolute() or ".." in path.parts or not (
+                entry == "prefix"
+                or entry.startswith("prefix/")
+                or entry in allowed_files
+            ):
+                fail(f"final-prefix archive contains an unsafe entry: {entry!r}")
+        run(
+            [
+                "tar",
+                "--use-compress-program=unzstd",
+                "--no-same-owner",
+                "-xf",
+                str(prefix_archive),
+                "-C",
+                str(work),
+            ]
+        )
+        if not prefix.is_dir() or not any(prefix.iterdir()):
+            fail("final-prefix archive does not contain a populated prefix")
     write_json(identity_path, identity)
     return source, prefix, digest
 
@@ -211,6 +258,8 @@ def build_toolchain(
     jobs: int,
     link_jobs: int,
     config_dir: Path,
+    start_at: str,
+    stop_after: str,
 ) -> tuple[Path, list[str]]:
     name = "build-linux.sh" if target["os"] == "linux" else "build-macos.sh"
     script = config_dir / name
@@ -235,6 +284,8 @@ def build_toolchain(
             "CLANGUP_OPTIMIZATION_BOLT": "1"
             if target.get("optimization", {}).get("bolt")
             else "0",
+            "CLANGUP_START_AT": start_at,
+            "CLANGUP_STOP_AFTER": stop_after,
         }
     )
     if target.get("min_macos_version"):
@@ -263,6 +314,13 @@ def load_optimization_record(work: Path, target: dict[str, Any]) -> dict[str, An
     return record
 
 
+def tool_from_prefix_or_build(prefix: Path, build: Path, name: str) -> Path:
+    for candidate in (prefix / "bin" / name, build / "bin" / name):
+        if candidate.is_file():
+            return candidate
+    fail(f"required tool is missing from payload and build tree: {name}")
+
+
 def validate_bolt_outputs(prefix: Path, build: Path, record: dict[str, Any]) -> list[Path]:
     bolt = record.get("bolt", {})
     if not bolt.get("enabled"):
@@ -270,9 +328,7 @@ def validate_bolt_outputs(prefix: Path, build: Path, record: dict[str, Any]) -> 
     inputs = bolt.get("inputs")
     if not isinstance(inputs, list) or not inputs:
         fail("BOLT optimization record has no inputs")
-    readelf = build / "bin" / "llvm-readelf"
-    if not readelf.is_file():
-        fail(f"BOLT validation tool is missing: {readelf}")
+    readelf = tool_from_prefix_or_build(prefix, build, "llvm-readelf")
     paths = []
     for relative in inputs:
         if (
@@ -293,13 +349,11 @@ def validate_bolt_outputs(prefix: Path, build: Path, record: dict[str, Any]) -> 
     return paths
 
 
-def drop_bolt_relocations(paths: list[Path], build: Path) -> None:
+def drop_bolt_relocations(prefix: Path, paths: list[Path], build: Path) -> None:
     if not paths:
         return
-    readelf = build / "bin" / "llvm-readelf"
-    objcopy = build / "bin" / "llvm-objcopy"
-    if not readelf.is_file() or not objcopy.is_file():
-        fail("BOLT relocation cleanup tools are missing")
+    readelf = tool_from_prefix_or_build(prefix, build, "llvm-readelf")
+    objcopy = tool_from_prefix_or_build(prefix, build, "llvm-objcopy")
     section_pattern = re.compile(
         r"^\s*\[\s*\d+\]\s+(\S+)\s+(?:REL|RELA)\s+([0-9a-fA-F]+)\s",
         re.MULTILINE,
@@ -390,8 +444,18 @@ def validate_macos_runtime_layout(prefix: Path) -> Path:
 
 def strip_and_sign(prefix: Path, build: Path, target_os: str) -> None:
     if target_os == "linux":
-        strip_tool = build / "bin" / "llvm-strip"
-        if not strip_tool.exists():
+        strip_tool = next(
+            (
+                candidate
+                for candidate in (
+                    prefix / "bin" / "llvm-strip",
+                    build / "bin" / "llvm-strip",
+                )
+                if candidate.is_file()
+            ),
+            None,
+        )
+        if strip_tool is None:
             return
         for path in prefix.rglob("*"):
             if not path.is_file() or path.is_symlink():
@@ -737,6 +801,19 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--source-date-epoch", type=int, default=0)
     parser.add_argument("--zstd-level", type=int, default=19)
     parser.add_argument("--zstd-threads", type=int, default=4)
+    stages = ("instrumented", "train", "merge", "final", "bolt")
+    parser.add_argument("--start-at", choices=stages, default="instrumented")
+    parser.add_argument("--stop-after", choices=stages, default="bolt")
+    parser.add_argument(
+        "--profile",
+        type=Path,
+        help="merged PGO profile from a preceding profile workflow",
+    )
+    parser.add_argument(
+        "--prefix-archive",
+        type=Path,
+        help="final-prefix stage archive from a preceding final workflow",
+    )
     parser.add_argument(
         "--resume",
         action="store_true",
@@ -749,6 +826,17 @@ def main() -> None:
     args = parse_arguments()
     if args.jobs < 1 or args.link_jobs < 1 or args.zstd_threads < 1:
         fail("job and thread counts must be positive")
+    stages = ("instrumented", "train", "merge", "final", "bolt")
+    if stages.index(args.start_at) > stages.index(args.stop_after):
+        fail("--start-at must not follow --stop-after")
+    if args.profile and args.start_at not in ("final",):
+        fail("--profile is only valid when starting at final")
+    if args.start_at == "final" and not args.profile:
+        fail("starting at final requires --profile")
+    if args.prefix_archive and args.start_at != "bolt":
+        fail("--prefix-archive is only valid when starting at bolt")
+    if args.start_at == "bolt" and not args.prefix_archive:
+        fail("starting at bolt requires --prefix-archive")
     lock = load_json(args.plan)
     target = select_target(lock, args.target)
     expected_os = (
@@ -767,6 +855,8 @@ def main() -> None:
     config_dir = args.config_dir.resolve()
     work = args.work.resolve()
     output = args.output.resolve()
+    profile = args.profile.resolve() if args.profile else None
+    prefix_archive = args.prefix_archive.resolve() if args.prefix_archive else None
     source, prefix, source_identity_digest = prepare_work(
         lock,
         archive,
@@ -777,6 +867,8 @@ def main() -> None:
         args.resume,
         args.jobs,
         args.link_jobs,
+        profile,
+        prefix_archive,
     )
     reset_directory(output)
     started = dt.datetime.now(dt.timezone.utc)
@@ -788,12 +880,16 @@ def main() -> None:
         args.jobs,
         args.link_jobs,
         config_dir,
+        args.start_at,
+        args.stop_after,
     )
+    if args.stop_after != "bolt":
+        return
     optimization_record = load_optimization_record(work, target)
     bolt_outputs = validate_bolt_outputs(prefix, build, optimization_record)
     rewrite_python_shebangs(prefix)
     strip_and_sign(prefix, build, target["os"])
-    drop_bolt_relocations(bolt_outputs, build)
+    drop_bolt_relocations(prefix, bolt_outputs, build)
     validate_bolt_outputs(prefix, build, optimization_record)
     write_integration_files(prefix, target)
     validate_payload(prefix)

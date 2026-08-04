@@ -1,0 +1,109 @@
+name: libcxx-pgo x86 BOLT
+
+on:
+  workflow_dispatch:
+    inputs:
+      final_run_id:
+        description: Run ID of the libcxx-pgo x86 final workflow
+        required: true
+        type: string
+
+concurrency:
+  group: libcxx-pgo-x86-bolt
+  cancel-in-progress: false
+
+env:
+  CHANNEL_ROOT: channels/libcxx-pgo/22.1.8
+  DOWNLOAD_ROOT: https://dl.clangup.dev
+  BUILDER_IMAGE: ghcr.io/zhscn/clangup-builder:1
+  BOOTSTRAP_CHANNEL: default
+  BOOTSTRAP_EXACT: 22.1.8-1
+
+jobs:
+  bolt:
+    runs-on: [self-hosted, linux, x64, clangup-bolt]
+    timeout-minutes: 720
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: libcxx-pgo-x86-final
+          path: input/final
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.final_run_id }}
+      - name: Select upstream commit
+        id: upstream
+        run: echo "commit=$(cat input/final/build-commit.txt)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ steps.upstream.outputs.commit }}
+          clean: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Resolve and verify channel release
+        run: |
+          mkdir -p out/plan
+          go run ./cmd/channel-plan "$CHANNEL_ROOT/release.yaml" out/plan/channel-plan.json
+          cmp -s out/plan/channel-plan.json input/final/channel-plan.json
+          python3 - <<'PY' >> "$GITHUB_ENV"
+          import json
+          with open("out/plan/channel-plan.json", encoding="utf-8") as file:
+              source = json.load(file)["source"]
+          print(f"SOURCE_URL={source['url']}")
+          print(f"SOURCE_SHA256={source['sha256']}")
+          PY
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Prepare source and build environment
+        env:
+          TARGET: x86_64-unknown-linux-gnu
+        run: bash .github/scripts/prepare-libcxx-pgo-build.sh
+      - name: Train and apply BOLT
+        run: |
+          work="$RUNNER_TEMP/clangup-libcxx-pgo-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -p "$work/home" out/x86_64-unknown-linux-gnu
+          docker run --rm --privileged --pid=host --network none \
+            --user "$(id -u):$(id -g)" \
+            --mount type=bind,src="$PWD",dst=/workspace,readonly \
+            --mount type=bind,src="$PWD/out/plan/channel-plan.json",dst=/input/channel-plan.json,readonly \
+            --mount type=bind,src="$PWD/input/final/final-prefix.tar.zst",dst=/input/final-prefix.tar.zst,readonly \
+            --mount type=bind,src="$PWD/.cache/sources/llvm-project.tar.xz",dst=/input/llvm-project.tar.xz,readonly \
+            --mount type=bind,src="$PWD/.cache/bootstrap",dst=/opt/clangup-bootstrap,readonly \
+            --mount type=bind,src="$work",dst=/build \
+            --mount type=bind,src="$PWD/out/x86_64-unknown-linux-gnu",dst=/out \
+            -e CLANGUP_BUILD_COMMIT="$GITHUB_SHA" \
+            -e CLANGUP_BUILD_ENVIRONMENT_IDENTITY -e CLANGUP_BOOTSTRAP_KIND=channel-artifact \
+            -e CLANGUP_BOOTSTRAP_IDENTITY -e HOME=/build/home \
+            "$CLANGUP_CONTAINER_IMAGE" \
+            python3 /workspace/channels/build/run.py \
+              --plan /input/channel-plan.json --target x86_64-unknown-linux-gnu \
+              --source /input/llvm-project.tar.xz --channel-root "/workspace/$CHANNEL_ROOT" \
+              --config-dir "/workspace/$CHANNEL_ROOT/build" --work /build/work --output /out \
+              --jobs "$(nproc)" --link-jobs 2 --source-date-epoch "$(git log -1 --format=%ct)" \
+              --start-at bolt --prefix-archive /input/final-prefix.tar.zst
+          cp out/plan/channel-plan.json out/x86_64-unknown-linux-gnu/channel-plan.json
+          printf '%s\n' "$GITHUB_SHA" > out/x86_64-unknown-linux-gnu/build-commit.txt
+      - name: Verify baseline
+        run: |
+          mkdir -p verify/prefix
+          tar --use-compress-program=unzstd -xf out/x86_64-unknown-linux-gnu/toolchain.tar.zst -C verify/prefix
+          docker run --rm --network host \
+            --mount type=bind,src="$PWD/verify/prefix",dst=/opt/clangup,readonly \
+            --mount type=bind,src="$PWD",dst=/workspace,readonly \
+            quay.io/centos/centos:7 bash "/workspace/$CHANNEL_ROOT/build/verify-linux.sh" /opt/clangup el7
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: libcxx-pgo-x86-target
+          path: out/x86_64-unknown-linux-gnu/
+          if-no-files-found: error
+          retention-days: 14

@@ -65,19 +65,19 @@ class ManifestTest(unittest.TestCase):
     def test_bolt_relocation_cleanup_only_visits_recorded_inputs(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            prefix = root / "prefix"
             build = root / "build"
-            recorded = root / "prefix" / "bin" / "clang-22"
+            recorded = prefix / "bin" / "clang-22"
             recorded.parent.mkdir(parents=True)
-            (build / "bin").mkdir(parents=True)
             recorded.write_bytes(b"\x7fELFpayload")
-            (build / "bin" / "llvm-readelf").touch()
-            (build / "bin" / "llvm-objcopy").touch()
+            (prefix / "bin" / "llvm-readelf").touch()
+            (prefix / "bin" / "llvm-objcopy").touch()
             sections = "  [ 1] .rela.text RELA 0000000000000000\n"
             with (
                 mock.patch.object(RUN.subprocess, "check_output", return_value=sections),
                 mock.patch.object(RUN, "run") as run,
             ):
-                RUN.drop_bolt_relocations([recorded], build)
+                RUN.drop_bolt_relocations(prefix, [recorded], build)
             run.assert_called_once()
             self.assertEqual(str(recorded), run.call_args.args[0][-1])
 

@@ -16,6 +16,9 @@ script_dir="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 : "${CLANGUP_OPTIMIZATION_PGO:?}"
 : "${CLANGUP_OPTIMIZATION_BOLT:?}"
 
+start_at="${CLANGUP_START_AT:-instrumented}"
+stop_after="${CLANGUP_STOP_AFTER:-bolt}"
+
 if [[ "${CLANGUP_OPTIMIZATION_PGO}" != 1 ]]; then
   echo "libcxx-pgo requires PGO for every target" >&2
   exit 1
@@ -196,9 +199,9 @@ stage_final() {
   ninja -C "${compiler_rt_build}" install
 
   test -x "${CLANGUP_PREFIX}/bin/clang-22"
-  test -x "${CLANGUP_BUILD}/bin/llvm-bolt"
-  test -x "${CLANGUP_BUILD}/bin/perf2bolt"
-  test -x "${CLANGUP_BUILD}/bin/merge-fdata"
+  test -x "${CLANGUP_PREFIX}/bin/llvm-bolt"
+  test -x "${CLANGUP_PREFIX}/bin/perf2bolt"
+  test -x "${CLANGUP_PREFIX}/bin/merge-fdata"
 }
 
 bolt_input_paths() {
@@ -271,16 +274,16 @@ stage_bolt() {
     for build_type in "${train_types[@]}"; do
       data="${bolt_dir}/${build_type}.perf.data"
       profile="${bolt_dir}/${stem}-${build_type}.fdata"
-      "${CLANGUP_BUILD}/bin/perf2bolt" \
+      "${CLANGUP_PREFIX}/bin/perf2bolt" \
         -p "${data}" -o "${profile}" "${input}"
       test -s "${profile}"
       profiles+=("${profile}")
     done
     merged="${bolt_dir}/${stem}.fdata"
-    "${CLANGUP_BUILD}/bin/merge-fdata" -o "${merged}" "${profiles[@]}"
+    "${CLANGUP_PREFIX}/bin/merge-fdata" -o "${merged}" "${profiles[@]}"
     test -s "${merged}"
     output="${input}.bolt"
-    "${CLANGUP_BUILD}/bin/llvm-bolt" \
+    "${CLANGUP_PREFIX}/bin/llvm-bolt" \
       "${input}" \
       -o "${output}" \
       -data="${merged}" \
@@ -309,8 +312,36 @@ run_stage() {
 }
 
 stages=(instrumented train merge final bolt)
-for stage in "${stages[@]}"; do
-  run_stage "${stage}"
+start_index=-1
+stop_index=-1
+for index in "${!stages[@]}"; do
+  if [[ "${stages[index]}" == "${start_at}" ]]; then
+    start_index="${index}"
+  fi
+  if [[ "${stages[index]}" == "${stop_after}" ]]; then
+    stop_index="${index}"
+  fi
+done
+if [[ "${start_index}" -lt 0 || "${stop_index}" -lt 0 || "${start_index}" -gt "${stop_index}" ]]; then
+  echo "invalid stage range: ${start_at}..${stop_after}" >&2
+  exit 1
+fi
+
+if [[ "${start_at}" == final && ! -s "${CLANGUP_PROFDATA}" ]]; then
+  echo "final stage requires a merged PGO profile" >&2
+  exit 1
+fi
+if [[ "${start_at}" == bolt ]]; then
+  for tool in clang clang++ llvm-bolt perf2bolt merge-fdata; do
+    test -x "${CLANGUP_PREFIX}/bin/${tool}" || {
+      echo "BOLT stage requires ${CLANGUP_PREFIX}/bin/${tool}" >&2
+      exit 1
+    }
+  done
+fi
+
+for ((index = start_index; index <= stop_index; index++)); do
+  run_stage "${stages[index]}"
 done
 
 {
@@ -319,6 +350,10 @@ done
     cat "${file}"
   done
 } > "${work_root}/cmake-arguments.txt"
+
+if [[ "${stop_after}" != bolt ]]; then
+  exit 0
+fi
 
 export CLANGUP_OPTIMIZATION_INPUTS="${bolt_dir}/inputs.list"
 python3 - "${work_root}/optimization.json" <<'PY'
