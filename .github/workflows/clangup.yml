@@ -6,6 +6,7 @@ on:
       - .github/workflows/clangup.yml
       - .github/workflows/default-channel.yml
       - .github/workflows/libcxx-channel.yml
+      - .github/workflows/libcxx-pgo-channel.yml
       - .github/workflows/clangup-release.yml
       - cmd/**
       - internal/**
@@ -19,6 +20,7 @@ on:
       - .github/workflows/clangup.yml
       - .github/workflows/default-channel.yml
       - .github/workflows/libcxx-channel.yml
+      - .github/workflows/libcxx-pgo-channel.yml
       - .github/workflows/clangup-release.yml
       - cmd/**
       - internal/**
@@ -63,6 +65,7 @@ jobs:
           python3 -m unittest discover -s channels/build -p 'test_*.py'
           python3 -m unittest discover -s channels/default/22.1.8/build -p 'test_*.py'
           python3 -m unittest discover -s channels/libcxx/22.1.8/build -p 'test_*.py'
+          python3 -m unittest discover -s channels/libcxx-pgo/22.1.8/build -p 'test_*.py'
           bash -n \
             channels/default/22.1.8/build/build-linux.sh \
             channels/default/22.1.8/build/build-macos.sh \
@@ -70,7 +73,9 @@ jobs:
             channels/default/22.1.8/build/verify-asan-matrix.sh \
             channels/libcxx/22.1.8/build/build-linux.sh \
             channels/libcxx/22.1.8/build/verify-linux.sh \
-            channels/libcxx/22.1.8/build/verify-asan-matrix.sh
+            channels/libcxx/22.1.8/build/verify-asan-matrix.sh \
+            channels/libcxx-pgo/22.1.8/build/build-linux.sh \
+            channels/libcxx-pgo/22.1.8/build/verify-linux.sh
 
       - name: Check module files
         run: go mod tidy -diff

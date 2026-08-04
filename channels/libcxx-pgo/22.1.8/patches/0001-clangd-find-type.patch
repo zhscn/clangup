@@ -1,0 +1,37 @@
+From 76d6b007595b9b802e0d054efc9dc0ce851314fa Mon Sep 17 00:00:00 2001
+From: zs <zhangsong325@gmail.com>
+Date: Sat, 11 Jul 2026 17:28:56 +0800
+Subject: [PATCH] [clangd] Fix findType for concepts and invalid positions
+
+Avoid recursing into concept template declarations that have no
+templated declaration, and reject LSP positions past the end of line
+instead of clamping them into the previous token.
+---
+ clang-tools-extra/clangd/XRefs.cpp | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/clang-tools-extra/clangd/XRefs.cpp b/clang-tools-extra/clangd/XRefs.cpp
+index 8a24d19a7d12..283db21f595b 100644
+--- a/clang-tools-extra/clangd/XRefs.cpp
++++ b/clang-tools-extra/clangd/XRefs.cpp
+@@ -2050,7 +2050,9 @@ static QualType typeForNode(const ASTContext &Ctx, const HeuristicResolver *H,
+       }
+       // Look inside templates.
+       QualType VisitTemplateDecl(const TemplateDecl *D) {
+-        return Visit(D->getTemplatedDecl());
++        if (const NamedDecl *Templated = D->getTemplatedDecl())
++          return Visit(Templated);
++        return QualType();
+       }
+     } V(Ctx);
+     return V.Visit(D);
+@@ -2180,7 +2182,8 @@ static llvm::SmallVector<QualType> unwrapFindType(
+ std::vector<LocatedSymbol> findType(ParsedAST &AST, Position Pos,
+                                     const SymbolIndex *Index) {
+   const SourceManager &SM = AST.getSourceManager();
+-  auto Offset = positionToOffset(SM.getBufferData(SM.getMainFileID()), Pos);
++  auto Offset = positionToOffset(SM.getBufferData(SM.getMainFileID()), Pos,
++                                 /*AllowColumnsBeyondLineLength=*/false);
+   std::vector<LocatedSymbol> Result;
+   if (!Offset) {
+     elog("failed to convert position {0} for findTypes: {1}", Pos,

@@ -47,6 +47,26 @@ func TestLibcxxReleasePlan(t *testing.T) {
 	}
 }
 
+func TestLibcxxPGOReleasePlan(t *testing.T) {
+	loaded, err := Load(filepath.Join("..", "..", "channels", "libcxx-pgo", "22.1.8", "release.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := Lock(loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Release.Channel != "libcxx-pgo" || len(plan.Targets) != 2 || len(plan.Source.Patches) != 1 {
+		t.Fatalf("unexpected libcxx-pgo plan: %#v", plan)
+	}
+	for _, target := range plan.Targets {
+		if target.OS != "linux" || !target.Optimization.PGO ||
+			target.Optimization.BOLT != (target.Arch == "x86_64") {
+			t.Fatalf("unexpected libcxx-pgo target contract: %#v", target)
+		}
+	}
+}
+
 func TestLoadRejectsUnknownField(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "release.yaml")
 	writeTestRelease(t, path, "mystery: true\n")

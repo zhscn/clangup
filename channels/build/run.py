@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import stat
 import subprocess
@@ -52,6 +53,31 @@ def sha256_file(path: Path) -> str:
     with path.open("rb") as file:
         for chunk in iter(lambda: file.read(1024 * 1024), b""):
             digest.update(chunk)
+    return digest.hexdigest()
+
+
+def sha256_directory(path: Path) -> str:
+    digest = hashlib.sha256()
+    for child in sorted(
+        candidate
+        for candidate in path.rglob("*")
+        if candidate.is_file()
+        and "__pycache__" not in candidate.parts
+        and candidate.suffix != ".pyc"
+    ):
+        relative = child.relative_to(path).as_posix()
+        digest.update(relative.encode())
+        digest.update(b"\0")
+        digest.update(bytes.fromhex(sha256_file(child)))
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def source_identity(source: dict[str, Any]) -> str:
+    digest = hashlib.sha256()
+    digest.update(source["sha256"].encode())
+    digest.update(b"\0")
+    digest.update(source["patchset_sha256"].encode())
     return digest.hexdigest()
 
 
@@ -126,11 +152,55 @@ def prepare_source(
             run(["git", "-C", str(tree), "apply", "--check", f"-p{strip}", str(path)])
             run(["git", "-C", str(tree), "apply", "--index", f"-p{strip}", str(path)])
 
-    source_identity = hashlib.sha256()
-    source_identity.update(source["sha256"].encode())
-    source_identity.update(b"\0")
-    source_identity.update(source["patchset_sha256"].encode())
-    return tree, source_identity.hexdigest()
+    return tree, source_identity(source)
+
+
+def prepare_work(
+    lock: dict[str, Any],
+    archive: Path,
+    channel_root: Path,
+    config_dir: Path,
+    work: Path,
+    plan: Path,
+    resume: bool,
+    jobs: int,
+    link_jobs: int,
+) -> tuple[Path, Path, str]:
+    identity = {
+        "schema": "clangup.build-input/v1",
+        "plan_sha256": sha256_file(plan),
+        "source_archive_sha256": sha256_file(archive),
+        "config_sha256": sha256_directory(config_dir),
+        "runner_sha256": sha256_file(Path(__file__).resolve()),
+        "build_environment_identity": os.environ.get(
+            "CLANGUP_BUILD_ENVIRONMENT_IDENTITY", "unknown"
+        ),
+        "bootstrap_kind": os.environ.get("CLANGUP_BOOTSTRAP_KIND", "seed-image"),
+        "bootstrap_identity": os.environ.get("CLANGUP_BOOTSTRAP_IDENTITY", "unknown"),
+        "jobs": jobs,
+        "link_jobs": link_jobs,
+    }
+    identity_path = work / "build-input.json"
+    if resume and identity_path.is_file():
+        if load_json(identity_path) != identity:
+            fail(f"resumable work directory has different inputs: {work}")
+        source_root = work / "source"
+        if not source_root.is_dir():
+            fail(f"resumable source tree is missing: {source_root}")
+        children = [path for path in source_root.iterdir() if path.is_dir()]
+        if len(children) != 1:
+            fail(f"resumable source tree is incomplete: {source_root}")
+        prefix = work / "prefix"
+        prefix.mkdir(exist_ok=True)
+        return children[0], prefix, source_identity(lock["source"])
+
+    shutil.rmtree(work, ignore_errors=True)
+    work.mkdir(parents=True)
+    prefix = work / "prefix"
+    prefix.mkdir()
+    source, digest = prepare_source(lock, archive, channel_root, work)
+    write_json(identity_path, identity)
+    return source, prefix, digest
 
 
 def build_toolchain(
@@ -158,6 +228,13 @@ def build_toolchain(
             "CLANGUP_RUNTIMES": ";".join(target["distribution"]["runtimes"]),
             "CLANGUP_JOBS": str(jobs),
             "CLANGUP_LINK_JOBS": str(link_jobs),
+            "CLANGUP_CPU_ISA": target.get("cpu_isa", ""),
+            "CLANGUP_OPTIMIZATION_PGO": "1"
+            if target.get("optimization", {}).get("pgo")
+            else "0",
+            "CLANGUP_OPTIMIZATION_BOLT": "1"
+            if target.get("optimization", {}).get("bolt")
+            else "0",
         }
     )
     if target.get("min_macos_version"):
@@ -167,6 +244,91 @@ def build_toolchain(
     if not arguments_path.is_file():
         fail(f"build script did not record CMake arguments: {arguments_path}")
     return work / "build", arguments_path.read_text(encoding="utf-8").splitlines()
+
+
+def load_optimization_record(work: Path, target: dict[str, Any]) -> dict[str, Any]:
+    expected = target.get("optimization", {"pgo": False, "bolt": False})
+    path = work / "optimization.json"
+    if not path.is_file():
+        if expected.get("pgo") or expected.get("bolt"):
+            fail("optimized build did not write optimization.json")
+        return {"pgo": {"enabled": False}, "bolt": {"enabled": False}}
+    record = load_json(path)
+    if record.get("schema") != "clangup.optimization-build/v1":
+        fail("optimization.json has an unsupported schema")
+    for name in ("pgo", "bolt"):
+        actual = record.get(name, {}).get("enabled")
+        if actual != bool(expected.get(name)):
+            fail(f"optimization record differs from channel plan for {name}")
+    return record
+
+
+def validate_bolt_outputs(prefix: Path, build: Path, record: dict[str, Any]) -> list[Path]:
+    bolt = record.get("bolt", {})
+    if not bolt.get("enabled"):
+        return []
+    inputs = bolt.get("inputs")
+    if not isinstance(inputs, list) or not inputs:
+        fail("BOLT optimization record has no inputs")
+    readelf = build / "bin" / "llvm-readelf"
+    if not readelf.is_file():
+        fail(f"BOLT validation tool is missing: {readelf}")
+    paths = []
+    for relative in inputs:
+        if (
+            not isinstance(relative, str)
+            or Path(relative).is_absolute()
+            or ".." in Path(relative).parts
+        ):
+            fail(f"BOLT optimization record contains an unsafe input: {relative!r}")
+        path = prefix / relative
+        if not path.is_file():
+            fail(f"BOLT-optimized payload input is missing: {relative}")
+        sections = subprocess.check_output(
+            [str(readelf), "-S", "--wide", str(path)], text=True
+        )
+        if ".bolt.org.text" not in sections:
+            fail(f"payload input was not rewritten by BOLT: {relative}")
+        paths.append(path)
+    return paths
+
+
+def drop_bolt_relocations(paths: list[Path], build: Path) -> None:
+    if not paths:
+        return
+    readelf = build / "bin" / "llvm-readelf"
+    objcopy = build / "bin" / "llvm-objcopy"
+    if not readelf.is_file() or not objcopy.is_file():
+        fail("BOLT relocation cleanup tools are missing")
+    section_pattern = re.compile(
+        r"^\s*\[\s*\d+\]\s+(\S+)\s+(?:REL|RELA)\s+([0-9a-fA-F]+)\s",
+        re.MULTILINE,
+    )
+    for path in paths:
+        try:
+            with path.open("rb") as file:
+                if file.read(4) != b"\x7fELF":
+                    continue
+            sections = subprocess.check_output(
+                [str(readelf), "-S", "--wide", str(path)],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            )
+        except (OSError, subprocess.CalledProcessError):
+            continue
+        remove = [
+            name
+            for name, address in section_pattern.findall(sections)
+            if int(address, 16) == 0
+        ]
+        if remove:
+            run(
+                [
+                    str(objcopy),
+                    *(f"--remove-section={name}" for name in remove),
+                    str(path),
+                ]
+            )
 
 
 def rewrite_python_shebangs(prefix: Path) -> None:
@@ -432,7 +594,14 @@ def smoke(prefix: Path, target: dict[str, Any], work: Path, channel: str) -> Non
         libcxx_executable = work / "libcxx-cxx20-smoke"
         command = [str(clangxx), "-std=c++20"]
         if target["driver"]["cxx_stdlib"] == "system":
-            command.extend(("-stdlib=libc++", "--rtlib=compiler-rt", "--unwindlib=none", "-fuse-ld=lld"))
+            command.extend(
+                (
+                    "-stdlib=libc++",
+                    "--rtlib=compiler-rt",
+                    "--unwindlib=none",
+                    "-fuse-ld=lld",
+                )
+            )
         command.extend((str(libcxx_source), "-o", str(libcxx_executable)))
         if target["driver"]["cxx_stdlib"] == "system":
             command.insert(-2, "-Wl,--no-as-needed,-l:libgcc_s.so.1,--as-needed")
@@ -568,6 +737,11 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--source-date-epoch", type=int, default=0)
     parser.add_argument("--zstd-level", type=int, default=19)
     parser.add_argument("--zstd-threads", type=int, default=4)
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="reuse a work directory when its locked inputs are unchanged",
+    )
     return parser.parse_args()
 
 
@@ -587,16 +761,24 @@ def main() -> None:
     if target["os"] != expected_os:
         fail(f"target OS {target['os']} does not match host {platform.system()}")
 
+    plan = args.plan.resolve()
+    archive = args.source.resolve()
+    channel_root = args.channel_root.resolve()
+    config_dir = args.config_dir.resolve()
     work = args.work.resolve()
     output = args.output.resolve()
-    shutil.rmtree(work, ignore_errors=True)
-    work.mkdir(parents=True)
-    reset_directory(output)
-    prefix = work / "prefix"
-    prefix.mkdir()
-    source, source_identity_digest = prepare_source(
-        lock, args.source.resolve(), args.channel_root.resolve(), work
+    source, prefix, source_identity_digest = prepare_work(
+        lock,
+        archive,
+        channel_root,
+        config_dir,
+        work,
+        plan,
+        args.resume,
+        args.jobs,
+        args.link_jobs,
     )
+    reset_directory(output)
     started = dt.datetime.now(dt.timezone.utc)
     build, cmake_arguments = build_toolchain(
         source,
@@ -605,10 +787,14 @@ def main() -> None:
         target,
         args.jobs,
         args.link_jobs,
-        args.config_dir.resolve(),
+        config_dir,
     )
+    optimization_record = load_optimization_record(work, target)
+    bolt_outputs = validate_bolt_outputs(prefix, build, optimization_record)
     rewrite_python_shebangs(prefix)
     strip_and_sign(prefix, build, target["os"])
+    drop_bolt_relocations(bolt_outputs, build)
+    validate_bolt_outputs(prefix, build, optimization_record)
     write_integration_files(prefix, target)
     validate_payload(prefix)
     smoke(prefix, target, work, lock["release"]["channel"])
@@ -626,9 +812,7 @@ def main() -> None:
     build_identity = {
         "commit": os.environ.get("CLANGUP_BUILD_COMMIT", "unknown"),
         "environment": {
-            "identity": os.environ.get(
-                "CLANGUP_BUILD_ENVIRONMENT_IDENTITY", "unknown"
-            )
+            "identity": os.environ.get("CLANGUP_BUILD_ENVIRONMENT_IDENTITY", "unknown")
         },
         "bootstrap": {
             "kind": os.environ.get("CLANGUP_BOOTSTRAP_KIND", "seed-image"),
@@ -640,6 +824,7 @@ def main() -> None:
         "host": {"system": platform.system(), "machine": platform.machine()},
         "cmake_arguments": cmake_arguments,
         "resources": {"jobs": args.jobs, "link_jobs": args.link_jobs},
+        "optimization": optimization_record,
         "started_at": started.isoformat(),
         "finished_at": dt.datetime.now(dt.timezone.utc).isoformat(),
     }

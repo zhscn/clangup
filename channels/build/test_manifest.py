@@ -2,6 +2,7 @@ import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 
 MODULE_PATH = Path(__file__).with_name("run.py")
@@ -42,6 +43,43 @@ class ManifestTest(unittest.TestCase):
             manifest = RUN.make_manifest(plan, target, artifact, {})
             self.assertNotIn("target", manifest["source"]["archive"])
             self.assertNotIn("target", manifest["source"]["patches"][0])
+
+    def test_bolt_validation_returns_only_recorded_inputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prefix = root / "prefix"
+            build = root / "build"
+            recorded = prefix / "bin" / "clang-22"
+            recorded.parent.mkdir(parents=True)
+            (build / "bin").mkdir(parents=True)
+            recorded.write_bytes(b"ELF")
+            (build / "bin" / "llvm-readelf").touch()
+            record = {"bolt": {"enabled": True, "inputs": ["bin/clang-22"]}}
+            with mock.patch.object(
+                RUN.subprocess, "check_output", return_value=".bolt.org.text\n"
+            ):
+                self.assertEqual(
+                    [recorded], RUN.validate_bolt_outputs(prefix, build, record)
+                )
+
+    def test_bolt_relocation_cleanup_only_visits_recorded_inputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            build = root / "build"
+            recorded = root / "prefix" / "bin" / "clang-22"
+            recorded.parent.mkdir(parents=True)
+            (build / "bin").mkdir(parents=True)
+            recorded.write_bytes(b"\x7fELFpayload")
+            (build / "bin" / "llvm-readelf").touch()
+            (build / "bin" / "llvm-objcopy").touch()
+            sections = "  [ 1] .rela.text RELA 0000000000000000\n"
+            with (
+                mock.patch.object(RUN.subprocess, "check_output", return_value=sections),
+                mock.patch.object(RUN, "run") as run,
+            ):
+                RUN.drop_bolt_relocations([recorded], build)
+            run.assert_called_once()
+            self.assertEqual(str(recorded), run.call_args.args[0][-1])
 
 
 if __name__ == "__main__":

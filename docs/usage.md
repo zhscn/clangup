@@ -17,6 +17,8 @@ A selector is a channel such as `libcxx`, or an exact release such as
 `libcxx@22.1.8-1`. A channel follows its current release; an exact release is
 stable. `default` uses the host's standard library, linker, runtime, and
 unwind library. On Linux, `libcxx` uses libc++, LLD, compiler-rt, and libgcc_s.
+`libcxx-pgo` keeps that driver contract and adds PGO with ThinLTO; its x86_64
+artifact also uses BOLT and requires an x86-64-v3 host.
 
 Useful lifecycle commands:
 
