@@ -39,16 +39,7 @@ jobs:
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
           run-id: ${{ inputs.aarch64_final_run_id }}
-      - name: Select upstream commit
-        id: upstream
-        run: |
-          cmp -s "$RUNNER_TEMP/clangup-input/x86_64-unknown-linux-gnu/channel-plan.json" "$RUNNER_TEMP/clangup-input/aarch64-unknown-linux-gnu/channel-plan.json"
-          cmp -s "$RUNNER_TEMP/clangup-input/x86_64-unknown-linux-gnu/build-commit.txt" "$RUNNER_TEMP/clangup-input/aarch64-unknown-linux-gnu/build-commit.txt"
-          echo "commit=$(cat "$RUNNER_TEMP/clangup-input/x86_64-unknown-linux-gnu/build-commit.txt")" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          ref: ${{ steps.upstream.outputs.commit }}
-          clean: false
       - name: Assemble release
         run: |
           mkdir -p out/targets

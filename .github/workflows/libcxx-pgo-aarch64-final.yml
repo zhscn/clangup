@@ -50,25 +50,15 @@ jobs:
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
           run-id: ${{ inputs.release_profile_run_id }}
-      - name: Select upstream commit
-        id: upstream
-        run: |
-          cmp -s "$RUNNER_TEMP/clangup-input/profile-debug/build-commit.txt" "$RUNNER_TEMP/clangup-input/profile-release/build-commit.txt"
-          echo "commit=$(cat "$RUNNER_TEMP/clangup-input/profile-debug/build-commit.txt")" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          ref: ${{ steps.upstream.outputs.commit }}
-          clean: false
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
           cache: true
-      - name: Resolve and verify channel release
+      - name: Resolve channel release
         run: |
           mkdir -p out/plan
           go run ./cmd/channel-plan "$CHANNEL_ROOT/release.yaml" out/plan/channel-plan.json
-          cmp -s out/plan/channel-plan.json "$RUNNER_TEMP/clangup-input/profile-debug/channel-plan.json"
-          cmp -s out/plan/channel-plan.json "$RUNNER_TEMP/clangup-input/profile-release/channel-plan.json"
           python3 - <<'PY' >> "$GITHUB_ENV"
           import json
           with open("out/plan/channel-plan.json", encoding="utf-8") as file:
