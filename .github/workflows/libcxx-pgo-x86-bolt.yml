@@ -67,6 +67,7 @@ jobs:
       - name: Prepare source and build environment
         env:
           TARGET: x86_64-unknown-linux-gnu
+          BOLT_SAMPLING: "1"
         run: bash .github/scripts/prepare-libcxx-pgo-build.sh
       - name: Train and apply BOLT
         run: |

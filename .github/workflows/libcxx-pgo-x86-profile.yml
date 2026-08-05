@@ -16,8 +16,8 @@ env:
 
 jobs:
   profile:
-    runs-on: [self-hosted, linux, x64, clangup-bolt]
-    timeout-minutes: 720
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
     permissions:
       contents: read
       packages: read
@@ -48,12 +48,13 @@ jobs:
       - name: Prepare source and build environment
         env:
           TARGET: x86_64-unknown-linux-gnu
+          BOLT_SAMPLING: "0"
         run: bash .github/scripts/prepare-libcxx-pgo-build.sh
       - name: Build and merge PGO profile
         run: |
           work="$RUNNER_TEMP/clangup-libcxx-pgo-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           mkdir -p "$work/home" out/unused out/profile
-          docker run --rm --privileged --pid=host --network none \
+          docker run --rm --network none \
             --user "$(id -u):$(id -g)" \
             --mount type=bind,src="$PWD",dst=/workspace,readonly \
             --mount type=bind,src="$PWD/out/plan/channel-plan.json",dst=/input/channel-plan.json,readonly \

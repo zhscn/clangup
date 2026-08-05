@@ -9,6 +9,11 @@ set -euo pipefail
 : "${BOOTSTRAP_EXACT:?}"
 : "${BUILDER_IMAGE:?}"
 : "${GITHUB_ENV:?}"
+BOLT_SAMPLING="${BOLT_SAMPLING:-0}"
+case "${BOLT_SAMPLING}" in
+  0|1) ;;
+  *) echo "BOLT_SAMPLING must be 0 or 1" >&2; exit 1 ;;
+esac
 
 mkdir -p .cache/sources .cache/bootstrap
 curl -fsSL -o .cache/sources/llvm-project.tar.xz "${SOURCE_URL}"
@@ -26,13 +31,17 @@ case "${TARGET}" in
   x86_64-unknown-linux-gnu)
     architecture=amd64
     builder_ref="${BUILDER_IMAGE%:*}@${index_digest}"
-    docker build --network host \
-      --build-arg "BASE_IMAGE=${builder_ref}" \
-      -f docker/clangup-pgo-builder/Dockerfile \
-      -t clangup-pgo-builder:local .
-    image="clangup-pgo-builder:local"
-    dockerfile_sha256="$(sha256sum docker/clangup-pgo-builder/Dockerfile | awk '{print $1}')"
-    identity="${BUILDER_IMAGE%:*}@${index_digest}#${architecture}#${dockerfile_sha256}"
+    image="${builder_ref}"
+    identity="${BUILDER_IMAGE%:*}@${index_digest}#${architecture}"
+    if [[ "${BOLT_SAMPLING}" == 1 ]]; then
+      docker build --network host \
+        --build-arg "BASE_IMAGE=${builder_ref}" \
+        -f docker/clangup-pgo-builder/Dockerfile \
+        -t clangup-pgo-builder:local .
+      image="clangup-pgo-builder:local"
+      dockerfile_sha256="$(sha256sum docker/clangup-pgo-builder/Dockerfile | awk '{print $1}')"
+      identity="${identity}#${dockerfile_sha256}"
+    fi
     ;;
   aarch64-unknown-linux-gnu)
     architecture=arm64
