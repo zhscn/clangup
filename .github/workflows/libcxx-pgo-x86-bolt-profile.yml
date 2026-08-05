@@ -23,12 +23,13 @@ env:
   BUILDER_IMAGE: ghcr.io/zhscn/clangup-builder:1
   BOOTSTRAP_CHANNEL: default
   BOOTSTRAP_EXACT: 22.1.8-1
-  BOLT_WORK_ROOT: ${{ runner.temp }}/clangup-libcxx-pgo-${{ github.run_id }}-${{ github.run_attempt }}
 
 jobs:
   profile:
     runs-on: [self-hosted, linux, x64, clangup-bolt]
     timeout-minutes: 720
+    env:
+      BOLT_WORK_ROOT: ${{ runner.temp }}/clangup-libcxx-pgo-${{ github.run_id }}-${{ github.run_attempt }}
     permissions:
       actions: read
       contents: read
