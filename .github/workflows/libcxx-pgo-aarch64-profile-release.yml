@@ -1,4 +1,4 @@
-name: libcxx-pgo aarch64 profile
+name: libcxx-pgo aarch64 profile Release
 
 on:
   workflow_dispatch:
@@ -7,14 +7,9 @@ on:
         description: Run ID of the libcxx-pgo aarch64 instrumented workflow
         required: true
         type: string
-      build_type:
-        description: PGO training build type
-        required: true
-        type: choice
-        options: [Debug, Release]
 
 concurrency:
-  group: libcxx-pgo-aarch64-profile-${{ inputs.build_type }}
+  group: libcxx-pgo-aarch64-profile-release
   cancel-in-progress: false
 
 env:
@@ -77,7 +72,7 @@ jobs:
         env:
           TARGET: aarch64-unknown-linux-gnu
         run: bash .github/scripts/prepare-libcxx-pgo-build.sh
-      - name: Train profile
+      - name: Train Release profile
         run: |
           work="$RUNNER_TEMP/clangup-libcxx-pgo-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           mkdir -p "$work" out/unused out/profile
@@ -95,13 +90,13 @@ jobs:
               --channel-root "/workspace/$CHANNEL_ROOT" --config-dir "/workspace/$CHANNEL_ROOT/build" \
               --work /build/work --output /out --jobs "$(nproc)" --link-jobs 2 \
               --source-date-epoch "$(git log -1 --format=%ct)" --start-at train --stop-after merge \
-              --train-types "${{ inputs.build_type }}" --instrumented-prefix-archive /input/instrumented-prefix.tar.zst
+              --train-types Release --instrumented-prefix-archive /input/instrumented-prefix.tar.zst
           cp "$work/work/pgo/clang.profdata" out/profile/clang.profdata
           cp out/plan/channel-plan.json out/profile/channel-plan.json
           printf '%s\n' "$GITHUB_SHA" > out/profile/build-commit.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: libcxx-pgo-aarch64-profile-${{ inputs.build_type }}
+          name: libcxx-pgo-aarch64-profile-release
           path: out/profile/
           if-no-files-found: error
           retention-days: 14
