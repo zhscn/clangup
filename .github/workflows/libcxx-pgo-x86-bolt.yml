@@ -74,6 +74,7 @@ jobs:
           work="$RUNNER_TEMP/clangup-libcxx-pgo-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           mkdir -p "$work/home" out/x86_64-unknown-linux-gnu
           docker run --rm --privileged --pid=host --network none \
+            --cpuset-cpus=0-7 --cpus=8 --memory=48g --memory-swap=48g \
             --user "$(id -u):$(id -g)" \
             --mount type=bind,src="$PWD",dst=/workspace,readonly \
             --mount type=bind,src="$PWD/out/plan/channel-plan.json",dst=/input/channel-plan.json,readonly \
@@ -99,6 +100,7 @@ jobs:
           mkdir -p verify/prefix
           tar --use-compress-program=unzstd -xf out/x86_64-unknown-linux-gnu/toolchain.tar.zst -C verify/prefix
           docker run --rm --network host \
+            --cpuset-cpus=0-7 --cpus=8 --memory=48g --memory-swap=48g \
             --mount type=bind,src="$PWD/verify/prefix",dst=/opt/clangup,readonly \
             --mount type=bind,src="$PWD",dst=/workspace,readonly \
             quay.io/centos/centos:7 bash "/workspace/$CHANNEL_ROOT/build/verify-linux.sh" /opt/clangup el7
