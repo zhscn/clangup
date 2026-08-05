@@ -165,8 +165,10 @@ def prepare_work(
     resume: bool,
     jobs: int,
     link_jobs: int,
-    profile: Path | None,
+    profiles: list[Path],
     prefix_archive: Path | None,
+    instrumented_prefix_archive: Path | None,
+    bolt_profile_archives: list[Path],
 ) -> tuple[Path, Path, str]:
     identity = {
         "schema": "clangup.build-input/v1",
@@ -181,10 +183,16 @@ def prepare_work(
         "bootstrap_identity": os.environ.get("CLANGUP_BOOTSTRAP_IDENTITY", "unknown"),
         "jobs": jobs,
         "link_jobs": link_jobs,
-        "profile_sha256": sha256_file(profile) if profile else None,
+        "profile_sha256": [sha256_file(profile) for profile in profiles],
         "prefix_archive_sha256": sha256_file(prefix_archive)
         if prefix_archive
         else None,
+        "instrumented_prefix_archive_sha256": sha256_file(instrumented_prefix_archive)
+        if instrumented_prefix_archive
+        else None,
+        "bolt_profile_archive_sha256": [
+            sha256_file(archive) for archive in bolt_profile_archives
+        ],
     }
     identity_path = work / "build-input.json"
     if resume and identity_path.is_file():
@@ -205,12 +213,34 @@ def prepare_work(
     prefix = work / "prefix"
     prefix.mkdir()
     source, digest = prepare_source(lock, archive, channel_root, work)
-    if profile:
-        if not profile.is_file() or not profile.stat().st_size:
-            fail(f"PGO profile input is missing or empty: {profile}")
+    if profiles:
+        for profile in profiles:
+            if not profile.is_file() or not profile.stat().st_size:
+                fail(f"PGO profile input is missing or empty: {profile}")
         pgo_dir = work / "pgo"
         pgo_dir.mkdir()
-        shutil.copyfile(profile, pgo_dir / "clang.profdata")
+        merged_profile = pgo_dir / "clang.profdata"
+        if len(profiles) == 1:
+            shutil.copyfile(profiles[0], merged_profile)
+        else:
+            profdata = Path(
+                os.environ.get(
+                    "CLANGUP_BOOTSTRAP_PREFIX", "/opt/clangup-bootstrap"
+                )
+            ) / "bin" / "llvm-profdata"
+            if not profdata.is_file():
+                fail(f"PGO profile merge tool is missing: {profdata}")
+            run(
+                [
+                    str(profdata),
+                    "merge",
+                    "-o",
+                    str(merged_profile),
+                    *(str(profile) for profile in profiles),
+                ]
+            )
+        if not merged_profile.is_file() or not merged_profile.stat().st_size:
+            fail("merged PGO profile is missing or empty")
     if prefix_archive:
         if not prefix_archive.is_file():
             fail(f"final-prefix archive is missing: {prefix_archive}")
@@ -246,6 +276,71 @@ def prepare_work(
         )
         if not prefix.is_dir() or not any(prefix.iterdir()):
             fail("final-prefix archive does not contain a populated prefix")
+    if instrumented_prefix_archive:
+        if not instrumented_prefix_archive.is_file():
+            fail(f"instrumented-prefix archive is missing: {instrumented_prefix_archive}")
+        entries = subprocess.check_output(
+            [
+                "tar",
+                "--use-compress-program=unzstd",
+                "-tf",
+                str(instrumented_prefix_archive),
+            ],
+            text=True,
+        ).splitlines()
+        for entry in entries:
+            path = Path(entry)
+            if path.is_absolute() or ".." in path.parts or not (
+                entry == "instrumented-prefix"
+                or entry.startswith("instrumented-prefix/")
+            ):
+                fail(
+                    "instrumented-prefix archive contains an unsafe entry: "
+                    f"{entry!r}"
+                )
+        run(
+            [
+                "tar",
+                "--use-compress-program=unzstd",
+                "--no-same-owner",
+                "-xf",
+                str(instrumented_prefix_archive),
+                "-C",
+                str(work),
+            ]
+        )
+        instrumented_prefix = work / "instrumented-prefix"
+        if not (instrumented_prefix / "bin" / "clang").is_file():
+            fail("instrumented-prefix archive does not contain clang")
+    for bolt_profile_archive in bolt_profile_archives:
+        if not bolt_profile_archive.is_file():
+            fail(f"BOLT profile archive is missing: {bolt_profile_archive}")
+        entries = subprocess.check_output(
+            [
+                "tar",
+                "--use-compress-program=unzstd",
+                "-tf",
+                str(bolt_profile_archive),
+            ],
+            text=True,
+        ).splitlines()
+        for entry in entries:
+            path = Path(entry)
+            if path.is_absolute() or ".." in path.parts or not (
+                entry == "bolt-profiles" or entry.startswith("bolt-profiles/")
+            ):
+                fail(f"BOLT profile archive contains an unsafe entry: {entry!r}")
+        run(
+            [
+                "tar",
+                "--use-compress-program=unzstd",
+                "--no-same-owner",
+                "-xf",
+                str(bolt_profile_archive),
+                "-C",
+                str(work),
+            ]
+        )
     write_json(identity_path, identity)
     return source, prefix, digest
 
@@ -260,6 +355,7 @@ def build_toolchain(
     config_dir: Path,
     start_at: str,
     stop_after: str,
+    train_types: list[str],
 ) -> tuple[Path, list[str]]:
     name = "build-linux.sh" if target["os"] == "linux" else "build-macos.sh"
     script = config_dir / name
@@ -286,6 +382,7 @@ def build_toolchain(
             else "0",
             "CLANGUP_START_AT": start_at,
             "CLANGUP_STOP_AFTER": stop_after,
+            "CLANGUP_TRAIN_TYPES": " ".join(train_types),
         }
     )
     if target.get("min_macos_version"):
@@ -801,18 +898,37 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--source-date-epoch", type=int, default=0)
     parser.add_argument("--zstd-level", type=int, default=19)
     parser.add_argument("--zstd-threads", type=int, default=4)
-    stages = ("instrumented", "train", "merge", "final", "bolt")
+    stages = ("instrumented", "train", "merge", "final", "bolt-profile", "bolt")
     parser.add_argument("--start-at", choices=stages, default="instrumented")
     parser.add_argument("--stop-after", choices=stages, default="bolt")
     parser.add_argument(
         "--profile",
         type=Path,
+        action="append",
         help="merged PGO profile from a preceding profile workflow",
     )
     parser.add_argument(
         "--prefix-archive",
         type=Path,
         help="final-prefix stage archive from a preceding final workflow",
+    )
+    parser.add_argument(
+        "--instrumented-prefix-archive",
+        type=Path,
+        help="instrumented-prefix stage archive from a preceding workflow",
+    )
+    parser.add_argument(
+        "--bolt-profile-archive",
+        type=Path,
+        action="append",
+        help="BOLT fdata stage archive from a preceding sampling workflow",
+    )
+    parser.add_argument(
+        "--train-types",
+        choices=("Debug", "Release"),
+        nargs="+",
+        default=("Debug", "Release"),
+        help="training build types to execute in this stage",
     )
     parser.add_argument(
         "--resume",
@@ -826,17 +942,27 @@ def main() -> None:
     args = parse_arguments()
     if args.jobs < 1 or args.link_jobs < 1 or args.zstd_threads < 1:
         fail("job and thread counts must be positive")
-    stages = ("instrumented", "train", "merge", "final", "bolt")
+    stages = ("instrumented", "train", "merge", "final", "bolt-profile", "bolt")
     if stages.index(args.start_at) > stages.index(args.stop_after):
         fail("--start-at must not follow --stop-after")
-    if args.profile and args.start_at not in ("final",):
+    if len(set(args.train_types)) != len(args.train_types):
+        fail("--train-types contains a duplicate build type")
+    if args.profile and args.start_at != "final":
         fail("--profile is only valid when starting at final")
     if args.start_at == "final" and not args.profile:
         fail("starting at final requires --profile")
-    if args.prefix_archive and args.start_at != "bolt":
-        fail("--prefix-archive is only valid when starting at bolt")
-    if args.start_at == "bolt" and not args.prefix_archive:
-        fail("starting at bolt requires --prefix-archive")
+    if args.prefix_archive and args.start_at not in ("bolt-profile", "bolt"):
+        fail("--prefix-archive is only valid when starting at a BOLT stage")
+    if args.start_at in ("bolt-profile", "bolt") and not args.prefix_archive:
+        fail("starting at a BOLT stage requires --prefix-archive")
+    if args.instrumented_prefix_archive and args.start_at != "train":
+        fail("--instrumented-prefix-archive is only valid when starting at train")
+    if args.start_at == "train" and not args.instrumented_prefix_archive:
+        fail("starting at train requires --instrumented-prefix-archive")
+    if args.bolt_profile_archive and args.start_at != "bolt":
+        fail("--bolt-profile-archive is only valid when starting at bolt")
+    if args.start_at == "bolt" and not args.bolt_profile_archive:
+        fail("starting at bolt requires --bolt-profile-archive")
     lock = load_json(args.plan)
     target = select_target(lock, args.target)
     expected_os = (
@@ -855,8 +981,16 @@ def main() -> None:
     config_dir = args.config_dir.resolve()
     work = args.work.resolve()
     output = args.output.resolve()
-    profile = args.profile.resolve() if args.profile else None
+    profiles = [profile.resolve() for profile in args.profile or []]
     prefix_archive = args.prefix_archive.resolve() if args.prefix_archive else None
+    instrumented_prefix_archive = (
+        args.instrumented_prefix_archive.resolve()
+        if args.instrumented_prefix_archive
+        else None
+    )
+    bolt_profile_archives = [
+        archive.resolve() for archive in args.bolt_profile_archive or []
+    ]
     source, prefix, source_identity_digest = prepare_work(
         lock,
         archive,
@@ -867,8 +1001,10 @@ def main() -> None:
         args.resume,
         args.jobs,
         args.link_jobs,
-        profile,
+        profiles,
         prefix_archive,
+        instrumented_prefix_archive,
+        bolt_profile_archives,
     )
     reset_directory(output)
     started = dt.datetime.now(dt.timezone.utc)
@@ -882,6 +1018,7 @@ def main() -> None:
         config_dir,
         args.start_at,
         args.stop_after,
+        list(args.train_types),
     )
     if args.stop_after != "bolt":
         return

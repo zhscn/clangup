@@ -1,10 +1,10 @@
-name: libcxx-pgo x86 profile
+name: libcxx-pgo x86 instrumented
 
 on:
   workflow_dispatch:
 
 concurrency:
-  group: libcxx-pgo-x86-profile
+  group: libcxx-pgo-x86-instrumented
   cancel-in-progress: false
 
 env:
@@ -15,7 +15,7 @@ env:
   BOOTSTRAP_EXACT: 22.1.8-1
 
 jobs:
-  profile:
+  instrumented:
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     permissions:
@@ -50,36 +50,32 @@ jobs:
           TARGET: x86_64-unknown-linux-gnu
           BOLT_SAMPLING: "0"
         run: bash .github/scripts/prepare-libcxx-pgo-build.sh
-      - name: Build and merge PGO profile
+      - name: Build instrumented compiler
         run: |
           work="$RUNNER_TEMP/clangup-libcxx-pgo-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          mkdir -p "$work/home" out/unused out/profile
-          docker run --rm --network none \
-            --user "$(id -u):$(id -g)" \
+          mkdir -p "$work/home" out/unused out/instrumented
+          docker run --rm --network none --user "$(id -u):$(id -g)" \
             --mount type=bind,src="$PWD",dst=/workspace,readonly \
             --mount type=bind,src="$PWD/out/plan/channel-plan.json",dst=/input/channel-plan.json,readonly \
             --mount type=bind,src="$PWD/.cache/sources/llvm-project.tar.xz",dst=/input/llvm-project.tar.xz,readonly \
             --mount type=bind,src="$PWD/.cache/bootstrap",dst=/opt/clangup-bootstrap,readonly \
             --mount type=bind,src="$work",dst=/build \
             --mount type=bind,src="$PWD/out/unused",dst=/out \
-            -e CLANGUP_BUILD_COMMIT="$GITHUB_SHA" \
-            -e CLANGUP_BUILD_ENVIRONMENT_IDENTITY \
-            -e CLANGUP_BOOTSTRAP_KIND=channel-artifact \
-            -e CLANGUP_BOOTSTRAP_IDENTITY \
-            -e HOME=/build/home \
-            "$CLANGUP_CONTAINER_IMAGE" \
-            python3 /workspace/channels/build/run.py \
+            -e CLANGUP_BUILD_COMMIT="$GITHUB_SHA" -e CLANGUP_BUILD_ENVIRONMENT_IDENTITY \
+            -e CLANGUP_BOOTSTRAP_KIND=channel-artifact -e CLANGUP_BOOTSTRAP_IDENTITY -e HOME=/build/home \
+            "$CLANGUP_CONTAINER_IMAGE" python3 /workspace/channels/build/run.py \
               --plan /input/channel-plan.json --target x86_64-unknown-linux-gnu \
               --source /input/llvm-project.tar.xz --channel-root "/workspace/$CHANNEL_ROOT" \
               --config-dir "/workspace/$CHANNEL_ROOT/build" --work /build/work --output /out \
               --jobs "$(nproc)" --link-jobs 2 --source-date-epoch "$(git log -1 --format=%ct)" \
-              --stop-after merge
-          cp "$work/work/pgo/clang.profdata" out/profile/clang.profdata
-          cp out/plan/channel-plan.json out/profile/channel-plan.json
-          printf '%s\n' "$GITHUB_SHA" > out/profile/build-commit.txt
+              --stop-after instrumented
+          tar --sort=name --owner=0 --group=0 --numeric-owner --use-compress-program='zstd -T4 -19' \
+            -C "$work/work" -cf out/instrumented/instrumented-prefix.tar.zst instrumented-prefix
+          cp out/plan/channel-plan.json out/instrumented/channel-plan.json
+          printf '%s\n' "$GITHUB_SHA" > out/instrumented/build-commit.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: libcxx-pgo-x86-profile
-          path: out/profile/
+          name: libcxx-pgo-x86-instrumented
+          path: out/instrumented/
           if-no-files-found: error
           retention-days: 14

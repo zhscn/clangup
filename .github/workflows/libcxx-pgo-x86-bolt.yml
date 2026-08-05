@@ -1,4 +1,4 @@
-name: libcxx-pgo x86 BOLT
+name: libcxx-pgo x86 BOLT reorder
 
 on:
   workflow_dispatch:
@@ -7,9 +7,17 @@ on:
         description: Run ID of the libcxx-pgo x86 final workflow
         required: true
         type: string
+      debug_profile_run_id:
+        description: Run ID of the Debug BOLT profile workflow
+        required: true
+        type: string
+      release_profile_run_id:
+        description: Run ID of the Release BOLT profile workflow
+        required: true
+        type: string
 
 concurrency:
-  group: libcxx-pgo-x86-bolt
+  group: libcxx-pgo-x86-bolt-reorder
   cancel-in-progress: false
 
 env:
@@ -20,9 +28,9 @@ env:
   BOOTSTRAP_EXACT: 22.1.8-1
 
 jobs:
-  bolt:
-    runs-on: [self-hosted, linux, x64, clangup-bolt]
-    timeout-minutes: 720
+  reorder:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
     permissions:
       actions: read
       contents: read
@@ -35,9 +43,26 @@ jobs:
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
           run-id: ${{ inputs.final_run_id }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: libcxx-pgo-x86-bolt-profile-Debug
+          path: input/bolt-debug
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.debug_profile_run_id }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: libcxx-pgo-x86-bolt-profile-Release
+          path: input/bolt-release
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.release_profile_run_id }}
       - name: Select upstream commit
         id: upstream
-        run: echo "commit=$(cat input/final/build-commit.txt)" >> "$GITHUB_OUTPUT"
+        run: |
+          cmp -s input/final/build-commit.txt input/bolt-debug/build-commit.txt
+          cmp -s input/final/build-commit.txt input/bolt-release/build-commit.txt
+          echo "commit=$(cat input/final/build-commit.txt)" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ steps.upstream.outputs.commit }}
@@ -51,6 +76,8 @@ jobs:
           mkdir -p out/plan
           go run ./cmd/channel-plan "$CHANNEL_ROOT/release.yaml" out/plan/channel-plan.json
           cmp -s out/plan/channel-plan.json input/final/channel-plan.json
+          cmp -s out/plan/channel-plan.json input/bolt-debug/channel-plan.json
+          cmp -s out/plan/channel-plan.json input/bolt-release/channel-plan.json
           python3 - <<'PY' >> "$GITHUB_ENV"
           import json
           with open("out/plan/channel-plan.json", encoding="utf-8") as file:
@@ -67,18 +94,19 @@ jobs:
       - name: Prepare source and build environment
         env:
           TARGET: x86_64-unknown-linux-gnu
-          BOLT_SAMPLING: "1"
+          BOLT_SAMPLING: "0"
         run: bash .github/scripts/prepare-libcxx-pgo-build.sh
-      - name: Train and apply BOLT
+      - name: Apply BOLT
         run: |
           work="$RUNNER_TEMP/clangup-libcxx-pgo-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           mkdir -p "$work/home" out/x86_64-unknown-linux-gnu
-          docker run --rm --privileged --pid=host --network none \
-            --cpuset-cpus=0-7 --cpus=8 --memory=48g --memory-swap=48g \
+          docker run --rm --network none \
             --user "$(id -u):$(id -g)" \
             --mount type=bind,src="$PWD",dst=/workspace,readonly \
             --mount type=bind,src="$PWD/out/plan/channel-plan.json",dst=/input/channel-plan.json,readonly \
             --mount type=bind,src="$PWD/input/final/final-prefix.tar.zst",dst=/input/final-prefix.tar.zst,readonly \
+            --mount type=bind,src="$PWD/input/bolt-debug/bolt-profiles.tar.zst",dst=/input/bolt-debug.tar.zst,readonly \
+            --mount type=bind,src="$PWD/input/bolt-release/bolt-profiles.tar.zst",dst=/input/bolt-release.tar.zst,readonly \
             --mount type=bind,src="$PWD/.cache/sources/llvm-project.tar.xz",dst=/input/llvm-project.tar.xz,readonly \
             --mount type=bind,src="$PWD/.cache/bootstrap",dst=/opt/clangup-bootstrap,readonly \
             --mount type=bind,src="$work",dst=/build \
@@ -92,7 +120,8 @@ jobs:
               --source /input/llvm-project.tar.xz --channel-root "/workspace/$CHANNEL_ROOT" \
               --config-dir "/workspace/$CHANNEL_ROOT/build" --work /build/work --output /out \
               --jobs "$(nproc)" --link-jobs 2 --source-date-epoch "$(git log -1 --format=%ct)" \
-              --start-at bolt --prefix-archive /input/final-prefix.tar.zst
+              --start-at bolt --prefix-archive /input/final-prefix.tar.zst \
+              --bolt-profile-archive /input/bolt-debug.tar.zst --bolt-profile-archive /input/bolt-release.tar.zst
           cp out/plan/channel-plan.json out/x86_64-unknown-linux-gnu/channel-plan.json
           printf '%s\n' "$GITHUB_SHA" > out/x86_64-unknown-linux-gnu/build-commit.txt
       - name: Verify baseline
@@ -100,7 +129,6 @@ jobs:
           mkdir -p verify/prefix
           tar --use-compress-program=unzstd -xf out/x86_64-unknown-linux-gnu/toolchain.tar.zst -C verify/prefix
           docker run --rm --network host \
-            --cpuset-cpus=0-7 --cpus=8 --memory=48g --memory-swap=48g \
             --mount type=bind,src="$PWD/verify/prefix",dst=/opt/clangup,readonly \
             --mount type=bind,src="$PWD",dst=/workspace,readonly \
             quay.io/centos/centos:7 bash "/workspace/$CHANNEL_ROOT/build/verify-linux.sh" /opt/clangup el7

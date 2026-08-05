@@ -58,10 +58,21 @@ export CLANGUP_INSTRUMENTED_PREFIX="${work_root}/instrumented-prefix"
 export CLANGUP_PGO_DIR="${work_root}/pgo"
 export CLANGUP_PROFDATA="${CLANGUP_PGO_DIR}/clang.profdata"
 bolt_dir="${work_root}/bolt"
+bolt_profile_dir="${work_root}/bolt-profiles"
 stamp_dir="${work_root}/stamps"
-mkdir -p "${CLANGUP_PGO_DIR}" "${bolt_dir}" "${stamp_dir}"
+mkdir -p "${CLANGUP_PGO_DIR}" "${bolt_dir}" "${bolt_profile_dir}" "${stamp_dir}"
 
-train_types=(Debug Release)
+read -r -a train_types <<< "${CLANGUP_TRAIN_TYPES:-Debug Release}"
+if [[ "${#train_types[@]}" -eq 0 ]]; then
+  echo "at least one training build type is required" >&2
+  exit 1
+fi
+for train_type in "${train_types[@]}"; do
+  case "${train_type}" in
+    Debug|Release) ;;
+    *) echo "unsupported training build type: ${train_type}" >&2; exit 1 ;;
+  esac
+done
 train_targets=(clang lld)
 
 record_command() {
@@ -211,9 +222,8 @@ bolt_input_paths() {
   readlink -f "${CLANGUP_PREFIX}/bin/lld"
 }
 
-stage_bolt() {
-  local -a inputs profiles relatives
-  : > "${bolt_dir}/inputs.list"
+stage_bolt_profile() {
+  local -a inputs
   if [[ "${CLANGUP_OPTIMIZATION_BOLT}" != 1 ]]; then
     return
   fi
@@ -221,6 +231,46 @@ stage_bolt() {
   perf record -e cycles:u -j any,u -o "${bolt_dir}/preflight.perf.data" \
     -- "${CLANGUP_PREFIX}/bin/clang" --version
   rm -f "${bolt_dir}/preflight.perf.data"
+
+  mapfile -t inputs < <(bolt_input_paths)
+  local input relative stem build_type
+  for input in "${inputs[@]}"; do
+    [[ "${input}" == "${CLANGUP_PREFIX}/"* ]] || {
+      echo "BOLT input escapes toolchain prefix: ${input}" >&2
+      exit 1
+    }
+    test -f "${input}"
+  done
+
+  for build_type in "${train_types[@]}"; do
+    local build_dir="${work_root}/bolt-training-${build_type}"
+    configure_training_tree \
+      "${build_dir}" \
+      "${CLANGUP_PREFIX}/bin/clang" \
+      "${CLANGUP_PREFIX}/bin/clang++" \
+      "${build_type}" \
+      "${work_root}/cmake-arguments.bolt-${build_type}.txt"
+    perf record -e cycles:u -j any,u \
+      -o "${bolt_dir}/${build_type}.perf.data" \
+      -- ninja -C "${build_dir}" -j "${CLANGUP_JOBS}" "${train_targets[@]}"
+    for input in "${inputs[@]}"; do
+      relative="${input#${CLANGUP_PREFIX}/}"
+      stem="$(printf '%s' "${relative}" | tr '/.' '__')"
+      "${CLANGUP_PREFIX}/bin/perf2bolt" \
+        -p "${bolt_dir}/${build_type}.perf.data" \
+        -o "${bolt_profile_dir}/${stem}-${build_type}.fdata" "${input}"
+      test -s "${bolt_profile_dir}/${stem}-${build_type}.fdata"
+    done
+    rm -f "${bolt_dir}/${build_type}.perf.data"
+  done
+}
+
+stage_bolt() {
+  local -a inputs profiles relatives
+  : > "${bolt_dir}/inputs.list"
+  if [[ "${CLANGUP_OPTIMIZATION_BOLT}" != 1 ]]; then
+    return
+  fi
 
   local snapshot_dir="${bolt_dir}/original"
   local snapshot_list="${snapshot_dir}/inputs.list"
@@ -252,30 +302,13 @@ stage_bolt() {
     mv "${snapshot_list}.tmp" "${snapshot_list}"
   fi
 
-  local build_type
-  for build_type in "${train_types[@]}"; do
-    local build_dir="${work_root}/bolt-training-${build_type}"
-    configure_training_tree \
-      "${build_dir}" \
-      "${CLANGUP_PREFIX}/bin/clang" \
-      "${CLANGUP_PREFIX}/bin/clang++" \
-      "${build_type}" \
-      "${work_root}/cmake-arguments.bolt-${build_type}.txt"
-    perf record -e cycles:u -j any,u \
-      -o "${bolt_dir}/${build_type}.perf.data" \
-      -- ninja -C "${build_dir}" -j "${CLANGUP_JOBS}" "${train_targets[@]}"
-  done
-
-  local stem data profile merged output
+  local stem profile merged output build_type
   for input in "${inputs[@]}"; do
     relative="${input#${CLANGUP_PREFIX}/}"
     stem="$(printf '%s' "${relative}" | tr '/.' '__')"
     profiles=()
-    for build_type in "${train_types[@]}"; do
-      data="${bolt_dir}/${build_type}.perf.data"
-      profile="${bolt_dir}/${stem}-${build_type}.fdata"
-      "${CLANGUP_PREFIX}/bin/perf2bolt" \
-        -p "${data}" -o "${profile}" "${input}"
+    for build_type in Debug Release; do
+      profile="${bolt_profile_dir}/${stem}-${build_type}.fdata"
       test -s "${profile}"
       profiles+=("${profile}")
     done
@@ -303,15 +336,16 @@ stage_bolt() {
 run_stage() {
   local name="$1"
   local stamp="${stamp_dir}/${name}"
+  local function_name="stage_${name//-/_}"
   if [[ -f "${stamp}" ]]; then
     echo "skip ${name}: checkpoint exists"
     return
   fi
-  "stage_${name}"
+  "${function_name}"
   touch "${stamp}"
 }
 
-stages=(instrumented train merge final bolt)
+stages=(instrumented train merge final bolt-profile bolt)
 start_index=-1
 stop_index=-1
 for index in "${!stages[@]}"; do
@@ -331,7 +365,15 @@ if [[ "${start_at}" == final && ! -s "${CLANGUP_PROFDATA}" ]]; then
   echo "final stage requires a merged PGO profile" >&2
   exit 1
 fi
-if [[ "${start_at}" == bolt ]]; then
+if [[ "${start_at}" == train ]]; then
+  for tool in clang clang++; do
+    test -x "${CLANGUP_INSTRUMENTED_PREFIX}/bin/${tool}" || {
+      echo "training stage requires ${CLANGUP_INSTRUMENTED_PREFIX}/bin/${tool}" >&2
+      exit 1
+    }
+  done
+fi
+if [[ "${start_at}" == bolt || "${start_at}" == bolt-profile ]]; then
   for tool in clang clang++ llvm-bolt perf2bolt merge-fdata; do
     test -x "${CLANGUP_PREFIX}/bin/${tool}" || {
       echo "BOLT stage requires ${CLANGUP_PREFIX}/bin/${tool}" >&2

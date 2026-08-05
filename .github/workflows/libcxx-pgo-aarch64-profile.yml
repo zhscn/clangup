@@ -1,10 +1,10 @@
-name: libcxx-pgo aarch64 profile
+name: libcxx-pgo aarch64 instrumented
 
 on:
   workflow_dispatch:
 
 concurrency:
-  group: libcxx-pgo-aarch64-profile
+  group: libcxx-pgo-aarch64-instrumented
   cancel-in-progress: false
 
 env:
@@ -53,10 +53,10 @@ jobs:
         env:
           TARGET: aarch64-unknown-linux-gnu
         run: bash .github/scripts/prepare-libcxx-pgo-build.sh
-      - name: Build and merge PGO profile
+      - name: Build instrumented compiler
         run: |
           work="$RUNNER_TEMP/clangup-libcxx-pgo-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          mkdir -p "$work" out/unused out/profile
+          mkdir -p "$work" out/unused out/instrumented
           docker run --rm --network none \
             --mount type=bind,src="$PWD",dst=/workspace,readonly \
             --mount type=bind,src="$PWD/out/plan/channel-plan.json",dst=/input/channel-plan.json,readonly \
@@ -74,13 +74,14 @@ jobs:
               --source /input/llvm-project.tar.xz --channel-root "/workspace/$CHANNEL_ROOT" \
               --config-dir "/workspace/$CHANNEL_ROOT/build" --work /build/work --output /out \
               --jobs "$(nproc)" --link-jobs 2 --source-date-epoch "$(git log -1 --format=%ct)" \
-              --stop-after merge
-          cp "$work/work/pgo/clang.profdata" out/profile/clang.profdata
-          cp out/plan/channel-plan.json out/profile/channel-plan.json
-          printf '%s\n' "$GITHUB_SHA" > out/profile/build-commit.txt
+              --stop-after instrumented
+          tar --sort=name --owner=0 --group=0 --numeric-owner --use-compress-program='zstd -T4 -19' \
+            -C "$work/work" -cf out/instrumented/instrumented-prefix.tar.zst instrumented-prefix
+          cp out/plan/channel-plan.json out/instrumented/channel-plan.json
+          printf '%s\n' "$GITHUB_SHA" > out/instrumented/build-commit.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: libcxx-pgo-aarch64-profile
-          path: out/profile/
+          name: libcxx-pgo-aarch64-instrumented
+          path: out/instrumented/
           if-no-files-found: error
           retention-days: 14

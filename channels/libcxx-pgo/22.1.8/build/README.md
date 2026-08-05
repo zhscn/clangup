@@ -14,24 +14,24 @@ The x86_64 BOLT stage rewrites Clang, LLD, `libclang-cpp.so`, and
 self-hosted GitHub runner. The aarch64 artifact uses PGO and ThinLTO.
 
 The release pipeline is split into independently dispatched workflows. Each
-downstream workflow accepts the upstream workflow run ID, downloads its named
-artifact, checks the recorded commit and resolved channel plan, and continues
-from that stage's output:
+downstream workflow accepts its required upstream workflow run IDs, downloads
+their artifacts, checks the recorded commit and resolved channel plan, and
+continues from those inputs:
 
-1. `libcxx-pgo x86 profile` produces `libcxx-pgo-x86-profile`.
-2. `libcxx-pgo x86 final` consumes that profile and produces
-   `libcxx-pgo-x86-final`.
-3. `libcxx-pgo x86 BOLT` consumes the final-prefix artifact and produces
-   `libcxx-pgo-x86-target`.
-4. `libcxx-pgo aarch64 profile` produces `libcxx-pgo-aarch64-profile`.
-5. `libcxx-pgo aarch64 final` consumes that profile and produces
-   `libcxx-pgo-aarch64-target`.
-6. `libcxx-pgo publish` consumes the x86 BOLT and aarch64 final target
-   artifacts.
+1. Each architecture builds an instrumented compiler.
+2. The Debug and Release PGO training workflows consume that compiler in
+   parallel and each produce a `clang.profdata` artifact.
+3. The final workflow consumes both profiles, merges them, and builds the PGO
+   and ThinLTO distribution.
+4. On x86_64, the Debug and Release BOLT sampling workflows consume the final
+   prefix independently and produce compact `.fdata` artifacts.
+5. The x86_64 BOLT reorder workflow consumes both `.fdata` artifacts and the
+   final prefix to produce the x86_64 target artifact.
+6. The publish workflow consumes the x86_64 and aarch64 target artifacts.
 
-Profile artifacts contain the merged `clang.profdata`; the x86 final artifact
-contains a compressed final prefix, the merged profile, and its CMake argument
-records. The target artifacts contain the packaged toolchain, manifest, channel
-plan, and build commit. The BOLT runner is reserved for trusted builds of the
-protected release branch. It has host perf access and does not run untrusted
-workflow code.
+The instrumented and final-prefix artifacts are compressed tar archives to
+preserve symlinks, permissions, and the installed runtime layout. BOLT sampling
+converts each `perf.data` file to `.fdata` before upload and removes its local
+work directory after the artifact upload. The BOLT runner is reserved for
+trusted builds of the protected release branch. It has host perf access and
+does not run untrusted workflow code.

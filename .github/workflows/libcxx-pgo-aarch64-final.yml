@@ -3,8 +3,12 @@ name: libcxx-pgo aarch64 final
 on:
   workflow_dispatch:
     inputs:
-      profile_run_id:
-        description: Run ID of the libcxx-pgo aarch64 profile workflow
+      debug_profile_run_id:
+        description: Run ID of the libcxx-pgo aarch64 Debug profile workflow
+        required: true
+        type: string
+      release_profile_run_id:
+        description: Run ID of the libcxx-pgo aarch64 Release profile workflow
         required: true
         type: string
 
@@ -34,14 +38,23 @@ jobs:
           docker image prune -af || true
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: libcxx-pgo-aarch64-profile
-          path: input/profile
+          name: libcxx-pgo-aarch64-profile-Debug
+          path: input/profile-debug
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
-          run-id: ${{ inputs.profile_run_id }}
+          run-id: ${{ inputs.debug_profile_run_id }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: libcxx-pgo-aarch64-profile-Release
+          path: input/profile-release
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.release_profile_run_id }}
       - name: Select upstream commit
         id: upstream
-        run: echo "commit=$(cat input/profile/build-commit.txt)" >> "$GITHUB_OUTPUT"
+        run: |
+          cmp -s input/profile-debug/build-commit.txt input/profile-release/build-commit.txt
+          echo "commit=$(cat input/profile-debug/build-commit.txt)" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ steps.upstream.outputs.commit }}
@@ -54,7 +67,8 @@ jobs:
         run: |
           mkdir -p out/plan
           go run ./cmd/channel-plan "$CHANNEL_ROOT/release.yaml" out/plan/channel-plan.json
-          cmp -s out/plan/channel-plan.json input/profile/channel-plan.json
+          cmp -s out/plan/channel-plan.json input/profile-debug/channel-plan.json
+          cmp -s out/plan/channel-plan.json input/profile-release/channel-plan.json
           python3 - <<'PY' >> "$GITHUB_ENV"
           import json
           with open("out/plan/channel-plan.json", encoding="utf-8") as file:
@@ -79,7 +93,8 @@ jobs:
           docker run --rm --network none \
             --mount type=bind,src="$PWD",dst=/workspace,readonly \
             --mount type=bind,src="$PWD/out/plan/channel-plan.json",dst=/input/channel-plan.json,readonly \
-            --mount type=bind,src="$PWD/input/profile/clang.profdata",dst=/input/clang.profdata,readonly \
+            --mount type=bind,src="$PWD/input/profile-debug/clang.profdata",dst=/input/debug.profdata,readonly \
+            --mount type=bind,src="$PWD/input/profile-release/clang.profdata",dst=/input/release.profdata,readonly \
             --mount type=bind,src="$PWD/.cache/sources/llvm-project.tar.xz",dst=/input/llvm-project.tar.xz,readonly \
             --mount type=bind,src="$PWD/.cache/bootstrap",dst=/opt/clangup-bootstrap,readonly \
             --mount type=bind,src="$work",dst=/build \
@@ -93,7 +108,7 @@ jobs:
               --source /input/llvm-project.tar.xz --channel-root "/workspace/$CHANNEL_ROOT" \
               --config-dir "/workspace/$CHANNEL_ROOT/build" --work /build/work --output /out \
               --jobs "$(nproc)" --link-jobs 2 --source-date-epoch "$(git log -1 --format=%ct)" \
-              --start-at final --profile /input/clang.profdata
+              --start-at final --profile /input/debug.profdata --profile /input/release.profdata
           cp out/plan/channel-plan.json out/aarch64-unknown-linux-gnu/channel-plan.json
           printf '%s\n' "$GITHUB_SHA" > out/aarch64-unknown-linux-gnu/build-commit.txt
       - name: Verify baseline
