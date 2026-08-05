@@ -40,13 +40,13 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: libcxx-pgo-x86-final
-          path: input/final
+          path: ${{ runner.temp }}/clangup-input/final
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
           run-id: ${{ inputs.final_run_id }}
       - name: Select upstream commit
         id: upstream
-        run: echo "commit=$(cat input/final/build-commit.txt)" >> "$GITHUB_OUTPUT"
+        run: echo "commit=$(cat "$RUNNER_TEMP/clangup-input/final/build-commit.txt")" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ steps.upstream.outputs.commit }}
@@ -59,7 +59,7 @@ jobs:
         run: |
           mkdir -p out/plan
           go run ./cmd/channel-plan "$CHANNEL_ROOT/release.yaml" out/plan/channel-plan.json
-          cmp -s out/plan/channel-plan.json input/final/channel-plan.json
+          cmp -s out/plan/channel-plan.json "$RUNNER_TEMP/clangup-input/final/channel-plan.json"
           python3 - <<'PY' >> "$GITHUB_ENV"
           import json
           with open("out/plan/channel-plan.json", encoding="utf-8") as file:
@@ -86,12 +86,12 @@ jobs:
             --user "$(id -u):$(id -g)" \
             --mount type=bind,src="$PWD",dst=/workspace,readonly \
             --mount type=bind,src="$PWD/out/plan/channel-plan.json",dst=/input/channel-plan.json,readonly \
-            --mount type=bind,src="$PWD/input/final/final-prefix.tar.zst",dst=/input/final-prefix.tar.zst,readonly \
+            --mount type=bind,src="$RUNNER_TEMP/clangup-input/final/final-prefix.tar.zst",dst=/input/final-prefix.tar.zst,readonly \
             --mount type=bind,src="$PWD/.cache/sources/llvm-project.tar.xz",dst=/input/llvm-project.tar.xz,readonly \
             --mount type=bind,src="$PWD/.cache/bootstrap",dst=/opt/clangup-bootstrap,readonly \
             --mount type=bind,src="$BOLT_WORK_ROOT",dst=/build \
             --mount type=bind,src="$PWD/out/unused",dst=/out \
-            -e CLANGUP_BUILD_COMMIT="$GITHUB_SHA" -e CLANGUP_BUILD_ENVIRONMENT_IDENTITY \
+            -e CLANGUP_BUILD_COMMIT="$(git rev-parse HEAD)" -e CLANGUP_BUILD_ENVIRONMENT_IDENTITY \
             -e CLANGUP_BOOTSTRAP_KIND=channel-artifact -e CLANGUP_BOOTSTRAP_IDENTITY -e HOME=/build/home \
             "$CLANGUP_CONTAINER_IMAGE" python3 /workspace/channels/build/run.py \
               --plan /input/channel-plan.json --target x86_64-unknown-linux-gnu --source /input/llvm-project.tar.xz \
@@ -102,7 +102,7 @@ jobs:
           tar --sort=name --owner=0 --group=0 --numeric-owner --use-compress-program='zstd -T4 -19' \
             -C "$BOLT_WORK_ROOT/work" -cf out/bolt-profile/bolt-profiles.tar.zst bolt-profiles
           cp out/plan/channel-plan.json out/bolt-profile/channel-plan.json
-          printf '%s\n' "$GITHUB_SHA" > out/bolt-profile/build-commit.txt
+          git rev-parse HEAD > out/bolt-profile/build-commit.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: libcxx-pgo-x86-bolt-profile-${{ inputs.build_type }}

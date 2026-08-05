@@ -28,29 +28,33 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: libcxx-pgo-x86-target
-          path: out/targets/x86_64-unknown-linux-gnu
+          path: ${{ runner.temp }}/clangup-input/x86_64-unknown-linux-gnu
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
           run-id: ${{ inputs.x86_bolt_run_id }}
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: libcxx-pgo-aarch64-target
-          path: out/targets/aarch64-unknown-linux-gnu
+          path: ${{ runner.temp }}/clangup-input/aarch64-unknown-linux-gnu
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
           run-id: ${{ inputs.aarch64_final_run_id }}
       - name: Select upstream commit
         id: upstream
         run: |
-          cmp -s out/targets/x86_64-unknown-linux-gnu/channel-plan.json out/targets/aarch64-unknown-linux-gnu/channel-plan.json
-          cmp -s out/targets/x86_64-unknown-linux-gnu/build-commit.txt out/targets/aarch64-unknown-linux-gnu/build-commit.txt
-          echo "commit=$(cat out/targets/x86_64-unknown-linux-gnu/build-commit.txt)" >> "$GITHUB_OUTPUT"
+          cmp -s "$RUNNER_TEMP/clangup-input/x86_64-unknown-linux-gnu/channel-plan.json" "$RUNNER_TEMP/clangup-input/aarch64-unknown-linux-gnu/channel-plan.json"
+          cmp -s "$RUNNER_TEMP/clangup-input/x86_64-unknown-linux-gnu/build-commit.txt" "$RUNNER_TEMP/clangup-input/aarch64-unknown-linux-gnu/build-commit.txt"
+          echo "commit=$(cat "$RUNNER_TEMP/clangup-input/x86_64-unknown-linux-gnu/build-commit.txt")" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ steps.upstream.outputs.commit }}
           clean: false
       - name: Assemble release
-        run: python3 channels/build/assemble.py --targets out/targets --output out/release
+        run: |
+          mkdir -p out/targets
+          cp -a "$RUNNER_TEMP/clangup-input/x86_64-unknown-linux-gnu" out/targets/
+          cp -a "$RUNNER_TEMP/clangup-input/aarch64-unknown-linux-gnu" out/targets/
+          python3 channels/build/assemble.py --targets out/targets --output out/release
       - name: Publish release
         env:
           UPLOAD_ENDPOINT: ${{ vars.CLANGUP_UPLOAD_ENDPOINT }}
