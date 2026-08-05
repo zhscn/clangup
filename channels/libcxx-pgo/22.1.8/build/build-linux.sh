@@ -164,7 +164,10 @@ stage_train() {
 
 stage_merge() {
   local -a profiles
-  mapfile -d '' profiles < <(find "${CLANGUP_PGO_DIR}" -name '*.profraw' -print0)
+  local profile
+  while IFS= read -r -d '' profile; do
+    profiles+=("${profile}")
+  done < <(find "${CLANGUP_PGO_DIR}" -name '*.profraw' -print0)
   if [[ "${#profiles[@]}" -eq 0 ]]; then
     echo "PGO training produced no raw profiles" >&2
     exit 1
