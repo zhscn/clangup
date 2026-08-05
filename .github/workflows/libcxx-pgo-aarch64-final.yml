@@ -108,7 +108,7 @@ jobs:
               --source /input/llvm-project.tar.xz --channel-root "/workspace/$CHANNEL_ROOT" \
               --config-dir "/workspace/$CHANNEL_ROOT/build" --work /build/work --output /out \
               --jobs "$(nproc)" --link-jobs 2 --source-date-epoch "$(git log -1 --format=%ct)" \
-              --start-at final --stop-after final --profile /input/debug.profdata --profile /input/release.profdata
+              --start-at final --profile /input/debug.profdata --profile /input/release.profdata
           cp out/plan/channel-plan.json out/aarch64-unknown-linux-gnu/channel-plan.json
           git rev-parse HEAD > out/aarch64-unknown-linux-gnu/build-commit.txt
       - name: Verify baseline
