@@ -18,6 +18,7 @@ if [[ "$(uname -m)" == x86_64 ]]; then
     "$(readlink -f "${prefix}/lib/libclang-cpp.so")" \
     "$(readlink -f "${prefix}/lib/libLLVM.so")" \
     "$(readlink -f "${prefix}/bin/lld")"; do
-    "${prefix}/bin/llvm-readelf" -S --wide "${input}" | grep -Fq .bolt.org.text
+    sections="$("${prefix}/bin/llvm-readelf" -S --wide "${input}")"
+    grep -Fq .bolt.org.text <<<"${sections}"
   done
 fi
