@@ -19,11 +19,11 @@ func runStreaming(env []string, name string, args ...string) error {
 	cmd := exec.Command(name, args...)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	cmd.Env = env
-	return cmd.Run()
+	return runCommandWithSignals(cmd)
 }
 
 func defaultJobs() int {
-	if s := os.Getenv("CMK_JOBS"); s != "" {
+	if s := os.Getenv("CMK_DEFAULT_JOBS"); s != "" {
 		if n, err := strconv.Atoi(s); err == nil && n > 0 {
 			return n
 		}

@@ -56,7 +56,8 @@ cmk install -c Release
 
 Use `-p` to select a preset and `-c` to select a configuration of a
 multi-config build. A single-config preset selects its configuration through
-`build-type` and does not use `-c`.
+`build-type` and does not use `-c`. `CMK_DEFAULT_JOBS` sets the default
+parallel job count; `-j` overrides it for commands that accept that flag.
 
 `cmk.lock` records resolved toolchains, Git revisions, and dependency build
 identities. Commit it with `cmk.yaml`. Refresh floating toolchain or Git pins

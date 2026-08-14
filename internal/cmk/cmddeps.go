@@ -252,6 +252,6 @@ cmake -S "$CMK_SRC" -B . -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX="$CMK_PREFIX" \
   -DBUILD_SHARED_LIBS=OFF
-cmake --build . -j "$CMK_JOBS"
+cmake --build . -j "$CMK_DEFAULT_JOBS"
 cmake --install . >/dev/null
 `

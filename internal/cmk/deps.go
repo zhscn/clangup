@@ -530,7 +530,7 @@ func recipeEnv(p *Project, name string, d *DepCfg, tc *Toolchain, prefix, work, 
 	env = append(env,
 		"CMK_PREFIX="+prefix,
 		"CMK_WORK="+work,
-		"CMK_JOBS="+fmt.Sprint(defaultJobs()),
+		"CMK_DEFAULT_JOBS="+fmt.Sprint(defaultJobs()),
 		"CMK_PROJECT_ROOT="+p.Root,
 	)
 	if src != "" {

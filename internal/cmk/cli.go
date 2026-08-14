@@ -359,6 +359,9 @@ func Run(args []string, stdout, stderr io.Writer, version string) int {
 	command.SetOut(stdout)
 	command.SetErr(stderr)
 	if err := command.Execute(); err != nil {
+		if code, ok := commandSignalExitCode(err); ok {
+			return code
+		}
 		fmt.Fprintln(stderr, "cmk:", err)
 		return 1
 	}
