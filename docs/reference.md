@@ -113,7 +113,7 @@ selected compiler tools.
 | `CMK_SRC` | materialized archive or pinned Git checkout |
 | `CMK_PREFIX` | required installation destination |
 | `CMK_WORK` | recipe working directory |
-| `CMK_DEFAULT_JOBS` | default parallel job count |
+| `CMK_JOBS` | parallel job count resolved by cmk |
 | `CMK_PROJECT_ROOT` | project root |
 | `CMK_TOOLCHAIN_FILE` | toolchain CMake file |
 | `CMK_DEP_<NAME>_PREFIX` | prefix of a declared direct need |
