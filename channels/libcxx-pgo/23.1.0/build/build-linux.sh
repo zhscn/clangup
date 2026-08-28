@@ -212,7 +212,7 @@ stage_final() {
   ninja -C "${compiler_rt_build}" -j "${CLANGUP_JOBS}"
   ninja -C "${compiler_rt_build}" install
 
-  test -x "${CLANGUP_PREFIX}/bin/clang-22"
+  test -x "${CLANGUP_PREFIX}/bin/clang"
   test -x "${CLANGUP_PREFIX}/bin/llvm-bolt"
   test -x "${CLANGUP_PREFIX}/bin/perf2bolt"
   test -x "${CLANGUP_PREFIX}/bin/merge-fdata"
