@@ -28,7 +28,7 @@ func TestCompareNumericVersion(t *testing.T) {
 func TestInstalledExactResolvesImportedChannel(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("CLANGUP_HOME", root)
-	prefix := filepath.Join(root, "toolchains", "libcxx", "22.1.8-1", "x86_64-unknown-linux-gnu")
+	prefix := filepath.Join(root, "toolchains", "libcxx", "23.1.0-1", "x86_64-unknown-linux-gnu")
 	if err := os.MkdirAll(filepath.Join(prefix, "bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestInstalledExactResolvesImportedChannel(t *testing.T) {
 		}
 	}
 	record := toolchain.InstallRecord{
-		Channel: "libcxx", Version: "22.1.8", Release: 1,
+		Channel: "libcxx", Version: "23.1.0", Release: 1,
 		Target: "x86_64-unknown-linux-gnu", Prefix: prefix,
 		ManifestSHA256: "manifest", ArtifactSHA256: "artifact",
 		Driver: map[string]any{"cxx_stdlib": map[string]any{"name": "libc++"}},
@@ -46,11 +46,11 @@ func TestInstalledExactResolvesImportedChannel(t *testing.T) {
 	if err := toolchain.RecordInstall(record); err != nil {
 		t.Fatal(err)
 	}
-	installed, err := installedExact("libcxx@22.1.8-1", "")
+	installed, err := installedExact("libcxx@23.1.0-1", "")
 	if err != nil || installed == nil || installed.Channel != "libcxx" {
 		t.Fatalf("installed = %#v, %v", installed, err)
 	}
-	result := resolveResultFor("libcxx@22.1.8-1", installed)
+	result := resolveResultFor("libcxx@23.1.0-1", installed)
 	if result.Channel != "libcxx" || result.Driver["cxx_stdlib"] == nil {
 		t.Fatalf("result = %#v", result)
 	}

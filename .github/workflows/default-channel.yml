@@ -8,8 +8,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  CHANNEL_ROOT: channels/default/22.1.8
-  BOOTSTRAP_IMAGE: ghcr.io/zhscn/clangup-seed:22.1.8-1
+  CHANNEL_ROOT: channels/default/23.1.0
+  BOOTSTRAP_IMAGE: ghcr.io/zhscn/clangup-seed:23.1.0-1
 
 jobs:
   plan:

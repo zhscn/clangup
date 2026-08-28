@@ -1,0 +1,219 @@
+From 26c6e50410b4e20913db6c82d3227aee977cfbd9 Mon Sep 17 00:00:00 2001
+From: Lane0218 <laneljc@qq.com>
+Date: Tue, 25 Aug 2026 10:59:49 +0800
+Subject: [PATCH] [Clang] Fix -Wunused-parameter for implicit coroutine uses
+ (#217518)
+
+Clang's coroutine semantic analysis builds references to coroutine
+parameters
+while looking up a class-specific allocation function. When overload
+resolution
+falls back to a size-only `operator new`, these speculative references
+currently
+suppress `-Wunused-parameter`.
+
+Preserve each parameter's referenced state while collecting placement
+arguments, then mark the parameters referenced only when those arguments
+are
+included in the selected allocation call. Keep this distinction when
+placement
+arguments are replaced by `std::nothrow`.
+
+Apply the same rule to promise initialization: when initialization using
+the
+coroutine parameter copies succeeds, mark the original parameters
+referenced;
+when it falls back to default initialization, leave them unchanged.
+
+Add regression coverage for both the matching and fallback
+allocation-function
+and promise-initialization cases, and add a release note.
+
+Testing:
+- `clang/test/SemaCXX/warn-unused-parameters-coroutine.cpp`: 1/1 passed.
+- `clang/test/SemaCXX/coroutine*.cpp`: 24/24 passed.
+
+Fixes #217501.
+
+Assisted-by: OpenAI Codex
+(cherry picked from commit 01fec9890ad8a4980beb8ec1945320e126ddbdcd)
+---
+ clang/docs/ReleaseNotes.md                    |  5 +++
+ clang/lib/Sema/SemaCoroutine.cpp              | 33 ++++++++++++--
+ .../warn-unused-parameters-coroutine.cpp      | 44 +++++++++++++++++++
+ 3 files changed, 79 insertions(+), 3 deletions(-)
+
+diff --git a/clang/docs/ReleaseNotes.md b/clang/docs/ReleaseNotes.md
+index 59576a299c593..695beb91b3929 100644
+--- a/clang/docs/ReleaseNotes.md
++++ b/clang/docs/ReleaseNotes.md
+@@ -590,6 +590,11 @@ latest release, please see the [Clang Web Site](https://clang.llvm.org) or the
+ 
+ ### Improvements to Clang's diagnostics
+ 
++- Fixed `-Wunused-parameter` to diagnose coroutine parameters that are only
++  considered during allocation function lookup or promise object
++  initialization, while not diagnosing parameters passed to the selected
++  allocation function or promise constructor. (#GH217501)
++
+ - Fixed bug in `-Wdocumentation` so that it correctly handles explicit
+   function template instantiations (#64087).
+ 
+diff --git a/clang/lib/Sema/SemaCoroutine.cpp b/clang/lib/Sema/SemaCoroutine.cpp
+index 7f9b1d642cf9d..4b99e4454e57a 100644
+--- a/clang/lib/Sema/SemaCoroutine.cpp
++++ b/clang/lib/Sema/SemaCoroutine.cpp
+@@ -462,6 +462,12 @@ static ExprResult buildPromiseCall(Sema &S, VarDecl *Promise,
+   return buildMemberCall(S, PromiseRef.get(), Loc, Name, Args);
+ }
+ 
++static void markCoroutineParametersReferenced(FunctionDecl &FD) {
++  for (auto *PD : FD.parameters())
++    if (!PD->getType()->isDependentType())
++      PD->setReferenced();
++}
++
+ VarDecl *Sema::buildCoroutinePromise(SourceLocation Loc) {
+   assert(isa<FunctionDecl>(CurContext) && "not in a function scope");
+   auto *FD = cast<FunctionDecl>(CurContext);
+@@ -555,6 +561,10 @@ VarDecl *Sema::buildCoroutinePromise(SourceLocation Loc) {
+         VD->setInit(MaybeCreateExprWithCleanups(Result.get()));
+         VD->setInitStyle(VarDecl::CallInit);
+         CheckCompleteVariableDeclaration(VD);
++        // The constructor is selected with the coroutine parameter copies as
++        // arguments. Mark the original parameters as referenced for
++        // -Wunused-parameter.
++        markCoroutineParametersReferenced(*FD);
+       }
+     } else
+       ActOnUninitializedDecl(VD);
+@@ -1385,9 +1395,14 @@ static bool collectPlacementArgs(Sema &S, FunctionDecl &FD, SourceLocation Loc,
+ 
+     // Build a reference to the parameter.
+     auto PDLoc = PD->getLocation();
++    // Preserve the referenced state for unused parameter diagnostics.
++    bool DeclReferenced = PD->isReferenced();
+     ExprResult PDRefExpr =
+         S.BuildDeclRefExpr(PD, PD->getOriginalType().getNonReferenceType(),
+                            ExprValueKind::VK_LValue, PDLoc);
++
++    PD->setReferenced(DeclReferenced);
++
+     if (PDRefExpr.isInvalid())
+       return false;
+ 
+@@ -1443,6 +1458,8 @@ bool CoroutineStmtBuilder::makeNewAndDeleteExpr() {
+ 
+   FunctionDecl *OperatorNew = nullptr;
+   SmallVector<Expr *, 1> PlacementArgs;
++  // Track whether PlacementArgs still refer to the coroutine parameters.
++  bool PlacementArgsFromCoroutine = false;
+   DeclarationName NewName =
+       S.getASTContext().DeclarationNames.getCXXOperatorName(OO_New);
+ 
+@@ -1491,8 +1508,11 @@ bool CoroutineStmtBuilder::makeNewAndDeleteExpr() {
+   // We don't expect to call to global operator new with (size, p0, …, pn).
+   // So if we choose to lookup the allocation function in global scope, we
+   // shouldn't lookup placement arguments.
+-  if (PromiseContainsNew && !collectPlacementArgs(S, FD, Loc, PlacementArgs))
+-    return false;
++  if (PromiseContainsNew) {
++    if (!collectPlacementArgs(S, FD, Loc, PlacementArgs))
++      return false;
++    PlacementArgsFromCoroutine = true;
++  }
+ 
+   LookupAllocationFunction();
+ 
+@@ -1558,6 +1578,7 @@ bool CoroutineStmtBuilder::makeNewAndDeleteExpr() {
+     if (!StdNoThrow)
+       return false;
+     PlacementArgs = {StdNoThrow};
++    PlacementArgsFromCoroutine = false;
+     OperatorNew = nullptr;
+     LookupAllocationFunction(AllocationFunctionScope::Global);
+   }
+@@ -1644,8 +1665,14 @@ bool CoroutineStmtBuilder::makeNewAndDeleteExpr() {
+       isAlignedAllocation(IAP.PassAlignment))
+     NewArgs.push_back(FrameAlignment);
+ 
+-  if (OperatorNew->getNumParams() > NewArgs.size())
++  // getNumParams() does not include an ellipsis, but a variadic allocation
++  // function still receives the coroutine parameters as placement arguments.
++  if (OperatorNew->isVariadic() ||
++      OperatorNew->getNumParams() > NewArgs.size()) {
+     llvm::append_range(NewArgs, PlacementArgs);
++    if (PlacementArgsFromCoroutine)
++      markCoroutineParametersReferenced(FD);
++  }
+ 
+   ExprResult NewExpr =
+       S.BuildCallExpr(S.getCurScope(), NewRef.get(), Loc, NewArgs, Loc);
+diff --git a/clang/test/SemaCXX/warn-unused-parameters-coroutine.cpp b/clang/test/SemaCXX/warn-unused-parameters-coroutine.cpp
+index fee379d869112..ef0c767dbc802 100644
+--- a/clang/test/SemaCXX/warn-unused-parameters-coroutine.cpp
++++ b/clang/test/SemaCXX/warn-unused-parameters-coroutine.cpp
+@@ -8,8 +8,12 @@ struct awaitable {
+   void await_suspend(std::coroutine_handle<>) noexcept;
+ };
+ 
++struct promise_arg {};
++
+ struct task : awaitable {
+   struct promise_type {
++    promise_type();
++    promise_type(promise_arg);
+     task get_return_object() noexcept;
+     awaitable initial_suspend() noexcept;
+     awaitable final_suspend() noexcept;
+@@ -18,10 +22,50 @@ struct task : awaitable {
+   };
+ };
+ 
++struct allocation_arg {};
++
++struct task_with_new {
++  struct promise_type {
++    void *operator new(decltype(sizeof(0)));
++    void *operator new(decltype(sizeof(0)), allocation_arg);
++    task_with_new get_return_object();
++    awaitable initial_suspend();
++    awaitable final_suspend() noexcept;
++    void unhandled_exception();
++    void return_void();
++  };
++};
++
++struct task_with_variadic_new {
++  struct promise_type {
++    void *operator new(decltype(sizeof(0)), ...);
++    task_with_variadic_new get_return_object();
++    awaitable initial_suspend();
++    awaitable final_suspend() noexcept;
++    void unhandled_exception();
++    void return_void();
++  };
++};
++
+ task foo(int a) { // expected-warning{{unused parameter 'a'}}
+   co_return;
+ }
+ 
++task promise_constructor_uses_parameter(promise_arg a) { co_return; }
++
++task_with_new class_specific_new_fallback(
++    int a) { // expected-warning{{unused parameter 'a'}}
++  co_return;
++}
++
++task_with_new placement_allocation_uses_parameter(allocation_arg a) {
++  co_return;
++}
++
++task_with_variadic_new variadic_allocation_uses_parameter(int a) {
++  co_return;
++}
++
+ task bar(int a, int b) { // expected-warning{{unused parameter 'b'}}
+   a = a + 1;
+   co_return;

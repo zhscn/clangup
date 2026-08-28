@@ -15,7 +15,7 @@ SPEC.loader.exec_module(PUBLISH)
 class PublishTest(unittest.TestCase):
     def test_upload_presigns_one_object_at_a_time_and_recovers(self):
         descriptor = {
-            "key": "releases/libcxx/22.1.8-1/targets/x/toolchain.tar.zst",
+            "key": "releases/libcxx/23.1.0-1/targets/x/toolchain.tar.zst",
             "size": 8,
             "sha256": "a" * 64,
             "content_type": "application/zstd",

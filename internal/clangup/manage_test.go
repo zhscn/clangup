@@ -41,12 +41,12 @@ func installFixture(t *testing.T, channel, version string, release int, target s
 
 func TestFindInstalledMatchesAndReportsAmbiguity(t *testing.T) {
 	t.Setenv("CLANGUP_HOME", t.TempDir())
-	x86 := installFixture(t, "libcxx", "22.1.8", 1, "x86_64-unknown-linux-gnu")
-	installFixture(t, "libcxx", "22.1.8", 1, "aarch64-unknown-linux-gnu")
+	x86 := installFixture(t, "libcxx", "23.1.0", 1, "x86_64-unknown-linux-gnu")
+	installFixture(t, "libcxx", "23.1.0", 1, "aarch64-unknown-linux-gnu")
 	installFixture(t, "default", "21.1.0", 2, "x86_64-unknown-linux-gnu")
 
 	// An ID or a prefix names exactly one install.
-	for _, selector := range []string{"libcxx@22.1.8-1#x86_64-unknown-linux-gnu", x86} {
+	for _, selector := range []string{"libcxx@23.1.0-1#x86_64-unknown-linux-gnu", x86} {
 		record, err := findInstalled(selector)
 		if err != nil || record.Prefix != x86 {
 			t.Fatalf("findInstalled(%q) = %#v, %v", selector, record, err)
@@ -70,7 +70,7 @@ func TestFindInstalledMatchesAndReportsAmbiguity(t *testing.T) {
 
 func TestRemoveToolchainClearsTheDefault(t *testing.T) {
 	t.Setenv("CLANGUP_HOME", t.TempDir())
-	prefix := installFixture(t, "libcxx", "22.1.8", 1, "x86_64-unknown-linux-gnu")
+	prefix := installFixture(t, "libcxx", "23.1.0", 1, "x86_64-unknown-linux-gnu")
 	keep := installFixture(t, "default", "21.1.0", 2, "x86_64-unknown-linux-gnu")
 	if err := toolchain.SetDefault(prefix); err != nil {
 		t.Fatal(err)
@@ -102,7 +102,7 @@ func TestCollectGarbageRemovesPartialsAndStaleRecords(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CLANGUP_HOME", home)
 	t.Setenv("CLANGUP_CACHE_HOME", filepath.Join(home, "cache"))
-	prefix := installFixture(t, "libcxx", "22.1.8", 1, "x86_64-unknown-linux-gnu")
+	prefix := installFixture(t, "libcxx", "23.1.0", 1, "x86_64-unknown-linux-gnu")
 
 	partial := filepath.Join(home, "cache", "objects", "sha256", "abc.partial")
 	staging := filepath.Join(home, "toolchains", ".clangup-install-1234")
@@ -143,20 +143,20 @@ func TestConsumerResultServesInstalledExactWithoutTheIndex(t *testing.T) {
 	t.Setenv("CLANGUP_HOME", t.TempDir())
 	t.Setenv("CLANGUP_INDEX_URL", "https://index.invalid/index.json")
 	t.Setenv("CLANGUP_CONFIG_HOME", t.TempDir())
-	prefix := installFixture(t, "libcxx", "22.1.8", 1, "x86_64-unknown-linux-gnu")
+	prefix := installFixture(t, "libcxx", "23.1.0", 1, "x86_64-unknown-linux-gnu")
 
-	resolved, err := consumerResult("libcxx@22.1.8-1", "", "", false)
+	resolved, err := consumerResult("libcxx@23.1.0-1", "", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved.Channel != "libcxx" || resolved.Version != "22.1.8" || resolved.Release != 1 {
+	if resolved.Channel != "libcxx" || resolved.Version != "23.1.0" || resolved.Release != 1 {
 		t.Fatalf("resolve result = %#v", resolved)
 	}
 	if resolved.Install != nil {
 		t.Errorf("resolve carried an install block: %#v", resolved.Install)
 	}
 
-	ensured, err := consumerResult("libcxx@22.1.8-1", "", "", true)
+	ensured, err := consumerResult("libcxx@23.1.0-1", "", "", true)
 	if err != nil {
 		t.Fatal(err)
 	}

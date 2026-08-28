@@ -61,9 +61,9 @@ const cmkYAMLTemplate = `version: 1
 
 # Toolchain selectors are resolved in exact-platform, OS, default order.
 # toolchain:
-#   default: default@22.1.8-1
-#   linux: libcxx@22.1.8-1
-#   linux-aarch64: libcxx@22.1.8-1
+#   default: default@23.1.0-1
+#   linux: libcxx@23.1.0-1
+#   linux-aarch64: libcxx@23.1.0-1
 
 cmake:
   generator: Ninja Multi-Config

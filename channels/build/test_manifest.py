@@ -18,7 +18,7 @@ class ManifestTest(unittest.TestCase):
             artifact = Path(directory) / "toolchain.tar.zst"
             artifact.write_bytes(b"artifact")
             plan = {
-                "release": {"channel": "default", "version": "22.1.8", "release": 1},
+                "release": {"channel": "default", "version": "23.1.0", "release": 1},
                 "source": {
                     "url": "https://example.com/llvm.tar.xz",
                     "sha256": "a" * 64,

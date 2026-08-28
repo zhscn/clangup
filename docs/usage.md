@@ -14,7 +14,7 @@ eval "$(clangup env)"
 ```
 
 A selector is a channel such as `libcxx`, or an exact release such as
-`libcxx@22.1.8-1`. A channel follows its current release; an exact release is
+`libcxx@23.1.0-1`. A channel follows its current release; an exact release is
 stable. `default` uses the host's standard library, linker, runtime, and
 unwind library. On Linux, `libcxx` uses libc++, LLD, compiler-rt, and libgcc_s.
 `libcxx-pgo` keeps that driver contract and adds PGO with ThinLTO; its x86_64
@@ -24,10 +24,10 @@ Useful lifecycle commands:
 
 ```sh
 clangup list
-clangup default libcxx@22.1.8-1
-clangup resolve libcxx@22.1.8-1 --format=json
-clangup path libcxx@22.1.8-1
-clangup uninstall libcxx@22.1.8-1
+clangup default libcxx@23.1.0-1
+clangup resolve libcxx@23.1.0-1 --format=json
+clangup path libcxx@23.1.0-1
+clangup uninstall libcxx@23.1.0-1
 ```
 
 `resolve`, `ensure`, and `path` can use an installed exact release without

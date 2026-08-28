@@ -5,7 +5,7 @@ prefix="${1:?usage: verify-linux.sh <prefix> <profile>}"
 profile="${2:?usage: verify-linux.sh <prefix> <profile>}"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-bash "${script_dir}/../../../libcxx/22.1.8/build/verify-linux.sh" \
+bash "${script_dir}/../../../libcxx/23.1.0/build/verify-linux.sh" \
   "${prefix}" "${profile}"
 
 for tool in llvm-bolt merge-fdata perf2bolt; do

@@ -1,6 +1,6 @@
 # libcxx-pgo build
 
-The Linux build uses the published `default@22.1.8-1` toolchain and the
+The Linux build uses the published `default@23.1.0-1` toolchain and the
 clangup builder image. Its stages are:
 
 1. build an IR-instrumented Clang;

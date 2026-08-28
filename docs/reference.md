@@ -24,7 +24,7 @@
 toolchain:
   default: default
   linux: libcxx
-  linux-aarch64: libcxx@22.1.8-1
+  linux-aarch64: libcxx@23.1.0-1
   macos: default
 ```
 

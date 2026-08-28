@@ -25,7 +25,7 @@ func TestResolveToolchainUsesClangupChannelInterface(t *testing.T) {
 		t.Fatal(err)
 	}
 	log := filepath.Join(directory, "clangup.args")
-	result := fmt.Sprintf(`{"schema":"clangup.resolve/v1","channel":"libcxx","version":"22.1.8","release":1,"target":"x86_64-unknown-linux-gnu","manifest_sha256":"%s","artifact_sha256":"%s","driver":{"cxx_stdlib":{"name":"libc++"}},"install":{"prefix":%q,"cc":%q,"cxx":%q,"toolchain_file":%q,"tools":{"clang-format":%q,"clang-tidy":%q}}}`,
+	result := fmt.Sprintf(`{"schema":"clangup.resolve/v1","channel":"libcxx","version":"23.1.0","release":1,"target":"x86_64-unknown-linux-gnu","manifest_sha256":"%s","artifact_sha256":"%s","driver":{"cxx_stdlib":{"name":"libc++"}},"install":{"prefix":%q,"cc":%q,"cxx":%q,"toolchain_file":%q,"tools":{"clang-format":%q,"clang-tidy":%q}}}`,
 		strings.Repeat("a", 64), strings.Repeat("b", 64), prefix,
 		filepath.Join(prefix, "bin", "clang"), filepath.Join(prefix, "bin", "clang++"), toolchainFile,
 		filepath.Join(prefix, "bin", "clang-format"), filepath.Join(prefix, "bin", "clang-tidy"))
@@ -41,11 +41,11 @@ func TestResolveToolchainUsesClangupChannelInterface(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !dirty || toolchain.Selector != "libcxx@22.1.8-1" || toolchain.CXXStdlib != "libc++" {
+	if !dirty || toolchain.Selector != "libcxx@23.1.0-1" || toolchain.CXXStdlib != "libc++" {
 		t.Fatalf("unexpected toolchain: %#v, dirty=%v", toolchain, dirty)
 	}
 	pin := lock.Toolchains[hostPlatform(runtime.GOOS, runtime.GOARCH)]
-	if pin == nil || pin.Selector != "libcxx@22.1.8-1" || pin.Target != "x86_64-unknown-linux-gnu" {
+	if pin == nil || pin.Selector != "libcxx@23.1.0-1" || pin.Target != "x86_64-unknown-linux-gnu" {
 		t.Fatalf("unexpected lock: %#v", lock.Toolchains)
 	}
 	arguments, err := os.ReadFile(log)
@@ -65,14 +65,14 @@ func TestResolveToolchainUsesClangupChannelInterface(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(arguments) != "ensure libcxx@22.1.8-1 --target x86_64-unknown-linux-gnu --format=json\n" {
+	if string(arguments) != "ensure libcxx@23.1.0-1 --target x86_64-unknown-linux-gnu --format=json\n" {
 		t.Fatalf("pinned clangup arguments = %q", arguments)
 	}
 }
 
 func TestEffectiveSelectorUsesMatchingChannelPin(t *testing.T) {
-	pin := &LockToolchain{Selector: "libcxx@22.1.8-1"}
-	if got := effectiveSelector("libcxx", pin); got != "libcxx@22.1.8-1" {
+	pin := &LockToolchain{Selector: "libcxx@23.1.0-1"}
+	if got := effectiveSelector("libcxx", pin); got != "libcxx@23.1.0-1" {
 		t.Fatalf("effectiveSelector() = %q", got)
 	}
 	if got := effectiveSelector("default", pin); got != "default" {

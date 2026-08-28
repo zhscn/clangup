@@ -305,13 +305,13 @@ func TestLockRoundTrip(t *testing.T) {
 	lk := &Lock{
 		Toolchains: map[string]*LockToolchain{
 			"linux-x86_64": {
-				Selector:       "libcxx@22.1.8-1",
+				Selector:       "libcxx@23.1.0-1",
 				Target:         "x86_64-unknown-linux-gnu",
 				ManifestSHA256: strings.Repeat("a", 64),
 				ArtifactSHA256: strings.Repeat("b", 64),
 			},
 			"macos-aarch64": {
-				Selector:       "default@22.1.8-1",
+				Selector:       "default@23.1.0-1",
 				Target:         "arm64-apple-darwin",
 				ManifestSHA256: strings.Repeat("c", 64),
 				ArtifactSHA256: strings.Repeat("d", 64),
@@ -329,7 +329,7 @@ func TestLockRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Toolchains["linux-x86_64"].Selector != "libcxx@22.1.8-1" || got.Toolchains["linux-x86_64"].Target != "x86_64-unknown-linux-gnu" || got.Toolchains["macos-aarch64"].Selector != "default@22.1.8-1" || got.Deps["fdb"] == nil || got.Deps["fdb"].Commit != lk.Deps["fdb"].Commit {
+	if got.Toolchains["linux-x86_64"].Selector != "libcxx@23.1.0-1" || got.Toolchains["linux-x86_64"].Target != "x86_64-unknown-linux-gnu" || got.Toolchains["macos-aarch64"].Selector != "default@23.1.0-1" || got.Deps["fdb"] == nil || got.Deps["fdb"].Commit != lk.Deps["fdb"].Commit {
 		t.Errorf("round trip mismatch: %+v", got)
 	}
 	if got.Deps["fdb"].Stamps["linux-x86_64"] != "aabbccdd" || got.Deps["fdb"].Stamps["macos-aarch64"] != "eeff0011" || got.Deps["zlib"] == nil || got.Deps["zlib"].Stamps["linux-x86_64"] != "deadbeef00112233" {
@@ -342,7 +342,7 @@ func TestLegacyToolchainLockMigratesByTargetPlatform(t *testing.T) {
 	legacy := `schema = 1
 
 [toolchain]
-selector = "default@22.1.8-1"
+selector = "default@23.1.0-1"
 target = "arm64-apple-darwin"
 manifest_sha256 = "manifest"
 artifact_sha256 = "artifact"
@@ -357,7 +357,7 @@ stamp = "legacy-stamp"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !lk.dirty || lk.Toolchains["macos-aarch64"] == nil || lk.Toolchains["macos-aarch64"].Selector != "default@22.1.8-1" || lk.Deps["fmt"].Stamps["macos-aarch64"] != "legacy-stamp" {
+	if !lk.dirty || lk.Toolchains["macos-aarch64"] == nil || lk.Toolchains["macos-aarch64"].Selector != "default@23.1.0-1" || lk.Deps["fmt"].Stamps["macos-aarch64"] != "legacy-stamp" {
 		t.Fatalf("legacy lock was not migrated: %#v", lk)
 	}
 	if err := saveLock(root, lk); err != nil {

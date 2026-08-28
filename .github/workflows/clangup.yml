@@ -65,19 +65,19 @@ jobs:
             channels/build/assemble.py \
             channels/build/publish.py
           python3 -m unittest discover -s channels/build -p 'test_*.py'
-          python3 -m unittest discover -s channels/default/22.1.8/build -p 'test_*.py'
-          python3 -m unittest discover -s channels/libcxx/22.1.8/build -p 'test_*.py'
-          python3 -m unittest discover -s channels/libcxx-pgo/22.1.8/build -p 'test_*.py'
+          python3 -m unittest discover -s channels/default/23.1.0/build -p 'test_*.py'
+          python3 -m unittest discover -s channels/libcxx/23.1.0/build -p 'test_*.py'
+          python3 -m unittest discover -s channels/libcxx-pgo/23.1.0/build -p 'test_*.py'
           bash -n \
-            channels/default/22.1.8/build/build-linux.sh \
-            channels/default/22.1.8/build/build-macos.sh \
-            channels/default/22.1.8/build/verify-linux.sh \
-            channels/default/22.1.8/build/verify-asan-matrix.sh \
-            channels/libcxx/22.1.8/build/build-linux.sh \
-            channels/libcxx/22.1.8/build/verify-linux.sh \
-            channels/libcxx/22.1.8/build/verify-asan-matrix.sh \
-            channels/libcxx-pgo/22.1.8/build/build-linux.sh \
-            channels/libcxx-pgo/22.1.8/build/verify-linux.sh
+            channels/default/23.1.0/build/build-linux.sh \
+            channels/default/23.1.0/build/build-macos.sh \
+            channels/default/23.1.0/build/verify-linux.sh \
+            channels/default/23.1.0/build/verify-asan-matrix.sh \
+            channels/libcxx/23.1.0/build/build-linux.sh \
+            channels/libcxx/23.1.0/build/verify-linux.sh \
+            channels/libcxx/23.1.0/build/verify-asan-matrix.sh \
+            channels/libcxx-pgo/23.1.0/build/build-linux.sh \
+            channels/libcxx-pgo/23.1.0/build/verify-linux.sh
 
       - name: Check module files
         run: go mod tidy -diff

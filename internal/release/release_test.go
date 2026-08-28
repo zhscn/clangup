@@ -10,7 +10,7 @@ import (
 )
 
 func TestDefaultReleasePlan(t *testing.T) {
-	loaded, err := Load(filepath.Join("..", "..", "channels", "default", "22.1.8", "release.yaml"))
+	loaded, err := Load(filepath.Join("..", "..", "channels", "default", "23.1.0", "release.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -18,7 +18,7 @@ func TestDefaultReleasePlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Release.Channel != "default" || len(plan.Targets) != 3 || len(plan.Source.Patches) != 1 {
+	if plan.Release.Channel != "default" || len(plan.Targets) != 3 || len(plan.Source.Patches) != 2 {
 		t.Fatalf("unexpected default plan: %#v", plan)
 	}
 	if plan.Targets[0].Triple != "aarch64-unknown-linux-gnu" || plan.Targets[1].Driver.RTLib != "compiler-rt" {
@@ -27,7 +27,7 @@ func TestDefaultReleasePlan(t *testing.T) {
 }
 
 func TestLibcxxReleasePlan(t *testing.T) {
-	loaded, err := Load(filepath.Join("..", "..", "channels", "libcxx", "22.1.8", "release.yaml"))
+	loaded, err := Load(filepath.Join("..", "..", "channels", "libcxx", "23.1.0", "release.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +35,7 @@ func TestLibcxxReleasePlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Release.Channel != "libcxx" || len(plan.Targets) != 2 || len(plan.Source.Patches) != 1 {
+	if plan.Release.Channel != "libcxx" || len(plan.Targets) != 2 || len(plan.Source.Patches) != 2 {
 		t.Fatalf("unexpected libcxx plan: %#v", plan)
 	}
 	for _, target := range plan.Targets {
@@ -48,7 +48,7 @@ func TestLibcxxReleasePlan(t *testing.T) {
 }
 
 func TestLibcxxPGOReleasePlan(t *testing.T) {
-	loaded, err := Load(filepath.Join("..", "..", "channels", "libcxx-pgo", "22.1.8", "release.yaml"))
+	loaded, err := Load(filepath.Join("..", "..", "channels", "libcxx-pgo", "23.1.0", "release.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestLibcxxPGOReleasePlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Release.Channel != "libcxx-pgo" || len(plan.Targets) != 2 || len(plan.Source.Patches) != 1 {
+	if plan.Release.Channel != "libcxx-pgo" || len(plan.Targets) != 2 || len(plan.Source.Patches) != 2 {
 		t.Fatalf("unexpected libcxx-pgo plan: %#v", plan)
 	}
 	for _, target := range plan.Targets {
