@@ -4,8 +4,8 @@ ARG BASE_IMAGE=clangup-builder:1
 # Fixed seed release
 # -----------------------------------------------------------------------------
 
-ARG LLVM_VERSION=23.1.0
-ARG LLVM_SHA256=ab1f0e3ec52448c33e8782eaf0422504b87c7b016b22514653ee0d8fcee479ff
+ARG LLVM_VERSION=22.1.8
+ARG LLVM_SHA256=922f1817a0df7b1489272d18134ee0087a8b068828f87ac63b9861b1a9965888
 ARG SEED_PREFIX=/opt/clangup-seed
 
 # -----------------------------------------------------------------------------

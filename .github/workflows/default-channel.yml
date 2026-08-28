@@ -9,7 +9,7 @@ concurrency:
 
 env:
   CHANNEL_ROOT: channels/default/23.1.0
-  BOOTSTRAP_IMAGE: ghcr.io/zhscn/clangup-seed:23.1.0-1
+  BOOTSTRAP_IMAGE: ghcr.io/zhscn/clangup-seed:22.1.8-1
 
 jobs:
   plan:

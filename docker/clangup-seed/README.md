@@ -1,6 +1,6 @@
 # clangup seed image
 
-The seed image provides Clang 23.1.0 for bootstrapping LLVM toolchain builds.
+The seed image provides Clang 22.1.8 for bootstrapping LLVM toolchain builds.
 It contains:
 
 - Clang, LLD and LLVM archive tools;
@@ -22,7 +22,7 @@ docker build \
   --build-arg BASE_IMAGE=clangup-builder:1 \
   --build-arg BASE_PROFILE=el7 \
   -f docker/clangup-seed/Dockerfile \
-  -t clangup-seed:23.1.0-1 .
+  -t clangup-seed:22.1.8-1 .
 ```
 
 ```sh
@@ -32,7 +32,7 @@ docker build \
   --build-arg BASE_IMAGE=clangup-builder:1 \
   --build-arg BASE_PROFILE=el8 \
   -f docker/clangup-seed/Dockerfile \
-  -t clangup-seed:23.1.0-1 .
+  -t clangup-seed:22.1.8-1 .
 ```
 
-Published tags are `23.1.0-1` and `latest`.
+Published tags are `22.1.8-1` and `latest`.
