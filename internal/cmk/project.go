@@ -162,6 +162,24 @@ func (p *Project) tool(name string) (string, error) {
 	return tc.command(name)
 }
 
+// configuredTool lets a project override one tool with an absolute or
+// project-relative path while retaining the normal toolchain/PATH lookup when
+// no override is configured.
+func (p *Project) configuredTool(name, configured string) (string, error) {
+	if configured == "" {
+		return p.tool(name)
+	}
+	configured = expandVars(configured, map[string]string{"PROJECT_ROOT": p.Root})
+	if !filepath.IsAbs(configured) {
+		configured = filepath.Join(p.Root, configured)
+	}
+	path, err := exec.LookPath(filepath.Clean(configured))
+	if err != nil {
+		return "", fmt.Errorf("configured %s not found or not executable: %s", name, configured)
+	}
+	return path, nil
+}
+
 func openProject() (*Project, error) {
 	root, err := findProjectRoot()
 	if err != nil {

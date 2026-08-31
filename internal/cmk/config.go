@@ -112,10 +112,12 @@ type InstallCfg struct {
 }
 
 type FmtCfg struct {
-	Ignore []string `yaml:"ignore"`
+	Command string   `yaml:"command"`
+	Ignore  []string `yaml:"ignore"`
 }
 
 type LintCfg struct {
+	Command          string   `yaml:"command"`
 	Ignore           []string `yaml:"ignore"`
 	WarningsAsErrors bool     `yaml:"warnings-as-errors"`
 	HeaderFilter     string   `yaml:"header-filter"`

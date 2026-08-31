@@ -250,7 +250,7 @@ func cmdFmt(explicitFiles []string, options fmtOptions) error {
 			fmt.Println(file)
 		}
 	}
-	clangFormat, err := p.tool("clang-format")
+	clangFormat, err := p.configuredTool("clang-format", p.Cfg.Fmt.Command)
 	if err != nil {
 		return err
 	}
@@ -454,7 +454,7 @@ func cmdLint(explicitFiles []string, options lintOptions) error {
 
 	useColor := stdoutIsTerminal()
 	tidyArgs := lintCommandArgs(lintDBDir, p.Cfg.Lint, options.WarningsAsErrors, options.Fix, useColor)
-	clangTidy, err := p.tool("clang-tidy")
+	clangTidy, err := p.configuredTool("clang-tidy", p.Cfg.Lint.Command)
 	if err != nil {
 		return err
 	}

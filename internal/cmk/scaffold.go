@@ -121,9 +121,11 @@ cmake:
 #     ASAN_OPTIONS: detect_leaks=1
 
 # format:
+#   command: tools/clang-format
 #   ignore: [third_party/**]
 
 # lint:
+#   command: tools/clang-tidy
 #   ignore: [third_party/**]
 #   header-filter: ^(src|include)/
 `

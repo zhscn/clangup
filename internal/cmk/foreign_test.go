@@ -174,6 +174,30 @@ func TestToolResolvesFromPathWithoutACompiler(t *testing.T) {
 	}
 }
 
+func TestConfiguredToolOverridesToolchainAndResolvesFromProjectRoot(t *testing.T) {
+	root := t.TempDir()
+	tool := filepath.Join(root, "tools", "clang-format")
+	if err := os.MkdirAll(filepath.Dir(tool), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tool, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := &Project{Root: root, Cfg: &Config{Toolchain: ToolchainCfg{"default": "unavailable"}}}
+
+	got, err := p.configuredTool("clang-format", "${PROJECT_ROOT}/tools/clang-format")
+	if err != nil || got != tool {
+		t.Fatalf("configuredTool = (%q, %v), want %q", got, err, tool)
+	}
+	got, err = p.configuredTool("clang-format", "tools/clang-format")
+	if err != nil || got != tool {
+		t.Fatalf("relative configuredTool = (%q, %v), want %q", got, err, tool)
+	}
+	if _, err := p.configuredTool("clang-tidy", "tools/missing"); err == nil || !strings.Contains(err.Error(), "configured clang-tidy") {
+		t.Fatalf("missing configuredTool error = %v", err)
+	}
+}
+
 // Building an existing tree uses the compiler recorded in its cache, so
 // cmk resolves no toolchain of its own — and needs none to be available.
 func TestBuildEnvSkipsToolchainForForeignTree(t *testing.T) {

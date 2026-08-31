@@ -12,8 +12,8 @@
 | `install` | installation prefix, component, and stripping |
 | `env` | environment variables for project commands |
 | `target-env` | environment variables for a specific `cmk run` target |
-| `format` | files excluded from `cmk fmt` |
-| `lint` | files excluded from linting and clang-tidy options |
+| `format` | clang-format command and files excluded from `cmk fmt` |
+| `lint` | clang-tidy command, exclusions, and diagnostic options |
 
 ## Toolchains
 
@@ -31,6 +31,24 @@ toolchain:
 When no selector matches, cmk uses `CC` and `CXX` or discovers a system
 compiler pair. Selected clangup toolchains provide `clang-format` and
 `clang-tidy`; system tools come from `PATH`.
+
+## Format and lint tools
+
+`format.command` and `lint.command` select project-specific executables. An
+absolute path is used directly; a relative path is resolved from the project
+root. When omitted, the selected clangup toolchain provides the tool, or cmk
+finds it on `PATH` when the project has no toolchain selector.
+
+```yaml
+format:
+  command: tools/clang-format
+  ignore: [third_party/**]
+
+lint:
+  command: /opt/llvm/bin/clang-tidy
+  ignore: [third_party/**]
+  header-filter: ^(src|include)/
+```
 
 ## CMake configuration
 

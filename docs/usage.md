@@ -152,3 +152,7 @@ cmk lint src/file.cc --fix
 
 `cmk lint` needs a compilation database. Run `cmk config` for a managed
 project when one has not been generated yet.
+
+Set `format.command` or `lint.command` in `cmk.yaml` to use a specific
+clang-format or clang-tidy executable. Relative paths are resolved from the
+project root.

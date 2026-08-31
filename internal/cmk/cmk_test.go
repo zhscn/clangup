@@ -547,6 +547,26 @@ cmake:
 	}
 }
 
+func TestYAMLConfigFormatAndLintCommands(t *testing.T) {
+	root := t.TempDir()
+	body := `version: 1
+format:
+  command: tools/clang-format
+lint:
+  command: /opt/llvm/bin/clang-tidy
+`
+	if err := os.WriteFile(filepath.Join(root, configFileName), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfig(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Fmt.Command != "tools/clang-format" || cfg.Lint.Command != "/opt/llvm/bin/clang-tidy" {
+		t.Fatalf("tool commands = %q, %q", cfg.Fmt.Command, cfg.Lint.Command)
+	}
+}
+
 func TestYAMLConfigValidation(t *testing.T) {
 	for name, body := range map[string]string{
 		"unknown field": `version: 1
