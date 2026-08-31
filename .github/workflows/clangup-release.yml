@@ -44,8 +44,35 @@ jobs:
             cmk-${{ matrix.goos }}-${{ matrix.goarch }}
           if-no-files-found: error
 
+  clion-plugin:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: integrations/clion-cmk
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Set up Java
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+          cache-dependency-path: integrations/clion-cmk/gradle/wrapper/gradle-wrapper.properties
+      - name: Build plugin
+        env:
+          PLUGIN_VERSION: ${{ github.ref_name }}
+        run: ./gradlew test verifyPlugin buildPlugin -PpluginVersion="${PLUGIN_VERSION#v}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cmk-clion-plugin
+          path: integrations/clion-cmk/build/distributions/cmk-clion-*.zip
+          if-no-files-found: error
+
   release:
-    needs: build
+    needs: [build, clion-plugin]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -58,6 +85,10 @@ jobs:
           pattern: cli-*
           path: dist
           merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: cmk-clion-plugin
+          path: dist
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

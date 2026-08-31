@@ -28,3 +28,6 @@ API. Build it against a local CLion installation:
 ```sh
 ./gradlew buildPlugin -PclionPath=/path/to/clion
 ```
+
+Without `clionPath`, Gradle downloads CLion 2026.2.1 as the build SDK. The
+installable archive is written to `build/distributions/`.

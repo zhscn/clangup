@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "com.github.zhscn"
-version = "0.1.0"
+version = providers.gradleProperty("pluginVersion").getOrElse("0.1.0")
 
 repositories {
     mavenCentral()
@@ -15,7 +15,12 @@ repositories {
 
 dependencies {
     intellijPlatform {
-        local(providers.gradleProperty("clionPath"))
+        val clionPath = providers.gradleProperty("clionPath")
+        if (clionPath.isPresent) {
+            local(clionPath)
+        } else {
+            clion("2026.2.1")
+        }
         bundledPlugin("com.intellij.cmake")
     }
 
