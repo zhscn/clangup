@@ -115,6 +115,7 @@ func newRootCommand(version string) *cobra.Command {
 	root.AddCommand(
 		newNewCommand(), newInitCommand(), newSyncCommand(), newUpdateCommand(),
 		newAddCommand(), newDevCommand(), newConfigCommand(), newBuildCommand(),
+		newEnsureConfiguredCommand(),
 		newRunCommand(), newTestCommand(), newInstallCommand(), newTUCommand(),
 		newRefreshCommand(), newFmtCommand(), newLintCommand(), newEnvCommand(),
 		newShellCommand(), newCleanCommand(), newDoctorCommand(), newVersionCommand(version),
@@ -183,6 +184,22 @@ func newConfigCommand() *cobra.Command {
 		return cmdConfig(preset, buildDir, passthrough)
 	}}
 	command.Flags().StringVarP(&buildDir, "build", "b", "", "CMake build directory")
+	return command
+}
+
+func newEnsureConfiguredCommand() *cobra.Command {
+	var preset, buildDir string
+	command := &cobra.Command{
+		Use:   "ensure-configured",
+		Short: "Configure a managed build tree only when stale",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return cmdEnsureConfigured(preset, buildDir)
+		},
+	}
+	command.Flags().StringVarP(&preset, "preset", "p", "", "Configure preset")
+	command.Flags().StringVarP(&buildDir, "build", "b", "", "CMake build directory")
+	command.MarkFlagsMutuallyExclusive("preset", "build")
 	return command
 }
 

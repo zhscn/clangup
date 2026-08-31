@@ -89,6 +89,10 @@ Every preset owns its `build-dir`; an omitted directory is `build/<preset>`.
 multi-config preset exposes every entry in `configurations`; a single-config
 preset uses `build-type`.
 
+IDE integrations use `cmk ensure-configured -p <preset>` before loading the
+CMake File API model. The command configures a missing or stale tree and does
+not write to a current tree, allowing file-watcher reloads to converge.
+
 `compile` supplies common C and C++ flags. `c`, `cxx`, and `link` supply
 language- or linker-specific flags. cmk passes them through
 `CMAKE_<LANG>_FLAGS_<CONFIG>` and `CMAKE_<KIND>_LINKER_FLAGS_<CONFIG>`.

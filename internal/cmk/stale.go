@@ -101,6 +101,15 @@ func (t *buildTree) ensureConfigured(policy configurePolicy) error {
 			return err
 		}
 	}
+	lock, err := lockBuildDir(dir)
+	if err != nil {
+		return err
+	}
+	defer unlockFile(lock)
+
+	// Another cmk process may have refreshed the tree while this process
+	// waited. Recheck under the lock so IDE file-watcher reloads converge
+	// without a redundant configure and another round of filesystem events.
 	reason := t.reconfigureReason(tc)
 	if reason == "" {
 		return nil
@@ -108,7 +117,7 @@ func (t *buildTree) ensureConfigured(policy configurePolicy) error {
 	fmt.Fprintf(os.Stderr, "cmk: %s; reconfiguring %s\n", reason, dir)
 	// Re-apply the ad-hoc args from the last explicit configure: an
 	// automatic reconfigure must not silently change the configuration.
-	return t.configure(stampExtra(dir))
+	return t.configureLocked(stampExtra(dir))
 }
 
 // bootstrapIfUnconfigured configures the selected preset when its build tree

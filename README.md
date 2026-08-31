@@ -51,6 +51,8 @@ cmk test
   custom dependencies, patches, and local dependency overlays.
 - [Project reference](docs/reference.md) defines `cmk.yaml`, `cmk.lock`, and
   the dependency recipe environment.
+- [CLion integration](integrations/clion-cmk/README.md) lets cmk configure a
+  shared build tree while CLion retains its native CMake project workflow.
 
 Run `clangup --help` or `cmk --help` for the complete command list. Use
 `clangup doctor` and `cmk doctor` to inspect toolchain and project resolution.

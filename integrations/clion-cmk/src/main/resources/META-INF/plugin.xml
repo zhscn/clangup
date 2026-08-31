@@ -1,0 +1,24 @@
+<idea-plugin>
+  <id>com.github.zhscn.cmk.integration</id>
+  <name>cmk Integration</name>
+  <vendor>zhscn</vendor>
+
+  <description><![CDATA[
+    Lets cmk own configuration of its CMake build trees while CLion retains
+    its native project model, build, test, run, and debug support.
+  ]]></description>
+
+  <depends>com.intellij.modules.platform</depends>
+  <depends>com.intellij.cmake</depends>
+
+  <extensions defaultExtensionNs="com.intellij.cmake">
+    <runnerStep implementation="com.github.zhscn.cmk.clion.CmkRunnerStep" order="last"/>
+  </extensions>
+
+  <extensions defaultExtensionNs="com.intellij">
+    <projectConfigurable groupId="build"
+                         id="CmkSettings"
+                         displayName="cmk"
+                         instance="com.github.zhscn.cmk.clion.CmkConfigurable"/>
+  </extensions>
+</idea-plugin>

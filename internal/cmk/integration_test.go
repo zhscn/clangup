@@ -134,6 +134,35 @@ func TestIntegrationReconfigureLifecycle(t *testing.T) {
 	if got := itReason(t, p, dir); got != "" {
 		t.Fatalf("fresh configure: unexpected reason %q", got)
 	}
+	cacheInfo, err := os.Stat(filepath.Join(dir, "CMakeCache.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stampInfo, err := os.Stat(filepath.Join(dir, injectionStampFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := lockBuildDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ensured := make(chan error, 1)
+	go func() { ensured <- cmdEnsureConfigured("", dir) }()
+	select {
+	case err := <-ensured:
+		unlockFile(lock)
+		t.Fatalf("ensure-configured did not wait for an active configure: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	unlockFile(lock)
+	if err := <-ensured; err != nil {
+		t.Fatal(err)
+	}
+	cacheAfter, _ := os.Stat(filepath.Join(dir, "CMakeCache.txt"))
+	stampAfter, _ := os.Stat(filepath.Join(dir, injectionStampFile))
+	if !cacheAfter.ModTime().Equal(cacheInfo.ModTime()) || !stampAfter.ModTime().Equal(stampInfo.ModTime()) {
+		t.Fatal("ensure-configured rewrote a fresh build tree")
+	}
 
 	// A CMake input edit is detected and healed.
 	touchAfterStamp(t, root, dir, "CMakeLists.txt")

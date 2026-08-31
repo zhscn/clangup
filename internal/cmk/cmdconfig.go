@@ -42,6 +42,46 @@ func cmdConfig(presetName, buildDir string, extraArgs []string) error {
 	return tree.configure(extraArgs)
 }
 
+// cmdEnsureConfigured is the stable integration entry point for IDEs and
+// other project-model consumers. It updates a managed build tree only when
+// its recorded configuration is stale, so a file watcher reacting to the
+// resulting CMake files converges without another write.
+func cmdEnsureConfigured(presetName, buildDir string) error {
+	p, err := openProject()
+	if err != nil {
+		return err
+	}
+	if !p.hasCmkConfig() {
+		return fmt.Errorf("cmk ensure-configured requires %s", configFileName)
+	}
+	if presetName != "" && buildDir != "" {
+		return fmt.Errorf("pass either a preset or --build-dir, not both")
+	}
+
+	var tree *buildTree
+	if buildDir != "" {
+		if !filepath.IsAbs(buildDir) {
+			buildDir = filepath.Join(p.Root, buildDir)
+		}
+		tree = p.treeAt(filepath.Clean(buildDir), "")
+		if tree.preset() == nil {
+			return fmt.Errorf("%s is not a build directory declared by %s", p.relToRoot(tree.dir), configFileName)
+		}
+	} else {
+		preset, err := resolvePreset(p.Cfg, presetName)
+		if err != nil {
+			return err
+		}
+		tree = p.treeFor(preset, "")
+	}
+	fmt.Fprintf(os.Stderr, "cmk: ensuring configuration of %s\n", tree.dir)
+	if err := tree.ensureConfigured(configureAuto); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "cmk: configuration ready: %s\n", tree.dir)
+	return nil
+}
+
 func presetBuildDir(p *Project, preset *PresetCfg) string {
 	dir := "build"
 	if preset != nil && preset.BuildDir != "" {
@@ -114,17 +154,24 @@ func (t *buildTree) configure(extraArgs []string) error {
 		}
 		t.selected = preset
 	}
-	// Serialize configures of one build dir: two concurrent cmk
-	// invocations that both detected staleness must not run cmake into
-	// the same cache. The loser re-runs the --fresh decision below
-	// against the winner's fresh stamp once it holds the lock (a
-	// redundant but harmless reconfigure).
+	// Serialize configures of one build dir so two cmk invocations never run
+	// CMake into the same cache. Automatic configuration rechecks staleness
+	// after acquiring this same lock and can skip work completed by a winner.
 	lock, err := lockBuildDir(dir)
 	if err != nil {
 		return err
 	}
 	defer unlockFile(lock)
+	return t.configureLocked(extraArgs)
+}
 
+// configureLocked performs a configure while the caller holds the build
+// directory lock. Keeping the lock boundary outside this implementation lets
+// ensureConfigured recheck staleness after waiting without releasing the lock
+// before CMake starts.
+func (t *buildTree) configureLocked(extraArgs []string) error {
+	dir, p := t.dir, t.p
+	preset := t.preset()
 	tc, err := p.toolchain()
 	if err != nil {
 		return err
