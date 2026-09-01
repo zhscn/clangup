@@ -100,3 +100,8 @@ func readCMakeFilesReply(buildDir string) (*cmakeFilesReply, error) {
 	}
 	return &cf, nil
 }
+
+func toolchainsReplyAvailable(buildDir string) error {
+	var toolchains json.RawMessage
+	return readReplyObject(filepath.Join(buildDir, ".cmake/api/v1/reply"), "toolchains-v1", &toolchains)
+}

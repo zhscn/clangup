@@ -134,6 +134,9 @@ func TestIntegrationReconfigureLifecycle(t *testing.T) {
 	if got := itReason(t, p, dir); got != "" {
 		t.Fatalf("fresh configure: unexpected reason %q", got)
 	}
+	if err := toolchainsReplyAvailable(dir); err != nil {
+		t.Fatalf("configured tree has no toolchains file API reply: %v", err)
+	}
 	cacheInfo, err := os.Stat(filepath.Join(dir, "CMakeCache.txt"))
 	if err != nil {
 		t.Fatal(err)

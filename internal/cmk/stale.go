@@ -224,6 +224,9 @@ func (t *buildTree) reconfigureReason(tc *Toolchain) string {
 	if err != nil {
 		return "cmake file API reply unavailable"
 	}
+	if err := toolchainsReplyAvailable(dir); err != nil {
+		return "cmake file API toolchains reply unavailable"
+	}
 	for _, in := range files.Inputs {
 		if in.IsGenerated {
 			continue // written by configure itself

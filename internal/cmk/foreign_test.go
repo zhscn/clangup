@@ -132,8 +132,10 @@ func TestRegenerateForeignLeavesConfigurationAlone(t *testing.T) {
 	if want := "-B " + build + " -DCMAKE_EXPORT_COMPILE_COMMANDS=ON"; readLog(t, log) != want {
 		t.Fatalf("cmake arguments = %q, want %q", readLog(t, log), want)
 	}
-	if !fileExists(filepath.Join(build, ".cmake/api/v1/query/codemodel-v2")) {
-		t.Error("file API query was not planted")
+	for _, query := range []string{"codemodel-v2", "cmakeFiles-v1", "toolchains-v1"} {
+		if !fileExists(filepath.Join(build, ".cmake/api/v1/query/"+query)) {
+			t.Errorf("file API query was not planted: %s", query)
+		}
 	}
 	if fileExists(filepath.Join(build, injectionStampFile)) {
 		t.Error("foreign reconfigure wrote a cmk injection stamp")
