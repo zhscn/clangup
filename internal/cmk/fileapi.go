@@ -8,6 +8,12 @@ import (
 	"strings"
 )
 
+// projectModelQueries is the complete set of CMake file API objects consumed
+// by IDE project models. configureLog-v1 is an optional diagnostic object
+// introduced in CMake 3.26, so it is not required for projects that support
+// older CMake versions.
+var projectModelQueries = []string{"codemodel-v2", "cache-v2", "cmakeFiles-v1", "toolchains-v1"}
+
 // CMake file API reply plumbing, shared by target discovery (codemodel)
 // and staleness detection (cmakeFiles). Replies are read through the
 // newest index-*.json per the file API protocol: reply files from a
@@ -101,7 +107,7 @@ func readCMakeFilesReply(buildDir string) (*cmakeFilesReply, error) {
 	return &cf, nil
 }
 
-func toolchainsReplyAvailable(buildDir string) error {
-	var toolchains json.RawMessage
-	return readReplyObject(filepath.Join(buildDir, ".cmake/api/v1/reply"), "toolchains-v1", &toolchains)
+func fileAPIReplyAvailable(buildDir, query string) error {
+	var reply json.RawMessage
+	return readReplyObject(filepath.Join(buildDir, ".cmake/api/v1/reply"), query, &reply)
 }

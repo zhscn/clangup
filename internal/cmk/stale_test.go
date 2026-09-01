@@ -165,7 +165,13 @@ func fakeReply(t *testing.T, root, dir string, inputs []string, globs []globDepe
 	if err := os.WriteFile(filepath.Join(replyDir, "toolchains-v1-test.json"), []byte(`{"toolchains":[]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	index := `{"reply": {"cmakeFiles-v1": {"jsonFile": "cmakeFiles-v1-test.json"}, "toolchains-v1": {"jsonFile": "toolchains-v1-test.json"}}}`
+	if err := os.WriteFile(filepath.Join(replyDir, "codemodel-v2-test.json"), []byte(`{"configurations":[]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(replyDir, "cache-v2-test.json"), []byte(`{"entries":[]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	index := `{"reply": {"codemodel-v2": {"jsonFile": "codemodel-v2-test.json"}, "cache-v2": {"jsonFile": "cache-v2-test.json"}, "cmakeFiles-v1": {"jsonFile": "cmakeFiles-v1-test.json"}, "toolchains-v1": {"jsonFile": "toolchains-v1-test.json"}}}`
 	if err := os.WriteFile(filepath.Join(replyDir, "index-2026-01-01T00-00-00-0000.json"), []byte(index), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -218,15 +224,25 @@ func TestReconfigureReason(t *testing.T) {
 		t.Fatalf("fresh config: got %q, want no reason", got)
 	}
 
-	// IDE consumers require the toolchains object even when cmk's own
+	// IDE consumers require the complete project model even when cmk's own
 	// configure inputs are otherwise current.
-	if err := os.Remove(filepath.Join(dir, ".cmake/api/v1/reply/toolchains-v1-test.json")); err != nil {
-		t.Fatal(err)
+	for _, test := range []struct {
+		query string
+		kind  string
+	}{
+		{"codemodel-v2", "codemodel"},
+		{"cache-v2", "cache"},
+		{"toolchains-v1", "toolchains"},
+	} {
+		if err := os.Remove(filepath.Join(dir, ".cmake/api/v1/reply/"+test.query+"-test.json")); err != nil {
+			t.Fatal(err)
+		}
+		want := "cmake file API " + test.kind + " reply unavailable"
+		if got := p.treeAt(dir, "").reconfigureReason(tc); got != want {
+			t.Fatalf("missing %s reply: got %q, want %q", test.kind, got, want)
+		}
+		fakeReply(t, root, dir, []string{"CMakeLists.txt"}, nil)
 	}
-	if got := p.treeAt(dir, "").reconfigureReason(tc); got != "cmake file API toolchains reply unavailable" {
-		t.Fatalf("missing toolchains reply: got %q", got)
-	}
-	fakeReply(t, root, dir, []string{"CMakeLists.txt"}, nil)
 
 	// Editing a CMake input file must trigger a reconfigure.
 	if err := os.Chtimes(cmakeLists, future, future); err != nil {

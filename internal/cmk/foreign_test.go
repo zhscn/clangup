@@ -132,7 +132,7 @@ func TestRegenerateForeignLeavesConfigurationAlone(t *testing.T) {
 	if want := "-B " + build + " -DCMAKE_EXPORT_COMPILE_COMMANDS=ON"; readLog(t, log) != want {
 		t.Fatalf("cmake arguments = %q, want %q", readLog(t, log), want)
 	}
-	for _, query := range []string{"codemodel-v2", "cmakeFiles-v1", "toolchains-v1"} {
+	for _, query := range projectModelQueries {
 		if !fileExists(filepath.Join(build, ".cmake/api/v1/query/"+query)) {
 			t.Errorf("file API query was not planted: %s", query)
 		}

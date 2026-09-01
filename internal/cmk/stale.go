@@ -222,10 +222,13 @@ func (t *buildTree) reconfigureReason(tc *Toolchain) string {
 	}
 	files, err := readCMakeFilesReply(dir)
 	if err != nil {
-		return "cmake file API reply unavailable"
+		return "cmake file API cmakeFiles reply unavailable"
 	}
-	if err := toolchainsReplyAvailable(dir); err != nil {
-		return "cmake file API toolchains reply unavailable"
+	for _, query := range []string{"codemodel-v2", "cache-v2", "toolchains-v1"} {
+		if err := fileAPIReplyAvailable(dir, query); err != nil {
+			kind, _, _ := strings.Cut(query, "-")
+			return "cmake file API " + kind + " reply unavailable"
+		}
 	}
 	for _, in := range files.Inputs {
 		if in.IsGenerated {

@@ -120,15 +120,16 @@ type Target struct {
 func (t *Target) isExecutable() bool { return t.Type == "EXECUTABLE" }
 
 // ensureFileAPI plants the shared stateless queries used by cmk and its IDE
-// consumers: codemodel for target discovery, cmakeFiles for staleness
-// detection (see ensureConfigured), and toolchains for the configured compiler
-// model. CMake rewrites the replies on every configure.
+// consumers: codemodel for targets and project structure, cache for configured
+// variables, cmakeFiles for staleness detection (see ensureConfigured), and
+// toolchains for the configured compiler model. CMake rewrites the replies on
+// every configure.
 func (t *buildTree) ensureFileAPI() error {
 	queryDir := filepath.Join(t.dir, ".cmake/api/v1/query")
 	if err := os.MkdirAll(queryDir, 0o755); err != nil {
 		return err
 	}
-	for _, query := range []string{"codemodel-v2", "cmakeFiles-v1", "toolchains-v1"} {
+	for _, query := range projectModelQueries {
 		marker := filepath.Join(queryDir, query)
 		if _, err := os.Stat(marker); os.IsNotExist(err) {
 			if err := os.WriteFile(marker, nil, 0o644); err != nil {
