@@ -62,6 +62,30 @@ targets:
       pgo: true
       bolt: false
 
+  - os: macos
+    arch: aarch64
+    triple: arm64-apple-darwin
+    min_macos_version: "11.0"
+    driver_requirements:
+      - xcode-clt
+    required: true
+    distribution:
+      projects:
+        - clang
+        - clang-tools-extra
+      runtimes:
+        - compiler-rt
+    driver:
+      libc: system
+      cxx_stdlib: system
+      cxx_stdlib_linkage: system
+      linker: system
+      rtlib: compiler-rt
+      unwindlib: system
+    optimization:
+      pgo: true
+      bolt: false
+
 changelog:
   - release: 1
     date: "2026-08-28"

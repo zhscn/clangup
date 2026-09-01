@@ -1,13 +1,18 @@
 # libcxx-pgo build
 
 The Linux build uses the published `default@23.1.0-1` toolchain and the
-clangup builder image. Its stages are:
+clangup builder image. The macOS build uses Apple Clang and the SDK linker,
+archiver, symbol, and indexing tools supplied by Xcode. Both builds use these
+PGO stages:
 
 1. build an IR-instrumented Clang;
-2. train it by building Debug and Release Clang and LLD;
+2. train it with Debug and Release LLVM builds (Clang on macOS, Clang and LLD
+   on Linux);
 3. merge the raw profiles;
-4. build the final PGO and ThinLTO distribution;
-5. apply LBR-based BOLT optimization on x86_64.
+4. build the final PGO distribution.
+
+Linux final builds also use ThinLTO. The x86_64 Linux build applies LBR-based
+BOLT optimization after the PGO build.
 
 The x86_64 BOLT stage rewrites Clang, LLD, `libclang-cpp.so`, and
 `libLLVM.so`. It requires hardware branch sampling and runs on the dedicated
@@ -27,7 +32,13 @@ continues from those inputs:
    prefix independently and produce compact `.fdata` artifacts.
 5. The x86_64 BOLT reorder workflow consumes both `.fdata` artifacts and the
    final prefix to produce the x86_64 target artifact.
-6. The publish workflow consumes the x86_64 and aarch64 target artifacts.
+6. The Linux publish workflow consumes the x86_64 and aarch64 Linux target
+   artifacts.
+
+The macOS workflow contains the same PGO stage boundaries as dependent jobs
+in one independently dispatched workflow. Its final job publishes the macOS
+target without depending on a Linux workflow run. The release service merges
+independently published targets that have the same channel release identity.
 
 The instrumented and final-prefix artifacts are compressed tar archives to
 preserve symlinks, permissions, and the installed runtime layout. BOLT sampling

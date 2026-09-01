@@ -56,13 +56,16 @@ func TestLibcxxPGOReleasePlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Release.Channel != "libcxx-pgo" || len(plan.Targets) != 2 || len(plan.Source.Patches) != 2 {
+	if plan.Release.Channel != "libcxx-pgo" || len(plan.Targets) != 3 || len(plan.Source.Patches) != 2 {
 		t.Fatalf("unexpected libcxx-pgo plan: %#v", plan)
 	}
 	for _, target := range plan.Targets {
-		if target.OS != "linux" || !target.Optimization.PGO ||
-			target.Optimization.BOLT != (target.Arch == "x86_64") {
+		if !target.Optimization.PGO || target.Optimization.BOLT != (target.OS == "linux" && target.Arch == "x86_64") {
 			t.Fatalf("unexpected libcxx-pgo target contract: %#v", target)
+		}
+		if target.OS == "macos" && (target.Driver.Linker != "system" ||
+			target.Driver.CXXStdlib != "system" || target.Driver.UnwindLib != "system") {
+			t.Fatalf("unexpected libcxx-pgo macOS driver contract: %#v", target)
 		}
 	}
 }
