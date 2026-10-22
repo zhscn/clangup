@@ -276,7 +276,7 @@ func newInstallCommand() *cobra.Command {
 
 func newTUCommand() *cobra.Command {
 	var options variantOptions
-	command := &cobra.Command{Use: "build-tu [name...]", Aliases: []string{"tu"}, Short: "Build translation units", Args: cobra.ArbitraryArgs, RunE: func(_ *cobra.Command, args []string) error {
+	command := &cobra.Command{Use: "build-tu [source-or-target...]", Aliases: []string{"tu"}, Short: "Build translation units by source path or object target", Args: cobra.ArbitraryArgs, RunE: func(_ *cobra.Command, args []string) error {
 		return cmdTU(args, options)
 	}}
 	addVariantFlags(command, &options)

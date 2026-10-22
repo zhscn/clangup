@@ -79,6 +79,25 @@ cmk test
 cmk preserves that tree's generator, toolchain, and cache settings. `fmt` and
 `lint` use `clang-format` and `clang-tidy` from `PATH` for such a tree.
 
+## Build individual source files
+
+`cmk build-tu` (alias `cmk tu`) builds object files in a Ninja build tree:
+
+```sh
+cmk build-tu src/foo.cpp
+cmk tu ./src/foo.cpp /absolute/path/to/bar.cpp
+cmk tu -b build -c Release src/foo.cpp
+```
+
+Source paths are relative to the current directory or absolute. cmk resolves
+paths through Ninja's compilation database; exporting `compile_commands.json`
+is not required. Existing object target names and target substrings also work.
+An exact object target or source path takes precedence over substring matches.
+If one argument matches multiple object targets, cmk prompts for a selection;
+with multiple arguments, ambiguous matches produce an error. Omit arguments
+to select an object target interactively. These commands compile the selected
+objects without linking the executable or library.
+
 ## Add a custom dependency
 
 Add an archive or Git source. The command adds the `cmk.yaml` entry and creates

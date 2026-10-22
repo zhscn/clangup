@@ -1,6 +1,7 @@
 package cmk
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -110,7 +111,7 @@ func cmdRun(targetName string, options runOptions) error {
 	return nil
 }
 
-// cmdTU builds a single translation unit via ninja.
+// cmdTU builds selected translation units via Ninja.
 func cmdTU(names []string, options variantOptions) error {
 	names = cleanArgs(names)
 	tree, err := resolveBuildTree(options, false)
@@ -147,18 +148,51 @@ func cmdTU(names []string, options variantOptions) error {
 		return fmt.Errorf("no translation units found in %s", dir)
 	}
 
+	var sources map[string][]string
+	if len(names) > 0 {
+		db := exec.Command("ninja", append(append([]string{}, ninjaBase...), "-t", "compdb")...)
+		db.Env = env
+		data, err := db.Output()
+		if err != nil {
+			return fmt.Errorf("ninja -t compdb failed in %s: %w", dir, err)
+		}
+		if tree.config != "" {
+			data, err = filterCompileCommands(data, tree.config)
+			if err != nil {
+				return err
+			}
+		}
+		sources, err = tuSourceTargets(data, dir, tus)
+		if err != nil {
+			return err
+		}
+	}
+
 	var selected []string
 	if len(names) > 0 {
 		var matched []string
 		for _, name := range names {
 			matched = matched[:0]
+			// Explicit object targets take precedence over source paths and
+			// the historical target substring search.
 			for _, t := range tus {
 				if t == name {
 					matched = []string{t}
 					break
 				}
-				if strings.Contains(t, name) {
-					matched = append(matched, t)
+			}
+			if len(matched) == 0 {
+				path, err := filepath.Abs(name)
+				if err != nil {
+					return err
+				}
+				matched = append(matched, sources[path]...)
+			}
+			if len(matched) == 0 {
+				for _, t := range tus {
+					if strings.Contains(t, name) {
+						matched = append(matched, t)
+					}
 				}
 			}
 			switch len(matched) {
@@ -256,4 +290,43 @@ func cmdRefresh(name string) error {
 	// Like an automatic reconfigure, refresh keeps the ad-hoc args from
 	// the last explicit configure.
 	return p.treeAt(dir, "").configure(stampExtra(dir))
+}
+
+// tuSourceTargets maps absolute source paths to Ninja object targets. Ninja's
+// database also works for trees that do not export compile_commands.json.
+func tuSourceTargets(data []byte, buildDir string, targets []string) (map[string][]string, error) {
+	var entries []struct {
+		Directory string `json:"directory"`
+		File      string `json:"file"`
+		Output    string `json:"output"`
+	}
+	if err := json.Unmarshal(data, &entries); err != nil {
+		return nil, fmt.Errorf("reading Ninja compilation database: %w", err)
+	}
+	objects := make(map[string]string, len(targets))
+	for _, target := range targets {
+		objects[filepath.Clean(filepath.Join(buildDir, target))] = target
+	}
+	sources := make(map[string][]string)
+	for _, entry := range entries {
+		dir := entry.Directory
+		if !filepath.IsAbs(dir) {
+			dir = filepath.Join(buildDir, dir)
+		}
+		output := entry.Output
+		if !filepath.IsAbs(output) {
+			output = filepath.Join(dir, output)
+		}
+		target, ok := objects[filepath.Clean(output)]
+		if !ok || entry.File == "" {
+			continue
+		}
+		source := entry.File
+		if !filepath.IsAbs(source) {
+			source = filepath.Join(dir, source)
+		}
+		source = filepath.Clean(source)
+		sources[source] = uniqueStrings(append(sources[source], target))
+	}
+	return sources, nil
 }
