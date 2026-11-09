@@ -19,7 +19,7 @@ dependencies {
         if (clionPath.isPresent) {
             local(clionPath)
         } else {
-            clion("2026.2.1")
+            clion("2026.3")
         }
         bundledPlugin("com.intellij.cmake")
     }
@@ -45,7 +45,7 @@ intellijPlatform {
     pluginConfiguration {
         ideaVersion {
             sinceBuild = "262"
-            untilBuild = "262.*"
+            untilBuild = "263.*"
         }
     }
 }

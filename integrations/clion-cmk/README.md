@@ -22,12 +22,13 @@ The project settings page under **Build, Execution, Deployment | cmk** can
 disable the integration or select a `cmk` executable outside CLion's `PATH`.
 Its Test button reports the executable version visible to the IDE.
 
-The adapter targets CLion 2026.2 because `CMakeRunnerStep` is an internal CLion
-API. Build it against a local CLion installation:
+The adapter supports CLion 2026.2 and 2026.3. It uses the internal
+`CMakeRunnerStep` API, so compatibility is bounded to these IDE versions.
+Build it with JDK 25 against a local CLion installation:
 
 ```sh
 ./gradlew buildPlugin -PclionPath=/path/to/clion
 ```
 
-Without `clionPath`, Gradle downloads CLion 2026.2.1 as the build SDK. The
+Without `clionPath`, Gradle downloads CLion 2026.3 as the build SDK. The
 installable archive is written to `build/distributions/`.
