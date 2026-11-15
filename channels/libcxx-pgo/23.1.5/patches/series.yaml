@@ -1,0 +1,5 @@
+schema: clangup.patch-series/v1
+strip: 1
+patches:
+  - path: patches/0001-clangd-find-type.patch
+    sha256: bcbe45f49a41608f699eb5b06a1262ff1fc2520fd92e3bf5e14a95d0908dd796

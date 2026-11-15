@@ -67,7 +67,7 @@ jobs:
           python3 -m unittest discover -s channels/build -p 'test_*.py'
           python3 -m unittest discover -s channels/default/23.1.0/build -p 'test_*.py'
           python3 -m unittest discover -s channels/libcxx/23.1.0/build -p 'test_*.py'
-          python3 -m unittest discover -s channels/libcxx-pgo/23.1.0/build -p 'test_*.py'
+          python3 -m unittest discover -s channels/libcxx-pgo/23.1.5/build -p 'test_*.py'
           bash -n \
             channels/default/23.1.0/build/build-linux.sh \
             channels/default/23.1.0/build/build-macos.sh \
@@ -76,8 +76,8 @@ jobs:
             channels/libcxx/23.1.0/build/build-linux.sh \
             channels/libcxx/23.1.0/build/verify-linux.sh \
             channels/libcxx/23.1.0/build/verify-asan-matrix.sh \
-            channels/libcxx-pgo/23.1.0/build/build-linux.sh \
-            channels/libcxx-pgo/23.1.0/build/verify-linux.sh
+            channels/libcxx-pgo/23.1.5/build/build-linux.sh \
+            channels/libcxx-pgo/23.1.5/build/verify-linux.sh
 
       - name: Check module files
         run: go mod tidy -diff

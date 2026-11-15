@@ -1,0 +1,22 @@
+# PGO + ThinLTO final compiler configuration.
+
+set(LLVM_PROFDATA_FILE "$ENV{CLANGUP_PROFDATA}" CACHE FILEPATH "" FORCE)
+set(LLVM_ENABLE_LTO Thin CACHE STRING "" FORCE)
+set(LLVM_ENABLE_FATLTO ON CACHE BOOL "" FORCE)
+
+set(CMAKE_C_FLAGS
+    "$ENV{CFLAGS} $ENV{CLANGUP_OPTIMIZATION_CFLAGS} -Wno-backend-plugin"
+    CACHE STRING "" FORCE)
+set(CMAKE_CXX_FLAGS
+    "$ENV{CXXFLAGS} $ENV{CLANGUP_OPTIMIZATION_CFLAGS} -Wno-backend-plugin"
+    CACHE STRING "" FORCE)
+
+if("$ENV{CLANGUP_OPTIMIZATION_BOLT}" STREQUAL "1")
+  set(_bolt_linker_flags "-Wl,--build-id=sha1,--emit-relocs,-znow")
+  set(CMAKE_EXE_LINKER_FLAGS
+      "${CMAKE_EXE_LINKER_FLAGS} ${_bolt_linker_flags}" CACHE STRING "" FORCE)
+  set(CMAKE_SHARED_LINKER_FLAGS
+      "${CMAKE_SHARED_LINKER_FLAGS} ${_bolt_linker_flags}" CACHE STRING "" FORCE)
+  set(CMAKE_MODULE_LINKER_FLAGS
+      "${CMAKE_MODULE_LINKER_FLAGS} ${_bolt_linker_flags}" CACHE STRING "" FORCE)
+endif()

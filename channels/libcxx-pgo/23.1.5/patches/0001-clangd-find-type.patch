@@ -1,0 +1,28 @@
+From 76d6b007595b9b802e0d054efc9dc0ce851314fa Mon Sep 17 00:00:00 2001
+From: zs <zhangsong325@gmail.com>
+Date: Sat, 11 Jul 2026 17:28:56 +0800
+Subject: [PATCH] [clangd] Reject invalid positions in findType
+
+Reject LSP positions past the end of line instead of clamping them into the
+previous token.
+---
+ clang-tools-extra/clangd/XRefs.cpp | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/clang-tools-extra/clangd/XRefs.cpp b/clang-tools-extra/clangd/XRefs.cpp
+index bc6b0bd25885..1d346a32b7c1 100644
+--- a/clang-tools-extra/clangd/XRefs.cpp
++++ b/clang-tools-extra/clangd/XRefs.cpp
+@@ -2218,7 +2218,8 @@ static llvm::SmallVector<QualType> unwrapFindType(
+ std::vector<LocatedSymbol> findType(ParsedAST &AST, Position Pos,
+                                     const SymbolIndex *Index) {
+   const SourceManager &SM = AST.getSourceManager();
+-  auto Offset = positionToOffset(SM.getBufferData(SM.getMainFileID()), Pos);
++  auto Offset = positionToOffset(SM.getBufferData(SM.getMainFileID()), Pos,
++                                 /*AllowColumnsBeyondLineLength=*/false);
+   std::vector<LocatedSymbol> Result;
+   if (!Offset) {
+     elog("failed to convert position {0} for findTypes: {1}", Pos,
+-- 
+2.50.1
+

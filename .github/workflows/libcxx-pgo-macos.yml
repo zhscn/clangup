@@ -8,7 +8,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  CHANNEL_ROOT: channels/libcxx-pgo/23.1.0
+  CHANNEL_ROOT: channels/libcxx-pgo/23.1.5
 
 jobs:
   plan:

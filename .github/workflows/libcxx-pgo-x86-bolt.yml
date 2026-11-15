@@ -21,7 +21,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  CHANNEL_ROOT: channels/libcxx-pgo/23.1.0
+  CHANNEL_ROOT: channels/libcxx-pgo/23.1.5
   DOWNLOAD_ROOT: https://dl.clangup.dev
   BUILDER_IMAGE: ghcr.io/zhscn/clangup-builder:1
   BOOTSTRAP_CHANNEL: default
