@@ -51,7 +51,7 @@ jobs:
 
   instrumented:
     needs: plan
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 360
     permissions:
       contents: read
@@ -103,7 +103,7 @@ jobs:
       fail-fast: false
       matrix:
         build_type: [Debug, Release]
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 360
     permissions:
       contents: read
@@ -155,7 +155,7 @@ jobs:
 
   publish:
     needs: [plan, profile]
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 360
     permissions:
       contents: read
