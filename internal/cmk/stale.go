@@ -117,7 +117,7 @@ func (t *buildTree) ensureConfigured(policy configurePolicy) error {
 	fmt.Fprintf(os.Stderr, "cmk: %s; reconfiguring %s\n", reason, dir)
 	// Re-apply the ad-hoc args from the last explicit configure: an
 	// automatic reconfigure must not silently change the configuration.
-	return t.configureLocked(stampExtra(dir))
+	return t.configureLocked(stampExtra(dir), false)
 }
 
 // bootstrapIfUnconfigured configures the selected preset when its build tree

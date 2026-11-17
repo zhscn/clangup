@@ -152,11 +152,11 @@ func TestIntegrationReconfigureLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	ensured := make(chan error, 1)
-	go func() { ensured <- cmdEnsureConfigured("", dir) }()
+	go func() { ensured <- cmdConfig(configOptions{BuildDir: dir, IfStale: true}, nil) }()
 	select {
 	case err := <-ensured:
 		unlockFile(lock)
-		t.Fatalf("ensure-configured did not wait for an active configure: %v", err)
+		t.Fatalf("config --if-stale did not wait for an active configure: %v", err)
 	case <-time.After(50 * time.Millisecond):
 	}
 	unlockFile(lock)
@@ -166,7 +166,7 @@ func TestIntegrationReconfigureLifecycle(t *testing.T) {
 	cacheAfter, _ := os.Stat(filepath.Join(dir, "CMakeCache.txt"))
 	stampAfter, _ := os.Stat(filepath.Join(dir, injectionStampFile))
 	if !cacheAfter.ModTime().Equal(cacheInfo.ModTime()) || !stampAfter.ModTime().Equal(stampInfo.ModTime()) {
-		t.Fatal("ensure-configured rewrote a fresh build tree")
+		t.Fatal("config --if-stale rewrote a fresh build tree")
 	}
 
 	// A CMake input edit is detected and healed.

@@ -58,8 +58,11 @@ func TestInstalledExactResolvesImportedChannel(t *testing.T) {
 
 func TestInvalidRequests(t *testing.T) {
 	for name, args := range map[string][]string{
-		"unknown command": {"unknown", "--format=json"},
-		"output format":   {"install", "--format=bogus"},
+		"unknown command":           {"unknown", "--format=json"},
+		"output format":             {"install", "--format=bogus"},
+		"all without remote":        {"list", "--all"},
+		"channel without remote":    {"list", "libcxx"},
+		"channel combined with all": {"list", "--remote", "--all", "libcxx"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
@@ -68,9 +71,27 @@ func TestInvalidRequests(t *testing.T) {
 				t.Fatalf("exit code = %d, want 2; stderr = %s", exitCode, stderr.String())
 			}
 			output := stdout.String() + stderr.String()
-			if !strings.Contains(output, "invalid_request") && !strings.Contains(output, "unsupported format") {
+			if !strings.Contains(output, "invalid_request") && !strings.Contains(output, "unsupported format") && !strings.Contains(output, "requires --remote") && !strings.Contains(output, "cannot be combined") {
 				t.Fatalf("unexpected error: %s", output)
 			}
 		})
+	}
+}
+
+func TestHelpHidesConsumerCommands(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if exitCode := Run([]string{"--help"}, &stdout, &stderr, "test"); exitCode != 0 {
+		t.Fatalf("exit code = %d, stderr = %s", exitCode, stderr.String())
+	}
+	help := stdout.String()
+	for _, hidden := range []string{"\n  resolve ", "\n  ensure ", "\n  path ", "\n  channel ", "\n  toolchain "} {
+		if strings.Contains(help, hidden) {
+			t.Errorf("help still exposes %q:\n%s", strings.TrimSpace(hidden), help)
+		}
+	}
+	for _, visible := range []string{"update", "install", "uninstall", "list", "default", "env", "doctor", "gc"} {
+		if !strings.Contains(help, visible) {
+			t.Errorf("help missing %q:\n%s", visible, help)
+		}
 	}
 }

@@ -80,6 +80,11 @@ func addVariantFlags(command *cobra.Command, options *variantOptions) {
 	command.MarkFlagsMutuallyExclusive("locked", "no-config")
 }
 
+type configOptions struct {
+	BuildDir, Preset string
+	Fresh, IfStale   bool
+}
+
 type addOptions struct {
 	URL, SHA256, Git, Ref string
 	CMakeName, Needs      string
@@ -117,7 +122,7 @@ func newRootCommand(version string) *cobra.Command {
 		newAddCommand(), newDevCommand(), newConfigCommand(), newBuildCommand(),
 		newEnsureConfiguredCommand(),
 		newRunCommand(), newTestCommand(), newInstallCommand(), newTUCommand(),
-		newRefreshCommand(), newFmtCommand(), newLintCommand(), newEnvCommand(),
+		newFmtCommand(), newLintCommand(), newEnvCommand(),
 		newShellCommand(), newCleanCommand(), newDoctorCommand(), newVersionCommand(version),
 	)
 	return root
@@ -171,30 +176,41 @@ func newAddCommand() *cobra.Command {
 }
 
 func newConfigCommand() *cobra.Command {
-	var buildDir string
-	command := &cobra.Command{Use: "config [preset] [-- cmake-args...]", Aliases: []string{"c"}, Short: "Configure the CMake project", RunE: func(command *cobra.Command, args []string) error {
-		positional, passthrough := splitPassthrough(command, args)
-		if len(positional) > 1 {
-			return fmt.Errorf("accepts at most 1 preset, received %d", len(positional))
-		}
-		preset := ""
-		if len(positional) == 1 {
-			preset = positional[0]
-		}
-		return cmdConfig(preset, buildDir, passthrough)
-	}}
-	command.Flags().StringVarP(&buildDir, "build", "b", "", "CMake build directory")
+	var options configOptions
+	command := &cobra.Command{
+		Use:     "config [-- cmake-args...]",
+		Aliases: []string{"c"},
+		Short:   "Configure the CMake project",
+		RunE: func(command *cobra.Command, args []string) error {
+			positional, passthrough := splitPassthrough(command, args)
+			if len(positional) > 0 {
+				return fmt.Errorf("unexpected argument %q (use -p/--preset or -b/--build)", positional[0])
+			}
+			if options.IfStale && len(passthrough) > 0 {
+				return fmt.Errorf("--if-stale does not accept extra CMake arguments")
+			}
+			return cmdConfig(options, passthrough)
+		},
+	}
+	flags := command.Flags()
+	flags.StringVarP(&options.Preset, "preset", "p", "", "Configure preset")
+	flags.StringVarP(&options.BuildDir, "build", "b", "", "CMake build directory")
+	flags.BoolVar(&options.Fresh, "fresh", false, "Discard cached CMake variables and reconfigure from scratch")
+	flags.BoolVar(&options.IfStale, "if-stale", false, "Configure only when missing or stale")
+	command.MarkFlagsMutuallyExclusive("preset", "build")
+	command.MarkFlagsMutuallyExclusive("fresh", "if-stale")
 	return command
 }
 
 func newEnsureConfiguredCommand() *cobra.Command {
 	var preset, buildDir string
 	command := &cobra.Command{
-		Use:   "ensure-configured",
-		Short: "Configure a managed build tree only when stale",
-		Args:  cobra.NoArgs,
+		Use:    "ensure-configured",
+		Short:  "Configure a managed build tree only when stale",
+		Hidden: true,
+		Args:   cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return cmdEnsureConfigured(preset, buildDir)
+			return cmdConfig(configOptions{Preset: preset, BuildDir: buildDir, IfStale: true}, nil)
 		},
 	}
 	command.Flags().StringVarP(&preset, "preset", "p", "", "Configure preset")
@@ -281,16 +297,6 @@ func newTUCommand() *cobra.Command {
 	}}
 	addVariantFlags(command, &options)
 	return command
-}
-
-func newRefreshCommand() *cobra.Command {
-	return &cobra.Command{Use: "refresh [build-dir]", Aliases: []string{"ref"}, Short: "Force a CMake reconfigure", Args: cobra.MaximumNArgs(1), RunE: func(_ *cobra.Command, args []string) error {
-		name := ""
-		if len(args) == 1 {
-			name = args[0]
-		}
-		return cmdRefresh(name)
-	}}
 }
 
 func newFmtCommand() *cobra.Command {

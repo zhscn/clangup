@@ -13,9 +13,11 @@ import (
 	"strings"
 )
 
-// cmdConfig runs cmake configure with the toolchain and dep exports
-// injected. Deps are synced first (cargo-style).
-func cmdConfig(presetName, buildDir string, extraArgs []string) error {
+// cmdConfig configures a managed CMake build tree with toolchain and
+// dependency exports injected. With --if-stale (the IDE integration mode), it
+// configures only when missing or stale so file watchers converge; with
+// --fresh, it discards CMake's cached variables and reconfigures from scratch.
+func cmdConfig(options configOptions, extraArgs []string) error {
 	p, err := openProject()
 	if err != nil {
 		return err
@@ -23,63 +25,40 @@ func cmdConfig(presetName, buildDir string, extraArgs []string) error {
 	if !p.hasCmkConfig() {
 		return fmt.Errorf("cmk config requires %s", configFileName)
 	}
-	if presetName != "" && buildDir != "" {
-		return fmt.Errorf("pass either a preset or --build-dir, not both")
+	if options.Preset != "" && options.BuildDir != "" {
+		return fmt.Errorf("pass either --preset or --build, not both")
 	}
-	preset, err := resolvePreset(p.Cfg, presetName)
-	if err != nil {
-		return err
-	}
-	tree := p.treeFor(preset, "")
-	if buildDir != "" {
-		// -B overrides where the preset's tree lives, without changing
-		// which preset configures it.
-		if !filepath.IsAbs(buildDir) {
-			buildDir = filepath.Join(p.Root, buildDir)
-		}
-		tree.dir = buildDir
-	}
-	return tree.configure(extraArgs)
-}
-
-// cmdEnsureConfigured is the stable integration entry point for IDEs and
-// other project-model consumers. It updates a managed build tree only when
-// its recorded configuration is stale, so a file watcher reacting to the
-// resulting CMake files converges without another write.
-func cmdEnsureConfigured(presetName, buildDir string) error {
-	p, err := openProject()
-	if err != nil {
-		return err
-	}
-	if !p.hasCmkConfig() {
-		return fmt.Errorf("cmk ensure-configured requires %s", configFileName)
-	}
-	if presetName != "" && buildDir != "" {
-		return fmt.Errorf("pass either a preset or --build-dir, not both")
+	if options.Fresh && options.IfStale {
+		return fmt.Errorf("pass either --fresh or --if-stale, not both")
 	}
 
 	var tree *buildTree
-	if buildDir != "" {
+	if options.BuildDir != "" {
+		buildDir := options.BuildDir
 		if !filepath.IsAbs(buildDir) {
 			buildDir = filepath.Join(p.Root, buildDir)
 		}
 		tree = p.treeAt(filepath.Clean(buildDir), "")
-		if tree.preset() == nil {
+		if options.IfStale && tree.preset() == nil {
 			return fmt.Errorf("%s is not a build directory declared by %s", p.relToRoot(tree.dir), configFileName)
 		}
 	} else {
-		preset, err := resolvePreset(p.Cfg, presetName)
+		preset, err := resolvePreset(p.Cfg, options.Preset)
 		if err != nil {
 			return err
 		}
 		tree = p.treeFor(preset, "")
 	}
-	fmt.Fprintf(os.Stderr, "cmk: ensuring configuration of %s\n", tree.dir)
-	if err := tree.ensureConfigured(configureAuto); err != nil {
-		return err
+
+	if options.IfStale {
+		fmt.Fprintf(os.Stderr, "cmk: ensuring configuration of %s\n", tree.dir)
+		if err := tree.ensureConfigured(configureAuto); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "cmk: configuration ready: %s\n", tree.dir)
+		return nil
 	}
-	fmt.Fprintf(os.Stderr, "cmk: configuration ready: %s\n", tree.dir)
-	return nil
+	return tree.configureWithOptions(extraArgs, options.Fresh)
 }
 
 func presetBuildDir(p *Project, preset *PresetCfg) string {
@@ -141,6 +120,10 @@ func (t *buildTree) regenerateForeign(defines ...string) error {
 // `cmk config` and build-time auto-reconfigure (ensureConfigured) land
 // here, so a reconfigure behaves identically no matter what triggered it.
 func (t *buildTree) configure(extraArgs []string) error {
+	return t.configureWithOptions(extraArgs, false)
+}
+
+func (t *buildTree) configureWithOptions(extraArgs []string, forceFresh bool) error {
 	if err := validateCMakeArgs("cmk config arguments", extraArgs); err != nil {
 		return err
 	}
@@ -162,14 +145,14 @@ func (t *buildTree) configure(extraArgs []string) error {
 		return err
 	}
 	defer unlockFile(lock)
-	return t.configureLocked(extraArgs)
+	return t.configureLocked(extraArgs, forceFresh)
 }
 
 // configureLocked performs a configure while the caller holds the build
 // directory lock. Keeping the lock boundary outside this implementation lets
 // ensureConfigured recheck staleness after waiting without releasing the lock
 // before CMake starts.
-func (t *buildTree) configureLocked(extraArgs []string) error {
+func (t *buildTree) configureLocked(extraArgs []string, forceFresh bool) error {
 	dir, p := t.dir, t.p
 	preset := t.preset()
 	tc, err := p.toolchain()
@@ -198,9 +181,14 @@ func (t *buildTree) configureLocked(extraArgs []string) error {
 	// can short-circuit to the previous dep entries — store entries are
 	// immutable, so the old paths still exist and the staleness would
 	// be silent. --fresh discards the cache and re-finds everything.
-	if fresh := injectionChanged(dir, stampArgs); fresh {
+	changed := injectionChanged(dir, stampArgs)
+	if forceFresh || changed {
 		if _, err := os.Stat(filepath.Join(dir, "CMakeCache.txt")); err == nil {
-			fmt.Fprintf(os.Stderr, "cmk: injected configuration changed; reconfiguring %s with --fresh\n", dir)
+			if forceFresh && !changed {
+				fmt.Fprintf(os.Stderr, "cmk: reconfiguring %s with --fresh\n", dir)
+			} else {
+				fmt.Fprintf(os.Stderr, "cmk: injected configuration changed; reconfiguring %s with --fresh\n", dir)
+			}
 			cmakeArgs = append(cmakeArgs, "--fresh")
 		}
 	}

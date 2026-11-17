@@ -89,7 +89,7 @@ Every preset owns its `build-dir`; an omitted directory is `build/<preset>`.
 multi-config preset exposes every entry in `configurations`; a single-config
 preset uses `build-type`.
 
-IDE integrations use `cmk ensure-configured -p <preset>` before loading the
+IDE integrations use `cmk config --if-stale -p <preset>` before loading the
 CMake File API model. The command configures a missing or stale tree and does
 not write to a current tree, allowing file-watcher reloads to converge.
 

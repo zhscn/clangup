@@ -7,7 +7,7 @@ current shell:
 
 ```sh
 clangup update
-clangup channel list
+clangup list --remote
 clangup install libcxx
 clangup default libcxx
 eval "$(clangup env)"
@@ -26,24 +26,23 @@ Useful lifecycle commands:
 
 ```sh
 clangup list
+clangup list --remote libcxx
 clangup default libcxx@23.1.0-1
-clangup resolve libcxx@23.1.0-1 --format=json
-clangup path libcxx@23.1.0-1
 clangup uninstall libcxx@23.1.0-1
 ```
 
-`resolve`, `ensure`, and `path` can use an installed exact release without
-accessing channel metadata. Import an archive with `clangup install --file
-<archive>` or `clangup install --url <https-url>`; the artifact manifest must
-be beside the archive.
+Build-system consumers can also call `resolve`, `ensure`, and `path` (which use
+an installed exact release without accessing channel metadata). Import an
+archive with `clangup install --file <archive>` or `clangup install --url
+<https-url>`; the artifact manifest must be beside the archive.
 
 ## Configure a cmk project
 
-Create `cmk.yaml` with a toolchain selector and one CMake preset. Then
-configure its build tree:
+Create `cmk.yaml` with a toolchain selector and configure its build tree:
 
 ```sh
 cmk config
+cmk config -p default --fresh
 ```
 
 Build, run, test, and install from that tree:

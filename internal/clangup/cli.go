@@ -34,75 +34,6 @@ func newUpdateCommand() *cobra.Command {
 	return command
 }
 
-func newChannelCommand() *cobra.Command {
-	command := &cobra.Command{Use: "channel", Short: "Inspect clangup channels", Args: cobra.NoArgs, RunE: func(command *cobra.Command, _ []string) error { return command.Help() }}
-	command.AddCommand(newChannelListCommand(), newChannelShowCommand())
-	return command
-}
-
-func newChannelListCommand() *cobra.Command {
-	var format string
-	command := &cobra.Command{Use: "list", Short: "List channels", Args: cobra.NoArgs, RunE: func(command *cobra.Command, _ []string) error {
-		if err := validateOutputFormat(format); err != nil {
-			return invalidRequest(err)
-		}
-		index, err := loadIndex()
-		if err != nil {
-			return invalidRepository(err)
-		}
-		names := make([]string, 0, len(index.Channels))
-		for name := range index.Channels {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		if format == "json" {
-			return writeJSON(command, map[string]any{"schema": "clangup.channel-list/v1", "default": index.DefaultChannel, "channels": index.Channels})
-		}
-		for _, name := range names {
-			marker := "  "
-			if name == index.DefaultChannel {
-				marker = "* "
-			}
-			fmt.Fprintf(command.OutOrStdout(), "%s%s\t%s\n", marker, name, index.Channels[name].Current)
-		}
-		return nil
-	}}
-	command.Flags().StringVar(&format, "format", "text", outputFormatHelp)
-	return command
-}
-
-func newChannelShowCommand() *cobra.Command {
-	var format string
-	command := &cobra.Command{Use: "show <channel>", Short: "Show channel releases", Args: cobra.ExactArgs(1), RunE: func(command *cobra.Command, args []string) error {
-		if err := validateOutputFormat(format); err != nil {
-			return invalidRequest(err)
-		}
-		index, err := loadIndex()
-		if err != nil {
-			return invalidRepository(err)
-		}
-		channel, ok := index.Channels[args[0]]
-		if !ok {
-			return invalidRequest(fmt.Errorf("channel not found: %s", args[0]))
-		}
-		if format == "json" {
-			return writeJSON(command, map[string]any{"schema": "clangup.channel-show/v1", "channel": args[0], "current": channel.Current, "releases": channel.Releases})
-		}
-		fmt.Fprintf(command.OutOrStdout(), "%s\tcurrent %s\n", args[0], channel.Current)
-		for _, release := range channel.Releases {
-			exact := fmt.Sprintf("%s-%d", release.Version, release.Release)
-			marker := "  "
-			if exact == channel.Current {
-				marker = "* "
-			}
-			fmt.Fprintln(command.OutOrStdout(), marker+exact)
-		}
-		return nil
-	}}
-	command.Flags().StringVar(&format, "format", "text", outputFormatHelp)
-	return command
-}
-
 func newInstallCommand() *cobra.Command {
 	var prefix, target, format, file, location string
 	var force bool
@@ -160,24 +91,30 @@ func newEnsureCommand() *cobra.Command { return newConsumerCommand("ensure", tru
 // installed is answered from the install record, without the index.
 func newConsumerCommand(name string, ensure bool) *cobra.Command {
 	var prefix, target, format string
-	command := &cobra.Command{Use: name + " <channel[@version-release]>", Short: "Resolve an exact toolchain for build-system consumers", Args: cobra.ExactArgs(1), RunE: func(command *cobra.Command, args []string) error {
-		if err := validateOutputFormat(format); err != nil {
-			return invalidRequest(err)
-		}
-		result, err := consumerResult(args[0], prefix, target, ensure)
-		if err != nil {
-			return installFailure(err)
-		}
-		if format == "json" {
-			return writeJSON(command, result)
-		}
-		if result.Install != nil {
-			fmt.Fprintln(command.OutOrStdout(), result.Install.Prefix)
+	command := &cobra.Command{
+		Use:    name + " <channel[@version-release]>",
+		Short:  "Resolve an exact toolchain for build-system consumers",
+		Hidden: true,
+		Args:   cobra.ExactArgs(1),
+		RunE: func(command *cobra.Command, args []string) error {
+			if err := validateOutputFormat(format); err != nil {
+				return invalidRequest(err)
+			}
+			result, err := consumerResult(args[0], prefix, target, ensure)
+			if err != nil {
+				return installFailure(err)
+			}
+			if format == "json" {
+				return writeJSON(command, result)
+			}
+			if result.Install != nil {
+				fmt.Fprintln(command.OutOrStdout(), result.Install.Prefix)
+				return nil
+			}
+			fmt.Fprintf(command.OutOrStdout(), "%s@%s-%d\t%s\n", result.Channel, result.Version, result.Release, result.Target)
 			return nil
-		}
-		fmt.Fprintf(command.OutOrStdout(), "%s@%s-%d\t%s\n", result.Channel, result.Version, result.Release, result.Target)
-		return nil
-	}}
+		},
+	}
 	command.Flags().StringVar(&prefix, "prefix", "", "installation prefix")
 	command.Flags().StringVar(&target, "target", "", "target triple")
 	command.Flags().StringVar(&format, "format", "text", outputFormatHelp)
@@ -220,115 +157,134 @@ func consumerResult(selector, prefix, target string, ensure bool) (*resolveResul
 
 func newPathCommand() *cobra.Command {
 	var target, format string
-	command := &cobra.Command{Use: "path <channel[@version-release]>", Short: "Print an installed toolchain path", Args: cobra.ExactArgs(1), RunE: func(command *cobra.Command, args []string) error {
-		if err := validateOutputFormat(format); err != nil {
-			return invalidRequest(err)
-		}
-		if record, err := installedExact(args[0], target); err != nil {
-			return installFailure(err)
-		} else if record != nil {
+	command := &cobra.Command{
+		Use:    "path <channel[@version-release]>",
+		Short:  "Print an installed toolchain path",
+		Hidden: true,
+		Args:   cobra.ExactArgs(1),
+		RunE: func(command *cobra.Command, args []string) error {
+			if err := validateOutputFormat(format); err != nil {
+				return invalidRequest(err)
+			}
+			if record, err := installedExact(args[0], target); err != nil {
+				return installFailure(err)
+			} else if record != nil {
+				if format == "json" {
+					return writeJSON(command, map[string]any{"schema": "clangup.path/v1", "prefix": record.Prefix, "channel": record.Channel, "version": record.Version, "release": record.Release, "target": record.Target})
+				}
+				fmt.Fprintln(command.OutOrStdout(), record.Prefix)
+				return nil
+			}
+			selected, err := resolveSelector(args[0], target)
+			if err != nil {
+				return installFailure(err)
+			}
+			selector := fmt.Sprintf("%s@%s-%d", selected.channel, selected.release.Version, selected.release.Release)
+			record, err := findInstalled(selector)
+			if err != nil {
+				return installFailure(err)
+			}
+			if record.Target != selected.artifact.Target {
+				return installFailure(fmt.Errorf("installed target mismatch: %s", record.Target))
+			}
 			if format == "json" {
-				return writeJSON(command, map[string]any{"schema": "clangup.path/v1", "prefix": record.Prefix, "channel": record.Channel, "version": record.Version, "release": record.Release, "target": record.Target})
+				return writeJSON(command, map[string]any{"schema": "clangup.path/v1", "prefix": record.Prefix, "channel": selected.channel, "version": selected.release.Version, "release": selected.release.Release, "target": record.Target})
 			}
 			fmt.Fprintln(command.OutOrStdout(), record.Prefix)
 			return nil
-		}
-		selected, err := resolveSelector(args[0], target)
-		if err != nil {
-			return installFailure(err)
-		}
-		selector := fmt.Sprintf("%s@%s-%d", selected.channel, selected.release.Version, selected.release.Release)
-		record, err := findInstalled(selector)
-		if err != nil {
-			return installFailure(err)
-		}
-		if record.Target != selected.artifact.Target {
-			return installFailure(fmt.Errorf("installed target mismatch: %s", record.Target))
-		}
-		if format == "json" {
-			return writeJSON(command, map[string]any{"schema": "clangup.path/v1", "prefix": record.Prefix, "channel": selected.channel, "version": selected.release.Version, "release": selected.release.Release, "target": record.Target})
-		}
-		fmt.Fprintln(command.OutOrStdout(), record.Prefix)
-		return nil
-	}}
+		},
+	}
 	command.Flags().StringVar(&target, "target", "", "target triple")
 	command.Flags().StringVar(&format, "format", "text", outputFormatHelp)
-	return command
-}
-
-func newToolchainCommand() *cobra.Command {
-	command := &cobra.Command{Use: "toolchain", Short: "Manage installed toolchains", Args: cobra.NoArgs, RunE: func(command *cobra.Command, _ []string) error { return command.Help() }}
-	command.AddCommand(newToolchainListCommand(), newToolchainDefaultCommand(), newToolchainRemoveCommand())
 	return command
 }
 
 func newListCommand() *cobra.Command {
 	var remote, all bool
 	var format string
-	command := &cobra.Command{Use: "list", Short: "List installed or available toolchains", Args: cobra.NoArgs, RunE: func(command *cobra.Command, _ []string) error {
-		if err := validateOutputFormat(format); err != nil {
-			return invalidRequest(err)
-		}
-		if all && !remote {
-			return invalidRequest(fmt.Errorf("--all requires --remote"))
-		}
-		if !remote {
-			return writeInstalledToolchains(command, format)
-		}
-		index, err := loadIndex()
-		if err != nil {
-			return invalidRepository(err)
-		}
-		var lines []string
-		for name, channel := range index.Channels {
-			if !all {
-				lines = append(lines, fmt.Sprintf("%s\t%s", name, channel.Current))
-				continue
+	command := &cobra.Command{
+		Use:   "list [channel]",
+		Short: "List installed or available toolchains",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(command *cobra.Command, args []string) error {
+			if err := validateOutputFormat(format); err != nil {
+				return invalidRequest(err)
 			}
-			for _, release := range channel.Releases {
-				marker := "  "
-				if fmt.Sprintf("%s-%d", release.Version, release.Release) == channel.Current {
-					marker = "* "
+			if all && !remote {
+				return invalidRequest(fmt.Errorf("--all requires --remote"))
+			}
+			if len(args) == 1 && !remote {
+				return invalidRequest(fmt.Errorf("channel argument requires --remote"))
+			}
+			if len(args) == 1 && all {
+				return invalidRequest(fmt.Errorf("--all cannot be combined with a channel argument"))
+			}
+			if !remote {
+				return writeInstalledToolchains(command, format)
+			}
+			index, err := loadIndex()
+			if err != nil {
+				return invalidRepository(err)
+			}
+			if len(args) == 1 {
+				channel, ok := index.Channels[args[0]]
+				if !ok {
+					return invalidRequest(fmt.Errorf("channel not found: %s", args[0]))
 				}
-				lines = append(lines, fmt.Sprintf("%s%s@%s-%d", marker, name, release.Version, release.Release))
+				if format == "json" {
+					return writeJSON(command, map[string]any{"schema": "clangup.channel-show/v1", "channel": args[0], "current": channel.Current, "releases": channel.Releases})
+				}
+				fmt.Fprintf(command.OutOrStdout(), "%s\tcurrent %s\n", args[0], channel.Current)
+				for _, release := range channel.Releases {
+					exact := fmt.Sprintf("%s-%d", release.Version, release.Release)
+					marker := "  "
+					if exact == channel.Current {
+						marker = "* "
+					}
+					fmt.Fprintln(command.OutOrStdout(), marker+exact)
+				}
+				return nil
 			}
-		}
-		sort.Strings(lines)
-		if format == "json" {
-			return writeJSON(command, map[string]any{"schema": "clangup.remote-list/v1", "entries": lines})
-		}
-		for _, line := range lines {
-			fmt.Fprintln(command.OutOrStdout(), line)
-		}
-		return nil
-	}}
-	command.Flags().BoolVar(&remote, "remote", false, "list releases available from the channel index")
-	command.Flags().BoolVar(&all, "all", false, "include all indexed releases")
-	command.Flags().StringVar(&format, "format", "text", outputFormatHelp)
-	return command
-}
-
-func newDefaultCommand() *cobra.Command {
-	command := newToolchainDefaultCommand()
-	command.Use = "default <installed-toolchain>"
-	return command
-}
-
-func newUninstallCommand() *cobra.Command {
-	command := newToolchainRemoveCommand()
-	command.Use = "uninstall <installed-toolchain>"
-	command.Aliases = nil
-	return command
-}
-
-func newToolchainListCommand() *cobra.Command {
-	var format string
-	command := &cobra.Command{Use: "list", Short: "List installed toolchains", Args: cobra.NoArgs, RunE: func(command *cobra.Command, _ []string) error {
-		if err := validateOutputFormat(format); err != nil {
-			return invalidRequest(err)
-		}
-		return writeInstalledToolchains(command, format)
-	}}
+			if !all {
+				names := make([]string, 0, len(index.Channels))
+				for name := range index.Channels {
+					names = append(names, name)
+				}
+				sort.Strings(names)
+				if format == "json" {
+					return writeJSON(command, map[string]any{"schema": "clangup.channel-list/v1", "default": index.DefaultChannel, "channels": index.Channels})
+				}
+				for _, name := range names {
+					marker := "  "
+					if name == index.DefaultChannel {
+						marker = "* "
+					}
+					fmt.Fprintf(command.OutOrStdout(), "%s%s\t%s\n", marker, name, index.Channels[name].Current)
+				}
+				return nil
+			}
+			var lines []string
+			for name, channel := range index.Channels {
+				for _, release := range channel.Releases {
+					marker := "  "
+					if fmt.Sprintf("%s-%d", release.Version, release.Release) == channel.Current {
+						marker = "* "
+					}
+					lines = append(lines, fmt.Sprintf("%s%s@%s-%d", marker, name, release.Version, release.Release))
+				}
+			}
+			sort.Strings(lines)
+			if format == "json" {
+				return writeJSON(command, map[string]any{"schema": "clangup.remote-list/v1", "entries": lines})
+			}
+			for _, line := range lines {
+				fmt.Fprintln(command.OutOrStdout(), line)
+			}
+			return nil
+		},
+	}
+	command.Flags().BoolVar(&remote, "remote", false, "list channels or releases from the channel index")
+	command.Flags().BoolVar(&all, "all", false, "include all indexed releases across channels")
 	command.Flags().StringVar(&format, "format", "text", outputFormatHelp)
 	return command
 }
@@ -355,7 +311,7 @@ func writeInstalledToolchains(command *cobra.Command, format string) error {
 	return nil
 }
 
-func newToolchainDefaultCommand() *cobra.Command {
+func newDefaultCommand() *cobra.Command {
 	return &cobra.Command{Use: "default <installed-toolchain>", Short: "Select the default toolchain", Args: cobra.ExactArgs(1), RunE: func(command *cobra.Command, args []string) error {
 		record, err := findInstalled(args[0])
 		if err != nil {
@@ -369,8 +325,8 @@ func newToolchainDefaultCommand() *cobra.Command {
 	}}
 }
 
-func newToolchainRemoveCommand() *cobra.Command {
-	return &cobra.Command{Use: "remove <installed-toolchain>", Aliases: []string{"uninstall"}, Short: "Remove an installed toolchain", Args: cobra.ExactArgs(1), RunE: func(command *cobra.Command, args []string) error {
+func newUninstallCommand() *cobra.Command {
+	return &cobra.Command{Use: "uninstall <installed-toolchain>", Aliases: []string{"remove"}, Short: "Remove an installed toolchain", Args: cobra.ExactArgs(1), RunE: func(command *cobra.Command, args []string) error {
 		record, err := findInstalled(args[0])
 		if err != nil {
 			return invalidRequest(err)

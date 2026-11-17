@@ -53,6 +53,28 @@ func TestCobraBuildConvenienceParsing(t *testing.T) {
 	}
 }
 
+func TestCobraConfigCommandFlags(t *testing.T) {
+	command := newConfigCommand()
+	if err := command.ParseFlags([]string{"-p", "minimal", "--fresh"}); err != nil {
+		t.Fatal(err)
+	}
+	preset, _ := command.Flags().GetString("preset")
+	fresh, _ := command.Flags().GetBool("fresh")
+	if preset != "minimal" || !fresh {
+		t.Fatalf("parsed preset=%q fresh=%v", preset, fresh)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"--help"}, &stdout, &stderr, "test"); code != 0 {
+		t.Fatalf("help failed: %s", stderr.String())
+	}
+	for _, hidden := range []string{"ensure-configured", "\n  refresh "} {
+		if strings.Contains(stdout.String(), hidden) {
+			t.Errorf("help still exposes %q:\n%s", strings.TrimSpace(hidden), stdout.String())
+		}
+	}
+}
+
 func TestCobraPassthrough(t *testing.T) {
 	var positional, passthrough []string
 	command := &cobra.Command{

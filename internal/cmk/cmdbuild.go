@@ -271,27 +271,6 @@ func uniqueStrings(in []string) []string {
 	return out
 }
 
-// cmdRefresh forces a reconfigure of an existing build dir through the
-// full configure path (deps synced, injection re-applied, presets and
-// compile_commands refreshed) — the manual override when ensureConfigured
-// considers everything current.
-func cmdRefresh(name string) error {
-	p, err := openProject()
-	if err != nil {
-		return err
-	}
-	if !p.hasCmkConfig() {
-		return fmt.Errorf("cmk refresh requires %s", configFileName)
-	}
-	dir, err := p.resolveBuildDir(name)
-	if err != nil {
-		return err
-	}
-	// Like an automatic reconfigure, refresh keeps the ad-hoc args from
-	// the last explicit configure.
-	return p.treeAt(dir, "").configure(stampExtra(dir))
-}
-
 // tuSourceTargets maps absolute source paths to Ninja object targets. Ninja's
 // database also works for trees that do not export compile_commands.json.
 func tuSourceTargets(data []byte, buildDir string, targets []string) (map[string][]string, error) {

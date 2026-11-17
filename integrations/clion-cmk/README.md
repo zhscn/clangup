@@ -7,7 +7,7 @@ tests, run configurations, and debugger integration.
 For a `cmk-*` configure preset, the plugin runs:
 
 ```sh
-cmk ensure-configured --build <profile-build-directory>
+cmk config --if-stale --build <profile-build-directory>
 ```
 
 The command and its live output appear in CLion's CMake console. A failed

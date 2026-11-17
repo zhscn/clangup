@@ -45,7 +45,8 @@ public final class CmkRunnerStep implements CMakeRunnerStep {
     GeneralCommandLine commandLine =
         new GeneralCommandLine(
                 executable,
-                "ensure-configured",
+                "config",
+                "--if-stale",
                 "--build",
                 parameters.getOutputDir().toString())
             .withWorkDirectory(projectDir.toFile());
