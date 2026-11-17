@@ -379,6 +379,9 @@ func (p *Project) commandEnv(layers ...map[string]string) []string {
 	for k, val := range p.ccacheEnv() {
 		merged[k] = val
 	}
+	for k, val := range p.symbolizerEnv() {
+		merged[k] = val
+	}
 	for k, val := range p.Cfg.Env {
 		merged[k] = expandVars(val, vars)
 	}
@@ -428,4 +431,22 @@ func (p *Project) ccacheEnv() map[string]string {
 		m["CCACHE_NOHASHDIR"] = "true"
 	}
 	return m
+}
+
+// symbolizerEnv points LLVM sanitizers (ASan/UBSan/TSan/LSan/MSan) at the
+// selected clangup toolchain's llvm-symbolizer when LLVM_SYMBOLIZER_PATH is
+// not already set in the environment. It never triggers toolchain installation,
+// so `--no-build` and foreign projects remain read-only.
+func (p *Project) symbolizerEnv() map[string]string {
+	if !p.Managed || os.Getenv("LLVM_SYMBOLIZER_PATH") != "" {
+		return nil
+	}
+	tc := p.tc
+	if tc == nil && p.toolchainSelector() != "" {
+		tc, _ = locateToolchain(p.toolchainSelector(), p.Lock)
+	}
+	if sym := tc.symbolizer(); sym != "" {
+		return map[string]string{"LLVM_SYMBOLIZER_PATH": sym}
+	}
+	return nil
 }

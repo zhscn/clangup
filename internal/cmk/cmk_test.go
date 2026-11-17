@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -462,6 +463,53 @@ func TestCcacheEnv(t *testing.T) {
 	t.Setenv("CCACHE_BASEDIR", "/elsewhere")
 	if _, set := p.ccacheEnv()["CCACHE_BASEDIR"]; set {
 		t.Error("must defer to an env-provided CCACHE_BASEDIR")
+	}
+}
+
+func TestSymbolizerEnvAndPrecedence(t *testing.T) {
+	t.Setenv("LLVM_SYMBOLIZER_PATH", "")
+	tcRoot := t.TempDir()
+	sym := filepath.Join(tcRoot, "bin", "llvm-symbolizer")
+	if err := os.MkdirAll(filepath.Dir(sym), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sym, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tc := &Toolchain{
+		Root:  tcRoot,
+		CC:    filepath.Join(tcRoot, "bin", "clang"),
+		CXX:   filepath.Join(tcRoot, "bin", "clang++"),
+		Tools: map[string]string{"llvm-symbolizer": sym},
+	}
+
+	p := &Project{Root: "/proj", Managed: true, Cfg: &Config{}, tc: tc}
+	env := p.commandEnv()
+	if !slices.Contains(env, "LLVM_SYMBOLIZER_PATH="+sym) {
+		t.Fatalf("commandEnv missing LLVM_SYMBOLIZER_PATH=%s: %v", sym, env)
+	}
+
+	// cmk.yaml env and target-env override the toolchain default.
+	p.Cfg.Env = map[string]string{"LLVM_SYMBOLIZER_PATH": "/custom/sym"}
+	if !slices.Contains(p.commandEnv(), "LLVM_SYMBOLIZER_PATH=/custom/sym") {
+		t.Fatal("cmk.yaml env did not override default LLVM_SYMBOLIZER_PATH")
+	}
+	if !slices.Contains(p.commandEnv(map[string]string{"LLVM_SYMBOLIZER_PATH": "/target/sym"}), "LLVM_SYMBOLIZER_PATH=/target/sym") {
+		t.Fatal("target-env did not override LLVM_SYMBOLIZER_PATH")
+	}
+	p.Cfg.Env = nil
+
+	// Ambient LLVM_SYMBOLIZER_PATH in the caller's environment is respected.
+	t.Setenv("LLVM_SYMBOLIZER_PATH", "/ambient/sym")
+	if got := p.symbolizerEnv(); got != nil {
+		t.Fatalf("symbolizerEnv overrode ambient LLVM_SYMBOLIZER_PATH: %v", got)
+	}
+
+	// Foreign projects never inject a managed symbolizer.
+	t.Setenv("LLVM_SYMBOLIZER_PATH", "")
+	foreign := &Project{Root: "/proj", Managed: false, Cfg: &Config{}, tc: tc}
+	if got := foreign.symbolizerEnv(); got != nil {
+		t.Fatalf("foreign project injected LLVM_SYMBOLIZER_PATH: %v", got)
 	}
 }
 

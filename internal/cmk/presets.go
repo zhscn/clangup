@@ -81,6 +81,9 @@ func writeUserPresets(p *Project, tc *Toolchain) error {
 	if tc.Root != "" {
 		presetEnv["CC"], presetEnv["CXX"] = tc.CC, tc.CXX
 	}
+	if sym := tc.symbolizer(); sym != "" {
+		presetEnv["LLVM_SYMBOLIZER_PATH"] = sym
+	}
 	if filepath.Base(p.Cfg.Configure.CompilerLauncher) == "ccache" {
 		presetEnv["CCACHE_BASEDIR"] = "${sourceDir}"
 		presetEnv["CCACHE_NOHASHDIR"] = "true"

@@ -230,6 +230,21 @@ func (tc *Toolchain) command(name string) (string, error) {
 	return path, nil
 }
 
+func (tc *Toolchain) symbolizer() string {
+	if tc == nil {
+		return ""
+	}
+	if path := tc.Tools["llvm-symbolizer"]; path != "" && fileExists(path) {
+		return path
+	}
+	if tc.Root != "" {
+		if path := filepath.Join(tc.Root, "bin", "llvm-symbolizer"); fileExists(path) {
+			return path
+		}
+	}
+	return ""
+}
+
 // scriptEnv is the toolchain part of a dep script's environment.
 func (tc *Toolchain) scriptEnv() []string {
 	env := []string{"CC=" + tc.CC, "CXX=" + tc.CXX}

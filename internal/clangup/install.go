@@ -179,7 +179,7 @@ func installedTools() map[string]string {
 	return map[string]string{
 		"ar": "llvm-ar", "nm": "llvm-nm", "ranlib": "llvm-ranlib",
 		"clang-format": "clang-format", "clang-tidy": "clang-tidy",
-		"clang-scan-deps": "clang-scan-deps",
+		"clang-scan-deps": "clang-scan-deps", "llvm-symbolizer": "llvm-symbolizer",
 	}
 }
 

@@ -55,6 +55,11 @@ func composeEnv(p *Project, tc *Toolchain) []envEntry {
 	if tc.File != "" {
 		entries = append(entries, envEntry{"CMK_TOOLCHAIN_FILE", tc.File, false})
 	}
+	if sym := tc.symbolizer(); sym != "" && os.Getenv("LLVM_SYMBOLIZER_PATH") == "" {
+		if _, overridden := p.Cfg.Env["LLVM_SYMBOLIZER_PATH"]; !overridden {
+			entries = append(entries, envEntry{"LLVM_SYMBOLIZER_PATH", sym, false})
+		}
+	}
 	// Same ccache reuse settings cmk build uses, so a manual ninja inside
 	// `cmk shell` / under `cmk env` shares cache across worktrees too.
 	cc := p.ccacheEnv()
