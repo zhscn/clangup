@@ -81,6 +81,30 @@ class ManifestTest(unittest.TestCase):
             run.assert_called_once()
             self.assertEqual(str(recorded), run.call_args.args[0][-1])
 
+    def test_toolchain_cmake_configures_module_scanning_and_libcxx_modules(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = Path(directory) / "prefix"
+            (prefix / "bin").mkdir(parents=True)
+            (prefix / "lib").mkdir(parents=True)
+            (prefix / "bin" / "clang-scan-deps").write_text("", encoding="utf-8")
+            (prefix / "lib" / "libc++.modules.json").write_text("{}", encoding="utf-8")
+
+            RUN.write_integration_files(
+                prefix,
+                {"os": "linux", "driver": {"cxx_stdlib": "libc++"}},
+            )
+            libcxx_tc = (prefix / "toolchain.cmake").read_text(encoding="utf-8")
+            self.assertIn("CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS", libcxx_tc)
+            self.assertIn("CMAKE_CXX_STDLIB_MODULES_JSON", libcxx_tc)
+
+            RUN.write_integration_files(
+                prefix,
+                {"os": "linux", "driver": {"cxx_stdlib": "system"}},
+            )
+            system_tc = (prefix / "toolchain.cmake").read_text(encoding="utf-8")
+            self.assertIn("CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS", system_tc)
+            self.assertNotIn("CMAKE_CXX_STDLIB_MODULES_JSON", system_tc)
+
 
 if __name__ == "__main__":
     unittest.main()

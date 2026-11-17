@@ -513,9 +513,12 @@ def validate_linux_runtime_layout(prefix: Path) -> Path:
         if not any(runtime_dir.glob(f"libclang_rt.{name}*.a")):
             fail(f"installed compiler-rt library is missing: {name} in {runtime_dir}")
     target_libdir = prefix / "lib"
-    for name in ("libc++.a", "libc++abi.a"):
+    for name in ("libc++.a", "libc++abi.a", "libc++.modules.json"):
         if not (target_libdir / name).is_file():
             fail(f"installed static C++ runtime is missing: {target_libdir / name}")
+    std_module = prefix / "share" / "libc++" / "v1" / "std.cppm"
+    if not std_module.is_file():
+        fail(f"installed libc++ module source is missing: {std_module}")
     config_site = prefix / "include" / "c++" / "v1" / "__config_site"
     if not config_site.is_file():
         fail(f"installed libc++ configuration is missing: {config_site}")
@@ -615,6 +618,17 @@ unset _clangup_prefix
                 'set(CMAKE_NM "${CMAKE_CURRENT_LIST_DIR}/bin/llvm-nm")',
             ]
         )
+    if (prefix / "bin" / "clang-scan-deps").is_file():
+        lines.append(
+            'set(CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS "${CMAKE_CURRENT_LIST_DIR}/bin/clang-scan-deps")'
+        )
+    if (
+        target.get("driver", {}).get("cxx_stdlib") == "libc++"
+        and (prefix / "lib" / "libc++.modules.json").is_file()
+    ):
+        lines.append(
+            'set(CMAKE_CXX_STDLIB_MODULES_JSON "${CMAKE_CURRENT_LIST_DIR}/lib/libc++.modules.json")'
+        )
     (prefix / "toolchain.cmake").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -673,6 +687,7 @@ def smoke(prefix: Path, target: dict[str, Any], work: Path, channel: str) -> Non
     if target["os"] == "linux":
         required_tools = [
             "clangd",
+            "clang-scan-deps",
             "clang-tidy",
             "ld.lld",
             "llvm-ar",

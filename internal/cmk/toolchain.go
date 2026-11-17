@@ -17,14 +17,16 @@ import (
 // ID includes the exact channel release, target and artifact digest so
 // dependency stamps change whenever the selected toolchain changes.
 type Toolchain struct {
-	ID        string
-	Selector  string
-	Root      string
-	CC        string
-	CXX       string
-	File      string
-	CXXStdlib string
-	Tools     map[string]string
+	ID                string
+	Selector          string
+	Root              string
+	CC                string
+	CXX               string
+	File              string
+	CXXStdlib         string
+	ScanDeps          string
+	StdlibModulesJSON string
+	Tools             map[string]string
 }
 
 var (
@@ -62,14 +64,16 @@ func toolchainFromResult(result *clangup.ResolveResult) (*Toolchain, error) {
 	}
 	selector := exactSelector(result)
 	return &Toolchain{
-		ID:        selector + "#" + result.Target + ":sha256:" + result.ArtifactSHA256,
-		Selector:  selector,
-		Root:      result.Install.Prefix,
-		CC:        result.Install.CC,
-		CXX:       result.Install.CXX,
-		File:      result.Install.ToolchainFile,
-		CXXStdlib: result.CXXStdlib(),
-		Tools:     result.Install.Tools,
+		ID:                selector + "#" + result.Target + ":sha256:" + result.ArtifactSHA256,
+		Selector:          selector,
+		Root:              result.Install.Prefix,
+		CC:                result.Install.CC,
+		CXX:               result.Install.CXX,
+		File:              result.Install.ToolchainFile,
+		CXXStdlib:         result.CXXStdlib(),
+		ScanDeps:          result.Install.Tools["clang-scan-deps"],
+		StdlibModulesJSON: result.Install.StdlibModulesJSON,
+		Tools:             result.Install.Tools,
 	}, nil
 }
 
@@ -281,17 +285,27 @@ func (tc *Toolchain) envMap() map[string]string {
 //     would be redundant. For any other toolchain file, inject compiler
 //     variables (nothing else pulls the clangup toolchain in).
 func (tc *Toolchain) cmakeArgs(userArgs []string) []string {
-	if tc.File == "" {
-		return tc.compilerArgs()
+	var args []string
+	switch {
+	case tc.File == "":
+		args = tc.compilerArgs()
+	case !definesVar(userArgs, "CMAKE_TOOLCHAIN_FILE"):
+		args = []string{"-DCMAKE_TOOLCHAIN_FILE=" + tc.File}
+	default:
+		userTC, _ := lookupDefine(userArgs, "CMAKE_TOOLCHAIN_FILE")
+		if isVcpkgToolchain(userTC) && !definesVar(userArgs, "VCPKG_CHAINLOAD_TOOLCHAIN_FILE") {
+			args = []string{"-DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=" + tc.File}
+		} else {
+			args = tc.compilerArgs()
+		}
 	}
-	userTC, hasUserTC := lookupDefine(userArgs, "CMAKE_TOOLCHAIN_FILE")
-	if !hasUserTC {
-		return []string{"-DCMAKE_TOOLCHAIN_FILE=" + tc.File}
+	if tc.ScanDeps != "" && !definesVar(userArgs, "CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS") {
+		args = append(args, "-DCMAKE_CXX_COMPILER_CLANG_SCAN_DEPS="+tc.ScanDeps)
 	}
-	if isVcpkgToolchain(userTC) && !definesVar(userArgs, "VCPKG_CHAINLOAD_TOOLCHAIN_FILE") {
-		return []string{"-DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=" + tc.File}
+	if tc.StdlibModulesJSON != "" && !definesVar(userArgs, "CMAKE_CXX_STDLIB_MODULES_JSON") {
+		args = append(args, "-DCMAKE_CXX_STDLIB_MODULES_JSON="+tc.StdlibModulesJSON)
 	}
-	return tc.compilerArgs()
+	return args
 }
 
 func (tc *Toolchain) compilerArgs() []string {

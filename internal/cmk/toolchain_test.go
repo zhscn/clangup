@@ -19,10 +19,17 @@ func TestResolveToolchainUsesClangupInProcess(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(prefix, "bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"clang", "clang++", "clang-format", "clang-tidy"} {
+	if err := os.MkdirAll(filepath.Join(prefix, "lib"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"clang", "clang++", "clang-format", "clang-tidy", "clang-scan-deps"} {
 		if err := os.WriteFile(filepath.Join(prefix, "bin", name), []byte(name), 0o755); err != nil {
 			t.Fatal(err)
 		}
+	}
+	modulesJSON := filepath.Join(prefix, "lib", "libc++.modules.json")
+	if err := os.WriteFile(modulesJSON, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 	toolchainFile := filepath.Join(prefix, "toolchain.cmake")
 	if err := os.WriteFile(toolchainFile, []byte("# toolchain\n"), 0o644); err != nil {
@@ -59,6 +66,21 @@ func TestResolveToolchainUsesClangupInProcess(t *testing.T) {
 	}
 	if !dirty || tc.Selector != "libcxx@23.1.0-1" || tc.CXXStdlib != "libc++" || tc.File != toolchainFile {
 		t.Fatalf("unexpected toolchain: %#v, dirty=%v", tc, dirty)
+	}
+	if tc.ScanDeps != filepath.Join(prefix, "bin", "clang-scan-deps") || tc.StdlibModulesJSON != modulesJSON {
+		t.Fatalf("module paths = (%q, %q)", tc.ScanDeps, tc.StdlibModulesJSON)
+	}
+	cmakeArgs := strings.Join(tc.cmakeArgs(nil), "\n")
+	if !strings.Contains(cmakeArgs, "-DCMAKE_CXX_COMPILER_CLANG_SCAN_DEPS="+tc.ScanDeps) ||
+		!strings.Contains(cmakeArgs, "-DCMAKE_CXX_STDLIB_MODULES_JSON="+modulesJSON) {
+		t.Fatalf("cmakeArgs missing module defines:\n%s", cmakeArgs)
+	}
+	// User-supplied overrides take precedence over cmk's defaults.
+	overridden := tc.cmakeArgs([]string{"-DCMAKE_CXX_STDLIB_MODULES_JSON=/custom/modules.json"})
+	for _, arg := range overridden {
+		if strings.HasPrefix(arg, "-DCMAKE_CXX_STDLIB_MODULES_JSON=") {
+			t.Fatalf("cmakeArgs overrode explicit user CMAKE_CXX_STDLIB_MODULES_JSON: %v", overridden)
+		}
 	}
 	pin := lock.Toolchains[hostPlatform(runtime.GOOS, runtime.GOARCH)]
 	if pin == nil || pin.Selector != "libcxx@23.1.0-1" || pin.Target != target {

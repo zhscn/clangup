@@ -44,6 +44,7 @@ type InstallResult struct {
 	CC                 string            `json:"cc"`
 	CXX                string            `json:"cxx"`
 	ToolchainFile      string            `json:"toolchain_file,omitempty"`
+	StdlibModulesJSON  string            `json:"stdlib_modules_json,omitempty"`
 	Tools              map[string]string `json:"tools,omitempty"`
 	Driver             map[string]any    `json:"driver"`
 }
@@ -166,6 +167,11 @@ func installationResult(record *toolchain.InstallRecord) *InstallResult {
 	if path := filepath.Join(record.Prefix, "toolchain.cmake"); fileExists(path) {
 		result.ToolchainFile = path
 	}
+	if driverValue(record.Driver, "cxx_stdlib", "name") == "libc++" {
+		if path := filepath.Join(record.Prefix, "lib", "libc++.modules.json"); fileExists(path) {
+			result.StdlibModulesJSON = path
+		}
+	}
 	return result
 }
 
@@ -173,6 +179,7 @@ func installedTools() map[string]string {
 	return map[string]string{
 		"ar": "llvm-ar", "nm": "llvm-nm", "ranlib": "llvm-ranlib",
 		"clang-format": "clang-format", "clang-tidy": "clang-tidy",
+		"clang-scan-deps": "clang-scan-deps",
 	}
 }
 

@@ -186,6 +186,12 @@ func doctorToolchain(c *doctorChecker, p *Project) {
 		stdlib = "system"
 	}
 	c.note("default C++ stdlib: %s", stdlib)
+	switch {
+	case tc.ScanDeps != "" && tc.StdlibModulesJSON != "":
+		c.ok("C++ modules ready (clang-scan-deps + libc++.modules.json)")
+	case tc.ScanDeps != "":
+		c.note("C++ module scanner present (clang-scan-deps)")
+	}
 }
 
 func doctorConfigurations(c *doctorChecker, p *Project) {
