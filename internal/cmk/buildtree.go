@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -127,6 +128,28 @@ func (t *buildTree) build(jobs int, targets []string, cleanFirst, verbose bool, 
 		return err
 	}
 	return runStreaming(env, "cmake", cmakeBuildArgs(t.dir, t.config, jobs, targets, cleanFirst, verbose, passthrough)...)
+}
+
+// hasNinjaTarget probes whether the Ninja build graph defines name (for
+// example CMake 4.5's `test_prep/all` or `install_prep/<component>`). Non-Ninja
+// trees or hosts without ninja return false so callers fall back to `all`.
+func (t *buildTree) hasNinjaTarget(name string) bool {
+	if !fileExists(filepath.Join(t.dir, "build.ninja")) {
+		return false
+	}
+	ninjaBin, err := exec.LookPath("ninja")
+	if err != nil {
+		return false
+	}
+	args := []string{"-C", t.dir}
+	if t.config != "" {
+		if !fileExists(filepath.Join(t.dir, "build-"+t.config+".ninja")) {
+			return false
+		}
+		args = append(args, "-f", "build-"+t.config+".ninja")
+	}
+	args = append(args, "-t", "query", name)
+	return exec.Command(ninjaBin, args...).Run() == nil
 }
 
 // --- CMake file API ---

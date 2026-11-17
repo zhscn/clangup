@@ -14,7 +14,11 @@ func cmdTest(patterns []string, options testOptions) error {
 	}
 
 	if !options.NoBuild {
-		if err := tree.build(options.Jobs, options.BuildTargets, false, false, nil); err != nil {
+		targets := cleanArgs(options.BuildTargets)
+		if len(targets) == 0 && tree.hasNinjaTarget("test_prep/all") {
+			targets = []string{"test_prep/all"}
+		}
+		if err := tree.build(options.Jobs, targets, false, false, nil); err != nil {
 			return fmt.Errorf("build failed: %w", err)
 		}
 	}

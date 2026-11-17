@@ -17,8 +17,18 @@ func cmdInstall(options installOptions) error {
 	}
 	p := tree.p
 
+	component := options.Component
+	if component == "" {
+		component = p.Cfg.Install.Component
+	}
 	if !options.NoBuild {
-		if err := tree.build(options.Jobs, nil, false, options.Verbose, nil); err != nil {
+		var targets []string
+		if component != "" && tree.hasNinjaTarget("install_prep/"+component) {
+			targets = []string{"install_prep/" + component}
+		} else if tree.hasNinjaTarget("install_prep/all") {
+			targets = []string{"install_prep/all"}
+		}
+		if err := tree.build(options.Jobs, targets, false, options.Verbose, nil); err != nil {
 			return fmt.Errorf("build failed: %w", err)
 		}
 	}
@@ -35,10 +45,6 @@ func cmdInstall(options installOptions) error {
 	}
 	if pfx != "" {
 		installArgs = append(installArgs, "--prefix", pfx)
-	}
-	component := options.Component
-	if component == "" {
-		component = p.Cfg.Install.Component
 	}
 	if component != "" {
 		installArgs = append(installArgs, "--component", component)

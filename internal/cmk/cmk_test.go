@@ -774,6 +774,70 @@ cmake:
 	}
 }
 
+func TestTestAndInstallUseCMakePrepTargetsWhenPresent(t *testing.T) {
+	ninjaPath, err := exec.LookPath("ninja")
+	if err != nil {
+		t.Skip("ninja not on PATH")
+	}
+	root := t.TempDir()
+	build := filepath.Join(root, "build")
+	bin := filepath.Join(root, "bin")
+	for _, dir := range []string{build, bin} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(ninjaPath, filepath.Join(bin, "ninja")); err != nil {
+		t.Fatal(err)
+	}
+	log := filepath.Join(root, "tool.log")
+	for _, tool := range []string{"cmake", "ctest"} {
+		stub := "#!/bin/sh\nprintf '%s %s\\n' " + tool + " \"$*\" >> " + shellQuote([]string{log}) + "\n"
+		if err := os.WriteFile(filepath.Join(bin, tool), []byte(stub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(build, "CMakeCache.txt"), []byte(multiConfigCache), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(build, "build.ninja"), []byte("# root\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ninjaGraph := "build test_prep/all: phony\nbuild install_prep/all: phony\nbuild install_prep/runtime: phony\n"
+	if err := os.WriteFile(filepath.Join(build, "build-Release.ninja"), []byte(ninjaGraph), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+	t.Setenv("PATH", bin)
+
+	if err := cmdTest(nil, testOptions{variantOptions: variantFor(build, "Release", 2)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmdInstall(installOptions{variantOptions: variantFor(build, "Release", 2), Component: "runtime"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmdInstall(installOptions{variantOptions: variantFor(build, "Release", 2), Component: "dev"}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(got)), "\n")
+	want := []string{
+		"cmake --build " + build + " -j 2 --config Release --target test_prep/all",
+		"ctest --test-dir " + build + " --output-on-failure -j 2 -C Release",
+		"cmake --build " + build + " -j 2 --config Release --target install_prep/runtime",
+		"cmake --install " + build + " --config Release --component runtime",
+		"cmake --build " + build + " -j 2 --config Release --target install_prep/all",
+		"cmake --install " + build + " --config Release --component dev",
+	}
+	if !eqStrings(lines, want) {
+		t.Fatalf("commands =\n%s\nwant:\n%s", strings.Join(lines, "\n"), strings.Join(want, "\n"))
+	}
+}
+
 func TestInstallPrefix(t *testing.T) {
 	p := &Project{Root: "/proj", Cfg: &Config{}}
 	// nothing configured -> empty (respect the configure-time prefix)
