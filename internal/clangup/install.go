@@ -10,7 +10,7 @@ import (
 // Installing a resolved selector, and the result documents both the JSON
 // consumer interface and the text output are rendered from.
 
-type resolveResult struct {
+type ResolveResult struct {
 	Schema             string         `json:"schema"`
 	Selector           string         `json:"selector"`
 	Channel            string         `json:"channel"`
@@ -24,10 +24,14 @@ type resolveResult struct {
 	PatchsetSHA256     string         `json:"patchset_sha256"`
 	Driver             map[string]any `json:"driver"`
 	Optimization       map[string]any `json:"optimization,omitempty"`
-	Install            *installResult `json:"install,omitempty"`
+	Install            *InstallResult `json:"install,omitempty"`
 }
 
-type installResult struct {
+func (r *ResolveResult) CXXStdlib() string {
+	return driverValue(r.Driver, "cxx_stdlib", "name")
+}
+
+type InstallResult struct {
 	Schema             string            `json:"schema"`
 	Channel            string            `json:"channel"`
 	Version            string            `json:"version"`
@@ -44,12 +48,52 @@ type installResult struct {
 	Driver             map[string]any    `json:"driver"`
 }
 
+// SyncIndex refreshes the cached channel index from the configured index URL.
+func SyncIndex() error {
+	_, err := toolchain.NewClient().SyncIndex()
+	return err
+}
+
+// Ensure resolves selector and installs it if missing, serving already-installed
+// exact selectors directly from local state without network access.
+func Ensure(selector, target string) (*ResolveResult, error) {
+	return consumerResult(selector, "", target, true)
+}
+
+// Locate resolves selector and attaches its local installation details when
+// present on disk, without installing anything.
+func Locate(selector, target string) (*ResolveResult, error) {
+	record, err := installedExact(selector, target)
+	if err != nil {
+		return nil, err
+	}
+	if record != nil {
+		result := resolveResultFor(selector, record)
+		result.Install = installationResult(record)
+		return result, nil
+	}
+	selected, err := resolveSelector(selector, target)
+	if err != nil {
+		return nil, err
+	}
+	resolvedRecord := selected.record("")
+	result := resolveResultFor(selector, &resolvedRecord)
+	installed, err := installedExact(selected.channel+"@"+selected.exact, selected.artifact.Target)
+	if err != nil {
+		return nil, err
+	}
+	if installed != nil {
+		result.Install = installationResult(installed)
+	}
+	return result, nil
+}
+
 // resolveResultFor renders the resolve document for an install record.
 // A selector that was only resolved and one that is already installed
 // describe the same toolchain, so both go through here and cannot
 // disagree about what a resolve result contains.
-func resolveResultFor(selector string, record *toolchain.InstallRecord) *resolveResult {
-	return &resolveResult{
+func resolveResultFor(selector string, record *toolchain.InstallRecord) *ResolveResult {
+	return &ResolveResult{
 		Schema: "clangup.resolve/v1", Selector: selector,
 		Channel: record.Channel, Version: record.Version, Release: record.Release, Target: record.Target,
 		ManifestSHA256: record.ManifestSHA256, ArtifactSHA256: record.ArtifactSHA256,
@@ -58,7 +102,7 @@ func resolveResultFor(selector string, record *toolchain.InstallRecord) *resolve
 	}
 }
 
-func installSelector(selector, prefix, explicitTarget string, force bool) (*installResult, error) {
+func installSelector(selector, prefix, explicitTarget string, force bool) (*InstallResult, error) {
 	selected, err := resolveSelector(selector, explicitTarget)
 	if err != nil {
 		return nil, err
@@ -105,8 +149,8 @@ func installSelector(selector, prefix, explicitTarget string, force bool) (*inst
 // identity plus what is actually present under the prefix — the
 // compilers, whichever tools the artifact shipped, and the toolchain
 // file if it has one.
-func installationResult(record *toolchain.InstallRecord) *installResult {
-	result := &installResult{
+func installationResult(record *toolchain.InstallRecord) *InstallResult {
+	result := &InstallResult{
 		Schema: "clangup.install/v1", Channel: record.Channel, Version: record.Version,
 		Release: record.Release, Target: record.Target, ManifestSHA256: record.ManifestSHA256,
 		ArtifactSHA256: record.ArtifactSHA256, DriverRequirements: record.DriverRequirements,

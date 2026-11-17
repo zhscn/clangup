@@ -15,7 +15,7 @@ import (
 	"github.com/zhscn/clangup/internal/clangup/toolchain"
 )
 
-func installDirect(file, location, prefix, explicitTarget string, force bool) (*installResult, error) {
+func installDirect(file, location, prefix, explicitTarget string, force bool) (*InstallResult, error) {
 	var archive string
 	var manifestContents []byte
 	var err error

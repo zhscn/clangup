@@ -1,8 +1,6 @@
 package cmk
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/zhscn/clangup/internal/clangup"
 	"github.com/zhscn/clangup/internal/platform"
 )
 
@@ -28,29 +27,13 @@ type Toolchain struct {
 	Tools     map[string]string
 }
 
-type clangupResolveResult struct {
-	Schema         string `json:"schema"`
-	Channel        string `json:"channel"`
-	Version        string `json:"version"`
-	Release        int    `json:"release"`
-	Target         string `json:"target"`
-	ManifestSHA256 string `json:"manifest_sha256"`
-	ArtifactSHA256 string `json:"artifact_sha256"`
-	Driver         struct {
-		CXXStdlib struct {
-			Name string `json:"name"`
-		} `json:"cxx_stdlib"`
-	} `json:"driver"`
-	Install *struct {
-		Prefix        string            `json:"prefix"`
-		CC            string            `json:"cc"`
-		CXX           string            `json:"cxx"`
-		ToolchainFile string            `json:"toolchain_file"`
-		Tools         map[string]string `json:"tools"`
-	} `json:"install"`
-}
+var (
+	clangupEnsure    = clangup.Ensure
+	clangupLocate    = clangup.Locate
+	clangupSyncIndex = clangup.SyncIndex
+)
 
-func exactSelector(result *clangupResolveResult) string {
+func exactSelector(result *clangup.ResolveResult) string {
 	return fmt.Sprintf("%s@%s-%d", result.Channel, result.Version, result.Release)
 }
 
@@ -59,9 +42,6 @@ func effectiveSelector(selector string, pin *LockToolchain) string {
 		return selector
 	}
 	if strings.Contains(selector, "@") {
-		if selector == pin.Selector {
-			return selector
-		}
 		return selector
 	}
 	if strings.HasPrefix(pin.Selector, selector+"@") {
@@ -70,8 +50,8 @@ func effectiveSelector(selector string, pin *LockToolchain) string {
 	return selector
 }
 
-func toolchainFromResult(result *clangupResolveResult) (*Toolchain, error) {
-	if result.Schema != "clangup.resolve/v1" || result.Channel == "" ||
+func toolchainFromResult(result *clangup.ResolveResult) (*Toolchain, error) {
+	if result == nil || result.Channel == "" ||
 		result.Version == "" || result.Release < 1 || result.Target == "" ||
 		result.Install == nil || result.Install.Prefix == "" ||
 		result.Install.CC == "" || result.Install.CXX == "" {
@@ -88,14 +68,14 @@ func toolchainFromResult(result *clangupResolveResult) (*Toolchain, error) {
 		CC:        result.Install.CC,
 		CXX:       result.Install.CXX,
 		File:      result.Install.ToolchainFile,
-		CXXStdlib: result.Driver.CXXStdlib.Name,
+		CXXStdlib: result.CXXStdlib(),
 		Tools:     result.Install.Tools,
 	}, nil
 }
 
 // resolveToolchain resolves and installs the requested channel through
-// clangup's stable JSON consumer interface. A floating channel is pinned to
-// the exact release and target returned by clangup.
+// clangup's Go consumer API. A floating channel is pinned to the exact release
+// and target returned by clangup.
 func resolveToolchain(selector string, lock *Lock) (tc *Toolchain, lockDirty bool, err error) {
 	if selector == "" {
 		tc, err := systemToolchain()
@@ -107,24 +87,15 @@ func resolveToolchain(selector string, lock *Lock) (tc *Toolchain, lockDirty boo
 	lockDirty = lock.dirty
 	pin := lock.toolchainFor(runtime.GOOS, runtime.GOARCH)
 	requested := effectiveSelector(selector, pin)
-	var result clangupResolveResult
 	target := pin.Target
 	if target == "" {
 		target = hostTarget()
 	}
-	extra := targetFlag(target)
-	if err := runClangupJSON("ensure", requested, &result, extra...); err != nil {
-		if !strings.Contains(err.Error(), "channel index is not cached") {
-			return nil, false, err
-		}
-		if updateErr := runClangupUpdate(); updateErr != nil {
-			return nil, false, updateErr
-		}
-		if err := runClangupJSON("ensure", requested, &result, extra...); err != nil {
-			return nil, false, err
-		}
+	result, err := clangupEnsure(requested, target)
+	if err != nil {
+		return nil, false, err
 	}
-	tc, err = toolchainFromResult(&result)
+	tc, err = toolchainFromResult(result)
 	if err != nil {
 		return nil, false, err
 	}
@@ -150,107 +121,21 @@ func locateToolchain(selector string, lock *Lock) (*Toolchain, error) {
 		return systemToolchain()
 	}
 	requested := effectiveSelector(selector, lock.toolchainFor(runtime.GOOS, runtime.GOARCH))
-	var resolved clangupResolveResult
 	target := lock.toolchainFor(runtime.GOOS, runtime.GOARCH).Target
 	if target == "" {
 		target = hostTarget()
 	}
-	if err := runClangupJSON("resolve", requested, &resolved, targetFlag(target)...); err != nil {
+	resolved, err := clangupLocate(requested, target)
+	if err != nil {
 		return nil, err
 	}
-	var path struct {
-		Schema  string `json:"schema"`
-		Prefix  string `json:"prefix"`
-		Channel string `json:"channel"`
-		Version string `json:"version"`
-		Release int    `json:"release"`
-		Target  string `json:"target"`
-	}
-	if err := runClangupJSON("path", exactSelector(&resolved), &path, "--target", resolved.Target); err != nil {
+	if resolved.Install == nil {
 		return nil, nil
 	}
-	resolved.Install = &struct {
-		Prefix        string            `json:"prefix"`
-		CC            string            `json:"cc"`
-		CXX           string            `json:"cxx"`
-		ToolchainFile string            `json:"toolchain_file"`
-		Tools         map[string]string `json:"tools"`
-	}{
-		Prefix: path.Prefix,
-		CC:     filepath.Join(path.Prefix, "bin", "clang"),
-		CXX:    filepath.Join(path.Prefix, "bin", "clang++"),
-		Tools: map[string]string{
-			"clang-format": filepath.Join(path.Prefix, "bin", "clang-format"),
-			"clang-tidy":   filepath.Join(path.Prefix, "bin", "clang-tidy"),
-		},
-	}
-	if candidate := filepath.Join(path.Prefix, "toolchain.cmake"); fileExists(candidate) {
-		resolved.Install.ToolchainFile = candidate
-	}
-	return toolchainFromResult(&resolved)
-}
-
-func clangupBin() string {
-	if path, err := exec.LookPath("clangup"); err == nil {
-		return path
-	}
-	home, err := os.UserHomeDir()
-	if err == nil {
-		path := filepath.Join(home, ".local", "bin", "clangup")
-		if fileExists(path) {
-			return path
-		}
-	}
-	return ""
-}
-
-func runClangupJSON(command, selector string, output any, extraArgs ...string) error {
-	bin := clangupBin()
-	if bin == "" {
-		return fmt.Errorf("clangup is required to resolve toolchain %s", selector)
-	}
-	args := []string{command, selector}
-	args = append(args, extraArgs...)
-	args = append(args, "--format=json")
-	cmd := exec.Command(bin, args...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		message := strings.TrimSpace(stderr.String())
-		if message == "" {
-			message = err.Error()
-		}
-		return fmt.Errorf("clangup %s %s: %s", command, selector, message)
-	}
-	if err := json.Unmarshal(stdout.Bytes(), output); err != nil {
-		return fmt.Errorf("decode clangup %s output: %w", command, err)
-	}
-	return nil
-}
-
-func targetFlag(target string) []string {
-	if target == "" {
-		return nil
-	}
-	return []string{"--target", target}
+	return toolchainFromResult(resolved)
 }
 
 func hostTarget() string { return platform.HostTarget() }
-
-func runClangupUpdate() error {
-	bin := clangupBin()
-	if bin == "" {
-		return fmt.Errorf("clangup is required to update the channel index")
-	}
-	cmd := exec.Command(bin, "update")
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("clangup update: %w", err)
-	}
-	return nil
-}
 
 func systemToolchain() (*Toolchain, error) {
 	cc := os.Getenv("CC")

@@ -73,7 +73,7 @@ func newInstallCommand() *cobra.Command {
 	return command
 }
 
-func writeInstallResult(command *cobra.Command, result *installResult, format string) error {
+func writeInstallResult(command *cobra.Command, result *InstallResult, format string) error {
 	if format == "json" {
 		return writeJSON(command, result)
 	}
@@ -125,7 +125,7 @@ func newConsumerCommand(name string, ensure bool) *cobra.Command {
 // selector is served from its install record — no channel index, so no
 // network — unless an explicit --prefix asks for a fresh installation
 // somewhere else.
-func consumerResult(selector, prefix, target string, ensure bool) (*resolveResult, error) {
+func consumerResult(selector, prefix, target string, ensure bool) (*ResolveResult, error) {
 	if prefix == "" {
 		record, err := installedExact(selector, target)
 		if err != nil {
@@ -166,31 +166,24 @@ func newPathCommand() *cobra.Command {
 			if err := validateOutputFormat(format); err != nil {
 				return invalidRequest(err)
 			}
-			if record, err := installedExact(args[0], target); err != nil {
-				return installFailure(err)
-			} else if record != nil {
-				if format == "json" {
-					return writeJSON(command, map[string]any{"schema": "clangup.path/v1", "prefix": record.Prefix, "channel": record.Channel, "version": record.Version, "release": record.Release, "target": record.Target})
-				}
-				fmt.Fprintln(command.OutOrStdout(), record.Prefix)
-				return nil
-			}
-			selected, err := resolveSelector(args[0], target)
+			result, err := Locate(args[0], target)
 			if err != nil {
 				return installFailure(err)
 			}
-			selector := fmt.Sprintf("%s@%s-%d", selected.channel, selected.release.Version, selected.release.Release)
-			record, err := findInstalled(selector)
-			if err != nil {
-				return installFailure(err)
-			}
-			if record.Target != selected.artifact.Target {
-				return installFailure(fmt.Errorf("installed target mismatch: %s", record.Target))
+			if result.Install == nil {
+				return installFailure(fmt.Errorf("installed toolchain not found: %s", args[0]))
 			}
 			if format == "json" {
-				return writeJSON(command, map[string]any{"schema": "clangup.path/v1", "prefix": record.Prefix, "channel": selected.channel, "version": selected.release.Version, "release": selected.release.Release, "target": record.Target})
+				return writeJSON(command, map[string]any{
+					"schema":  "clangup.path/v1",
+					"prefix":  result.Install.Prefix,
+					"channel": result.Channel,
+					"version": result.Version,
+					"release": result.Release,
+					"target":  result.Target,
+				})
 			}
-			fmt.Fprintln(command.OutOrStdout(), record.Prefix)
+			fmt.Fprintln(command.OutOrStdout(), result.Install.Prefix)
 			return nil
 		},
 	}

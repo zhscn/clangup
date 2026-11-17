@@ -64,8 +64,8 @@ func cmdUpdate(names []string) error {
 	if all || slices.Contains(names, "toolchain") {
 		selector := p.toolchainSelector()
 		if selector != "" && !strings.Contains(selector, "@") {
-			if err := runClangupUpdate(); err != nil {
-				return err
+			if err := clangupSyncIndex(); err != nil {
+				return fmt.Errorf("clangup update: %w", err)
 			}
 		}
 		pin := lk.toolchainFor(runtime.GOOS, runtime.GOARCH)

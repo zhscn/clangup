@@ -1,72 +1,89 @@
 package cmk
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/zhscn/clangup/internal/clangup"
+	"github.com/zhscn/clangup/internal/clangup/toolchain"
 )
 
-func TestResolveToolchainUsesClangupChannelInterface(t *testing.T) {
-	directory := t.TempDir()
-	prefix := filepath.Join(directory, "toolchain")
+func TestResolveToolchainUsesClangupInProcess(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CLANGUP_HOME", home)
+	target := hostTarget()
+	prefix := filepath.Join(home, "toolchains", "libcxx", "23.1.0-1", target)
 	if err := os.MkdirAll(filepath.Join(prefix, "bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"clang", "clang++", "clang-format", "clang-tidy"} {
-		if err := os.WriteFile(filepath.Join(prefix, "bin", name), nil, 0o755); err != nil {
+		if err := os.WriteFile(filepath.Join(prefix, "bin", name), []byte(name), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
 	toolchainFile := filepath.Join(prefix, "toolchain.cmake")
-	if err := os.WriteFile(toolchainFile, nil, 0o644); err != nil {
+	if err := os.WriteFile(toolchainFile, []byte("# toolchain\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	log := filepath.Join(directory, "clangup.args")
-	result := fmt.Sprintf(`{"schema":"clangup.resolve/v1","channel":"libcxx","version":"23.1.0","release":1,"target":"x86_64-unknown-linux-gnu","manifest_sha256":"%s","artifact_sha256":"%s","driver":{"cxx_stdlib":{"name":"libc++"}},"install":{"prefix":%q,"cc":%q,"cxx":%q,"toolchain_file":%q,"tools":{"clang-format":%q,"clang-tidy":%q}}}`,
-		strings.Repeat("a", 64), strings.Repeat("b", 64), prefix,
-		filepath.Join(prefix, "bin", "clang"), filepath.Join(prefix, "bin", "clang++"), toolchainFile,
-		filepath.Join(prefix, "bin", "clang-format"), filepath.Join(prefix, "bin", "clang-tidy"))
-	clangup := filepath.Join(directory, "clangup")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" > " + shellQuote([]string{log}) + "\nprintf '%s\\n' " + shellQuote([]string{result}) + "\n"
-	if err := os.WriteFile(clangup, []byte(script), 0o755); err != nil {
+	if err := toolchain.RecordInstall(toolchain.InstallRecord{
+		Channel:        "libcxx",
+		Version:        "23.1.0",
+		Release:        1,
+		Target:         target,
+		Prefix:         prefix,
+		ManifestSHA256: strings.Repeat("a", 64),
+		ArtifactSHA256: strings.Repeat("b", 64),
+		Driver:         map[string]any{"cxx_stdlib": map[string]any{"name": "libc++"}},
+	}); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", directory)
+
+	var calls []string
+	prevEnsure := clangupEnsure
+	clangupEnsure = func(selector, requestedTarget string) (*clangup.ResolveResult, error) {
+		calls = append(calls, selector+"#"+requestedTarget)
+		if selector == "libcxx" {
+			selector = "libcxx@23.1.0-1"
+		}
+		return clangup.Ensure(selector, requestedTarget)
+	}
+	t.Cleanup(func() { clangupEnsure = prevEnsure })
 
 	lock := &Lock{}
-	toolchain, dirty, err := resolveToolchain("libcxx", lock)
+	tc, dirty, err := resolveToolchain("libcxx", lock)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !dirty || toolchain.Selector != "libcxx@23.1.0-1" || toolchain.CXXStdlib != "libc++" {
-		t.Fatalf("unexpected toolchain: %#v, dirty=%v", toolchain, dirty)
+	if !dirty || tc.Selector != "libcxx@23.1.0-1" || tc.CXXStdlib != "libc++" || tc.File != toolchainFile {
+		t.Fatalf("unexpected toolchain: %#v, dirty=%v", tc, dirty)
 	}
 	pin := lock.Toolchains[hostPlatform(runtime.GOOS, runtime.GOARCH)]
-	if pin == nil || pin.Selector != "libcxx@23.1.0-1" || pin.Target != "x86_64-unknown-linux-gnu" {
+	if pin == nil || pin.Selector != "libcxx@23.1.0-1" || pin.Target != target {
 		t.Fatalf("unexpected lock: %#v", lock.Toolchains)
 	}
-	arguments, err := os.ReadFile(log)
-	if err != nil {
-		t.Fatal(err)
+	if len(calls) != 1 || calls[0] != "libcxx#"+target {
+		t.Fatalf("first resolve calls = %v", calls)
 	}
-	if string(arguments) != "ensure libcxx --target "+hostTarget()+" --format=json\n" {
-		t.Fatalf("clangup arguments = %q", arguments)
-	}
-	if tidy, err := toolchain.command("clang-tidy"); err != nil || tidy != filepath.Join(prefix, "bin", "clang-tidy") {
+	if tidy, err := tc.command("clang-tidy"); err != nil || tidy != filepath.Join(prefix, "bin", "clang-tidy") {
 		t.Fatalf("clang-tidy = %q, %v", tidy, err)
 	}
+
+	// Second resolve uses the exact pinned selector directly from CLANGUP_HOME
+	// without requiring a clangup binary on PATH or network access.
+	t.Setenv("PATH", t.TempDir())
 	if _, dirty, err := resolveToolchain("libcxx", lock); err != nil || dirty {
 		t.Fatalf("pinned resolve: dirty=%v, err=%v", dirty, err)
 	}
-	arguments, err = os.ReadFile(log)
-	if err != nil {
-		t.Fatal(err)
+	if len(calls) != 2 || calls[1] != "libcxx@23.1.0-1#"+target {
+		t.Fatalf("pinned resolve calls = %v", calls)
 	}
-	if string(arguments) != "ensure libcxx@23.1.0-1 --target x86_64-unknown-linux-gnu --format=json\n" {
-		t.Fatalf("pinned clangup arguments = %q", arguments)
+
+	located, err := locateToolchain("libcxx", lock)
+	if err != nil || located == nil || located.Root != prefix || located.File != toolchainFile {
+		t.Fatalf("locateToolchain = %#v, %v", located, err)
 	}
 }
 
