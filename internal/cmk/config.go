@@ -130,34 +130,36 @@ var cmakeCacheNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 var toolchainPlatformRe = regexp.MustCompile(`^(linux|macos)-(x86_64|aarch64)$`)
 var sha256Re = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-func loadConfig(root string) (*Config, error) {
-	cfg := &Config{}
+func loadConfig(root string) (*Config, bool, error) {
+	cfg := &Config{
+		Toolchain: ToolchainCfg{},
+		Deps:      map[string]*DepCfg{},
+		Env:       map[string]string{},
+		TargetEnv: map[string]map[string]string{},
+	}
 	path := filepath.Join(root, configFileName)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			if err := normalizeConfig(cfg); err != nil {
-				return nil, err
-			}
-			return cfg, nil
+			return cfg, false, nil
 		}
-		return nil, err
+		return nil, false, err
 	}
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(cfg); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
+		return nil, false, fmt.Errorf("%s: %w", path, err)
 	}
 	if cfg.Version != 1 {
-		return nil, fmt.Errorf("%s: version must be 1", path)
+		return nil, false, fmt.Errorf("%s: version must be 1", path)
 	}
 	if err := normalizeConfig(cfg); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
+		return nil, false, fmt.Errorf("%s: %w", path, err)
 	}
 	if err := validateConfig(cfg, root); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
+		return nil, false, fmt.Errorf("%s: %w", path, err)
 	}
-	return cfg, nil
+	return cfg, true, nil
 }
 
 func normalizeConfig(cfg *Config) error {

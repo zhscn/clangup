@@ -219,3 +219,33 @@ func TestBuildEnvSkipsToolchainForForeignTree(t *testing.T) {
 		t.Error("foreign build env resolved a toolchain")
 	}
 }
+
+func TestExplicitBuildFlagResolvesRelativeToPWDInManagedAndForeignProjects(t *testing.T) {
+	for _, managed := range []bool{false, true} {
+		root := t.TempDir()
+		build := filepath.Join(root, "out", "custom")
+		sub := filepath.Join(root, "src")
+		for _, dir := range []string{build, sub} {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.WriteFile(filepath.Join(build, "CMakeCache.txt"), []byte(singleConfigCache), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if managed {
+			if err := os.WriteFile(filepath.Join(root, configFileName), []byte("version: 1\ncmake:\n  generator: Ninja\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		t.Chdir(sub)
+		p, err := openProject()
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := p.resolveBuildDir("../out/custom")
+		if err != nil || got != build {
+			t.Fatalf("managed=%v: resolveBuildDir(../out/custom) = (%q, %v), want %q", managed, got, err, build)
+		}
+	}
+}

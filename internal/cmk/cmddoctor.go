@@ -32,7 +32,7 @@ func cmdDoctor() error {
 
 	fmt.Println("project:")
 	c.ok("root %s", p.Root)
-	if !p.hasCmkConfig() {
+	if !p.Managed {
 		c.note("foreign CMake project (cmk drives existing build trees; cmake configures them)")
 	} else if _, err := os.Stat(filepath.Join(p.Root, lockFileName)); err == nil {
 		c.ok("cmk.yaml + cmk.lock present")
@@ -45,7 +45,7 @@ func cmdDoctor() error {
 
 	fmt.Println("build tools:")
 	checkTool(c, "cmake")
-	if p.hasCmkConfig() {
+	if p.Managed {
 		for _, preset := range p.Cfg.Configure.Presets {
 			if strings.HasPrefix(strings.ToLower(effectiveGenerator(p.Cfg, preset)), "ninja") {
 				checkTool(c, "ninja")
@@ -54,7 +54,7 @@ func cmdDoctor() error {
 		}
 	}
 
-	if p.hasCmkConfig() && hasMultiConfigPreset(p.Cfg) {
+	if p.Managed && hasMultiConfigPreset(p.Cfg) {
 		fmt.Println("configurations (multi-config):")
 		doctorConfigurations(c, p)
 	}
@@ -77,7 +77,7 @@ func cmdDoctor() error {
 		for _, d := range p.listBuildDirs() {
 			abs := p.BuildDirs[d]
 			switch {
-			case !p.hasCmkConfig():
+			case !p.Managed:
 				c.note("%s — existing CMake build tree", d)
 			case tc == nil:
 				c.ok("%s", d) // toolchain unavailable; staleness not assessable
@@ -140,7 +140,7 @@ func doctorToolchain(c *doctorChecker, p *Project) {
 	if selector == "" {
 		tc, err := systemToolchain()
 		if err != nil {
-			if !p.hasCmkConfig() {
+			if !p.Managed {
 				// Nothing here needs a compiler of cmk's own: existing
 				// build trees carry theirs in the cache, and fmt/lint
 				// take clang-format/clang-tidy from PATH.

@@ -154,7 +154,7 @@ func (t *buildTree) lintCompilationDatabase() (string, string, error) {
 // foreign tree resolveVariant already resolved it against the cache, and it
 // is non-empty exactly for multi-config trees.
 func (t *buildTree) lintConfiguration() (string, bool) {
-	if !t.p.hasCmkConfig() {
+	if t.foreign {
 		return t.config, t.config != ""
 	}
 	if !isMultiConfig(t.p.Cfg, t.preset()) {

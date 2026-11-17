@@ -22,7 +22,7 @@ func cmdConfig(options configOptions, extraArgs []string) error {
 	if err != nil {
 		return err
 	}
-	if !p.hasCmkConfig() {
+	if !p.Managed {
 		return fmt.Errorf("cmk config requires %s", configFileName)
 	}
 	if options.Preset != "" && options.BuildDir != "" {
@@ -34,11 +34,11 @@ func cmdConfig(options configOptions, extraArgs []string) error {
 
 	var tree *buildTree
 	if options.BuildDir != "" {
-		buildDir := options.BuildDir
-		if !filepath.IsAbs(buildDir) {
-			buildDir = filepath.Join(p.Root, buildDir)
+		buildDir, err := filepath.Abs(options.BuildDir)
+		if err != nil {
+			return err
 		}
-		tree = p.treeAt(filepath.Clean(buildDir), "")
+		tree = p.treeAt(buildDir, "")
 		if options.IfStale && tree.preset() == nil {
 			return fmt.Errorf("%s is not a build directory declared by %s", p.relToRoot(tree.dir), configFileName)
 		}
@@ -79,7 +79,7 @@ func presetBuildDir(p *Project, preset *PresetCfg) string {
 // compiler or cache variables and must not replace them, so it gets a
 // plain in-place reconfigure that only plants what is missing.
 func (t *buildTree) regenerate(defines ...string) error {
-	if t.p.hasCmkConfig() {
+	if !t.foreign {
 		return t.configure(stampExtra(t.dir))
 	}
 	return t.regenerateForeign(defines...)
@@ -129,7 +129,7 @@ func (t *buildTree) configureWithOptions(extraArgs []string, forceFresh bool) er
 	}
 	dir, p := t.dir, t.p
 	preset := t.preset()
-	if preset == nil && p.hasCmkConfig() {
+	if preset == nil && !t.foreign {
 		var err error
 		preset, err = resolvePreset(p.Cfg, "")
 		if err != nil {

@@ -93,7 +93,7 @@ func TestLintCompilationDatabaseSelectsOneConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	preset := &PresetCfg{Generator: "Ninja Multi-Config"}
-	p := &Project{Root: root, Cfg: &Config{Configure: ConfigureCfg{
+	p := &Project{Root: root, Managed: true, Cfg: &Config{Configure: ConfigureCfg{
 		Generator:            "Ninja Multi-Config",
 		DefaultConfiguration: "Debug",
 		Configurations:       []*ConfigurationCfg{{Name: "Debug"}, {Name: "Release"}},
@@ -185,7 +185,7 @@ func TestSyncRootCompileCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p := &Project{Root: root, Cfg: &Config{Configure: ConfigureCfg{
+	p := &Project{Root: root, Managed: true, Cfg: &Config{Configure: ConfigureCfg{
 		Generator:            "Ninja Multi-Config",
 		Configurations:       []*ConfigurationCfg{{Name: "Debug"}, {Name: "Asan"}},
 		DefaultConfiguration: "Asan",

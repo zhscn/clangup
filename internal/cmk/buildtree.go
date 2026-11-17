@@ -18,11 +18,12 @@ import (
 // often a preset alongside. Carrying them together is what keeps two
 // commands from making different decisions about the same directory.
 type buildTree struct {
-	p      *Project
-	dir    string
-	config string
+	p       *Project
+	dir     string
+	config  string
+	foreign bool
 	// selected is the preset the caller picked, when a caller picked one
-	// (`cmk config <preset>`, the bootstrap of a preset's first build).
+	// (`cmk config -p <preset>`, the bootstrap of a preset's first build).
 	// Otherwise the tree reports the preset recorded in its own stamp.
 	selected *PresetCfg
 	recorded *PresetCfg
@@ -32,18 +33,21 @@ type buildTree struct {
 // treeAt is the build tree at dir, whose preset is whatever that
 // directory records.
 func (p *Project) treeAt(dir, config string) *buildTree {
-	return &buildTree{p: p, dir: dir, config: config}
+	return &buildTree{p: p, dir: dir, config: config, foreign: !p.Managed}
 }
 
 // treeFor is the build tree a preset configures into.
 func (p *Project) treeFor(preset *PresetCfg, config string) *buildTree {
-	return &buildTree{p: p, dir: presetBuildDir(p, preset), config: config, selected: preset}
+	return &buildTree{p: p, dir: presetBuildDir(p, preset), config: config, foreign: !p.Managed, selected: preset}
 }
 
 // preset is the preset this tree is configured by: the caller's choice
 // when there was one, else the identity recorded in the injection stamp
 // (see presetForDir). Looked up once — it reads the stamp.
 func (t *buildTree) preset() *PresetCfg {
+	if t.foreign {
+		return nil
+	}
 	if t.selected != nil {
 		return t.selected
 	}
@@ -54,11 +58,10 @@ func (t *buildTree) preset() *PresetCfg {
 }
 
 // resolveBuildTree is the shared preamble of build, run, test, install,
-// build-tu and lint: open the project, configure the selected preset's
-// tree when it does not exist yet, resolve the build dir and
-// configuration, and reconfigure a stale one per the policy. Routing all
-// of them through here is what keeps them from drifting apart — a foreign
-// build tree in particular must be treated identically by all six.
+// build-tu and lint: it opens the project and dispatches once between
+// managed cmk.yaml projects (which own preset selection, bootstrap, and
+// staleness reconfiguration) and foreign CMake trees (which preserve their
+// existing cache and regeneration rules).
 //
 // readOnly mirrors --no-build: the caller only reads an existing tree, so
 // nothing is configured on its behalf.
@@ -71,19 +74,42 @@ func resolveBuildTree(options variantOptions, readOnly bool) (*buildTree, error)
 	if err != nil {
 		return nil, err
 	}
-	if !readOnly {
-		if err := bootstrapIfUnconfigured(p, options.BuildDir, options.Preset, policy); err != nil {
-			return nil, err
-		}
+	if !p.Managed {
+		return p.resolveForeignTree(options.treeOptions)
 	}
-	dir, config, err := p.resolveVariant(options.BuildDir, options.Preset, options.Config)
+	return p.resolveManagedTree(options.treeOptions, policy, readOnly)
+}
+
+func (p *Project) resolveForeignTree(options treeOptions) (*buildTree, error) {
+	if options.Preset != "" {
+		return nil, fmt.Errorf("--preset requires a cmk.yaml project")
+	}
+	dir, err := p.resolveBuildDir(options.BuildDir)
 	if err != nil {
 		return nil, err
 	}
-	tree := p.treeAt(dir, config)
+	config, err := foreignConfig(dir, options.Config)
+	if err != nil {
+		return nil, err
+	}
+	return p.treeAt(dir, config), nil
+}
+
+func (p *Project) resolveManagedTree(options treeOptions, policy configurePolicy, readOnly bool) (*buildTree, error) {
+	bootstrapped := false
 	if !readOnly {
-		// A foreign tree keeps its own regeneration behavior;
-		// ensureConfigured is a no-op there and cmake runs straight through.
+		var err error
+		bootstrapped, err = bootstrapTree(p, options.BuildDir, options.Preset, policy)
+		if err != nil {
+			return nil, err
+		}
+	}
+	dir, preset, config, err := p.resolveManagedVariant(options.BuildDir, options.Preset, options.Config)
+	if err != nil {
+		return nil, err
+	}
+	tree := &buildTree{p: p, dir: dir, config: config, selected: preset}
+	if !readOnly && !bootstrapped {
 		if err := tree.ensureConfigured(policy); err != nil {
 			return nil, err
 		}

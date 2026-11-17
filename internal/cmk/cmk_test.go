@@ -495,9 +495,9 @@ func TestMinimalConfigDefaultsToMultiConfig(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, configFileName), []byte("version: 1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := loadConfig(root)
-	if err != nil {
-		t.Fatal(err)
+	cfg, managed, err := loadConfig(root)
+	if err != nil || !managed {
+		t.Fatalf("loadConfig = (%v, %v)", managed, err)
 	}
 	if cfg.Configure.Generator != "Ninja Multi-Config" {
 		t.Fatalf("generator = %q, want Ninja Multi-Config", cfg.Configure.Generator)
@@ -546,7 +546,7 @@ cmake:
 	if err := os.WriteFile(filepath.Join(root, configFileName), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := loadConfig(root)
+	cfg, _, err := loadConfig(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -556,7 +556,7 @@ cmake:
 	if cfg.Configure.Presets["minimal"].BuildDir != "build/minimal" || cfg.Toolchain.selectorFor("linux", "x86_64") != "libcxx" {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
-	p := &Project{Root: root, Cfg: cfg, Lock: &Lock{}, BuildDirs: map[string]string{}}
+	p := &Project{Root: root, Managed: true, Cfg: cfg, Lock: &Lock{}, BuildDirs: map[string]string{}}
 	// Every multi-config preset exposes all configurations.
 	dir, configuration, err := p.resolveVariant("", "minimal", "Asan")
 	if err != nil || dir != filepath.Join(root, "build/minimal") || configuration != "Asan" {
@@ -584,7 +584,7 @@ lint:
 	if err := os.WriteFile(filepath.Join(root, configFileName), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := loadConfig(root)
+	cfg, _, err := loadConfig(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -636,7 +636,7 @@ cmake:
 			if err := os.WriteFile(filepath.Join(root, configFileName), []byte(body), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := loadConfig(root); err == nil {
+			if _, _, err := loadConfig(root); err == nil {
 				t.Fatal("invalid configuration accepted")
 			}
 		})
@@ -666,7 +666,7 @@ cmake:
 	if err := os.WriteFile(filepath.Join(root, configFileName), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := loadConfig(root)
+	cfg, _, err := loadConfig(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -701,7 +701,7 @@ func TestWriteUserPresetsMatrix(t *testing.T) {
 	if err := normalizeConfig(cfg); err != nil {
 		t.Fatal(err)
 	}
-	p := &Project{Root: root, Cfg: cfg, Lock: &Lock{}}
+	p := &Project{Root: root, Managed: true, Cfg: cfg, Lock: &Lock{}}
 	tc := &Toolchain{CC: "/opt/clang/bin/clang", CXX: "/opt/clang/bin/clang++"}
 	if err := writeUserPresets(p, tc); err != nil {
 		t.Fatal(err)

@@ -13,8 +13,9 @@ import (
 )
 
 type Project struct {
-	Root string
-	Cfg  *Config
+	Root    string
+	Managed bool
+	Cfg     *Config
 	// Lock is the loaded cmk.lock; dep store paths resolve through its
 	// pinned stamps.
 	Lock *Lock
@@ -185,7 +186,7 @@ func openProject() (*Project, error) {
 	if err != nil {
 		return nil, err
 	}
-	cfg, err := loadConfig(root)
+	cfg, managed, err := loadConfig(root)
 	if err != nil {
 		return nil, err
 	}
@@ -197,7 +198,7 @@ func openProject() (*Project, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := &Project{Root: root, Cfg: cfg, Lock: lk, Dev: dev, BuildDirs: map[string]string{}}
+	p := &Project{Root: root, Managed: managed, Cfg: cfg, Lock: lk, Dev: dev, BuildDirs: map[string]string{}}
 	p.computeDevAffected()
 	p.scanBuildDirs()
 	p.registerManagedBuildDirs()
@@ -260,7 +261,7 @@ func (p *Project) scanBuildDirs() {
 }
 
 func (p *Project) registerManagedBuildDirs() {
-	if !p.hasCmkConfig() {
+	if !p.Managed {
 		return
 	}
 	for _, preset := range p.Cfg.Configure.Presets {
@@ -301,22 +302,18 @@ func (p *Project) listBuildDirs() []string {
 	return slices.Sorted(maps.Keys(p.BuildDirs))
 }
 
-// resolveBuildDir follows the cascade: explicit name, PWD inside a build
-// tree, the only known tree, the managed default preset, then fzf.
+// resolveBuildDir follows the cascade: explicit CLI path (resolved relative
+// to PWD first, then known project-relative names), PWD inside a build tree,
+// the only known tree, the managed default preset, then fzf.
 func (p *Project) resolveBuildDir(name string) (string, error) {
 	if name != "" {
-		if abs, ok := p.BuildDirs[name]; ok {
-			return abs, nil
-		}
-		candidate := name
-		if p.hasCmkConfig() && !filepath.IsAbs(candidate) {
-			candidate = filepath.Join(p.Root, candidate)
-		}
-		// Managed paths are project-relative; foreign paths are PWD-relative.
-		if abs, err := filepath.Abs(candidate); err == nil {
-			if _, err := os.Stat(filepath.Join(abs, "CMakeCache.txt")); err == nil {
+		if abs, err := filepath.Abs(name); err == nil {
+			if fileExists(filepath.Join(abs, "CMakeCache.txt")) {
 				return abs, nil
 			}
+		}
+		if abs, ok := p.BuildDirs[filepath.Clean(name)]; ok {
+			return abs, nil
 		}
 		return "", fmt.Errorf("build directory %q not found (known: %s)",
 			name, strings.Join(p.listBuildDirs(), ", "))
@@ -329,7 +326,7 @@ func (p *Project) resolveBuildDir(name string) (string, error) {
 		}
 	}
 	if len(p.BuildDirs) == 0 {
-		if !p.hasCmkConfig() {
+		if !p.Managed {
 			// `cmk config` is not an option here — it requires cmk.yaml.
 			return "", fmt.Errorf("no CMake build directories found under %s; configure one with `cmake -B build`, or add %s and run `cmk config`",
 				p.Root, configFileName)
@@ -341,7 +338,7 @@ func (p *Project) resolveBuildDir(name string) (string, error) {
 			return abs, nil
 		}
 	}
-	if p.hasCmkConfig() {
+	if p.Managed {
 		if preset := p.Cfg.Configure.Presets[p.Cfg.Configure.DefaultPreset]; preset != nil {
 			path := presetBuildDir(p, preset)
 			if _, err := os.Stat(filepath.Join(path, "CMakeCache.txt")); err == nil {
@@ -354,12 +351,6 @@ func (p *Project) resolveBuildDir(name string) (string, error) {
 		return "", err
 	}
 	return p.BuildDirs[sel], nil
-}
-
-// hasCmkConfig reports whether the project declares itself cmk-managed.
-func (p *Project) hasCmkConfig() bool {
-	_, err := os.Stat(filepath.Join(p.Root, configFileName))
-	return err == nil
 }
 
 // vars returns the expansion variables available in cmk.yaml values.
@@ -409,7 +400,7 @@ func (p *Project) commandEnv(layers ...map[string]string) []string {
 // `cmk build` in an existing tree fail on hosts where cmk can find no
 // compiler of its own.
 func (p *Project) buildEnv(layers ...map[string]string) ([]string, error) {
-	if !p.hasCmkConfig() {
+	if !p.Managed {
 		return p.commandEnv(layers...), nil
 	}
 	tc, err := p.toolchain()

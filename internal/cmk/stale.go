@@ -54,10 +54,7 @@ func configurePolicyFromFlags(locked, noConfig bool) (configurePolicy, error) {
 // their own CMake regeneration behavior.
 func (t *buildTree) ensureConfigured(policy configurePolicy) error {
 	dir, p := t.dir, t.p
-	if policy == configureSkip {
-		return nil
-	}
-	if !p.hasCmkConfig() {
+	if policy == configureSkip || t.foreign {
 		return nil
 	}
 	if policy == configureLocked {
@@ -123,36 +120,35 @@ func (t *buildTree) ensureConfigured(policy configurePolicy) error {
 // bootstrapIfUnconfigured configures the selected preset when its build tree
 // does not exist yet.
 func bootstrapIfUnconfigured(p *Project, buildDirFlag, presetName string, policy configurePolicy) error {
-	if policy == configureSkip {
-		return nil
-	}
-	if buildDirFlag != "" {
-		return nil // an explicit -b dir is never auto-created
-	}
-	if !p.hasCmkConfig() {
-		return nil // auto-configure is for declared cmk projects (see ensureConfigured)
+	_, err := bootstrapTree(p, buildDirFlag, presetName, policy)
+	return err
+}
+
+func bootstrapTree(p *Project, buildDirFlag, presetName string, policy configurePolicy) (bool, error) {
+	if policy == configureSkip || buildDirFlag != "" || !p.Managed {
+		return false, nil
 	}
 	if _, err := os.Stat(filepath.Join(p.Root, "CMakeLists.txt")); err != nil {
-		return nil // not a CMake project root; let build-dir resolution error speak
+		return false, nil // not a CMake project root; let build-dir resolution error speak
 	}
 	preset, err := resolvePreset(p.Cfg, presetName)
 	if err != nil {
-		return err
+		return false, err
 	}
 	tree := p.treeFor(preset, "")
 	if _, err := os.Stat(filepath.Join(tree.dir, "CMakeCache.txt")); err == nil {
-		return nil // the selected variant is already configured
+		return false, nil // the selected variant is already configured
 	}
 	if policy == configureLocked {
-		return fmt.Errorf("--locked: %s is not configured; run `cmk config` first", p.relToRoot(tree.dir))
+		return false, fmt.Errorf("--locked: %s is not configured; run `cmk config` first", p.relToRoot(tree.dir))
 	}
 	fmt.Fprintf(os.Stderr, "cmk: %s is not configured yet; configuring\n", tree.dir)
 	if err := tree.configure(nil); err != nil {
-		return err
+		return false, err
 	}
 	p.scanBuildDirs()
 	p.registerManagedBuildDirs()
-	return nil
+	return true, nil
 }
 
 // presetForDir returns the recorded preset identity, falling back to matching

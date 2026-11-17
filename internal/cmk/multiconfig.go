@@ -108,41 +108,41 @@ func foreignConfig(buildDir, explicit string) (string, error) {
 }
 
 // resolveVariant selects a managed preset and an optional multi-config
-// configuration. Without cmk.yaml it selects an existing foreign CMake build
-// tree and reads the configuration out of that tree (see foreignConfig).
+// configuration, or reads the configuration from an existing foreign CMake
+// build tree when the project has no cmk.yaml.
 func (p *Project) resolveVariant(buildDir, presetName, configName string) (dir, configuration string, err error) {
-	if !p.hasCmkConfig() {
-		if presetName != "" {
-			return "", "", fmt.Errorf("--preset requires a cmk.yaml project")
-		}
-		if dir, err = p.resolveBuildDir(buildDir); err != nil {
+	if !p.Managed {
+		tree, err := p.resolveForeignTree(treeOptions{BuildDir: buildDir, Preset: presetName, Config: configName})
+		if err != nil {
 			return "", "", err
 		}
-		configuration, err = foreignConfig(dir, configName)
-		return dir, configuration, err
+		return tree.dir, tree.config, nil
 	}
+	dir, _, configuration, err = p.resolveManagedVariant(buildDir, presetName, configName)
+	return dir, configuration, err
+}
+
+func (p *Project) resolveManagedVariant(buildDir, presetName, configName string) (dir string, preset *PresetCfg, configuration string, err error) {
 	if buildDir != "" && presetName != "" {
-		return "", "", fmt.Errorf("pass either --build <dir> or --preset <preset>, not both")
+		return "", nil, "", fmt.Errorf("pass either --build <dir> or --preset <preset>, not both")
 	}
-	var preset *PresetCfg
 	if buildDir != "" {
 		dir, err = p.resolveBuildDir(buildDir)
 	} else {
-		var presetErr error
-		preset, presetErr = resolvePreset(p.Cfg, presetName)
-		if presetErr != nil {
-			return "", "", presetErr
+		preset, err = resolvePreset(p.Cfg, presetName)
+		if err != nil {
+			return "", nil, "", err
 		}
 		dir = presetBuildDir(p, preset)
 	}
 	if err != nil {
-		return "", "", err
+		return "", nil, "", err
 	}
 	if preset == nil {
 		preset = presetForDir(p, dir)
 	}
 	configuration, err = p.resolveConfig(preset, configName)
-	return dir, configuration, err
+	return dir, preset, configuration, err
 }
 
 // configFlagArgs returns the -D cache arguments that populate the compile and

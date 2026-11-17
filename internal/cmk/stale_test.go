@@ -183,7 +183,7 @@ func TestReconfigureReason(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	p := &Project{Root: root, Cfg: &Config{}, Lock: &Lock{}}
+	p := &Project{Root: root, Managed: true, Cfg: &Config{}, Lock: &Lock{}}
 	tc := &Toolchain{CC: "/usr/bin/cc", CXX: "/usr/bin/c++"}
 
 	past := time.Now().Add(-time.Hour)
@@ -332,7 +332,7 @@ func TestReconfigureReason(t *testing.T) {
 
 func TestComputeInjectionSuppressesRegeneration(t *testing.T) {
 	root := t.TempDir()
-	p := &Project{Root: root, Cfg: &Config{}, Lock: &Lock{}}
+	p := &Project{Root: root, Managed: true, Cfg: &Config{}, Lock: &Lock{}}
 	tc := &Toolchain{CC: "cc", CXX: "c++"}
 	injected, _, err := computeInjection(p, tc, nil, nil)
 	if err != nil {
@@ -353,7 +353,7 @@ func TestPresetForDir(t *testing.T) {
 	root := t.TempDir()
 	debug := &PresetCfg{Name: "debug", BuildDir: "build/debug"}
 	release := &PresetCfg{Name: "release", BuildDir: "${PROJECT_ROOT}/build/release"}
-	p := &Project{Root: root, Lock: &Lock{}, Cfg: &Config{
+	p := &Project{Root: root, Managed: true, Lock: &Lock{}, Cfg: &Config{
 		Configure: ConfigureCfg{Presets: map[string]*PresetCfg{"debug": debug, "release": release}},
 	}}
 	if got := presetForDir(p, filepath.Join(root, "build/debug")); got != debug {
@@ -369,7 +369,7 @@ func TestPresetForDir(t *testing.T) {
 
 func TestConfigFlagArgs(t *testing.T) {
 	root := t.TempDir()
-	p := &Project{Root: root, Lock: &Lock{}, Cfg: &Config{
+	p := &Project{Root: root, Managed: true, Lock: &Lock{}, Cfg: &Config{
 		Configure: ConfigureCfg{
 			Generator: "Ninja Multi-Config",
 			Configurations: []*ConfigurationCfg{
