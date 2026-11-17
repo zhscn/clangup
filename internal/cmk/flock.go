@@ -44,9 +44,9 @@ func unlockFile(lock *os.File) {
 }
 
 // lockBuildDir serializes configures of one build dir. The lock lives in
-// the build tree itself, which this creates if it is the first configure.
+// the build tree's .cmk metadata directory, created on first configure.
 func lockBuildDir(dir string) (*os.File, error) {
-	lock, _, err := lockFile(filepath.Join(dir, ".cmk-lock"), true)
+	lock, _, err := lockFile(filepath.Join(dir, ".cmk", "lock"), true)
 	return lock, err
 }
 

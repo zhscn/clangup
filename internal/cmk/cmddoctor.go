@@ -229,7 +229,7 @@ func doctorDeps(c *doctorChecker, p *Project) {
 			continue
 		}
 		entry := entryDir(name, stamp)
-		if fileExists(filepath.Join(entry, completeMarker)) {
+		if entryCompleted(entry) {
 			c.ok("%s (%s)", name, filepath.Base(entry))
 		} else {
 			c.fail("%s pinned in cmk.lock but missing from the store (run cmk sync to rebuild)", name)

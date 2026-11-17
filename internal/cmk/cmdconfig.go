@@ -366,7 +366,7 @@ func launcherArgs(launcher string) []string {
 	}
 }
 
-const injectionStampFile = ".cmk-injection"
+const injectionStampFile = ".cmk/injection.json"
 
 func injectionHash(args []string) string {
 	h := sha256.New()
@@ -377,7 +377,7 @@ func injectionHash(args []string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// injectionStamp is the .cmk-injection record: the injection identity
+// injectionStamp is the .cmk/injection.json record: the injection identity
 // hash, plus the ad-hoc CLI args (`cmk config -- -DFOO=ON`) that were
 // part of it — recorded so an automatic reconfigure re-applies them
 // instead of silently dropping them with the --fresh cache wipe. An
@@ -418,16 +418,19 @@ func injectionChanged(dir string, args []string) bool {
 }
 
 func writeInjectionStamp(dir string, args, extra []string, preset string) {
+	path := filepath.Join(dir, injectionStampFile)
 	data, err := json.Marshal(&injectionStamp{Hash: injectionHash(args), Preset: preset, Extra: extra})
 	if err == nil {
-		err = os.WriteFile(filepath.Join(dir, injectionStampFile), append(data, '\n'), 0o644)
+		if err = os.MkdirAll(filepath.Dir(path), 0o755); err == nil {
+			err = os.WriteFile(path, append(data, '\n'), 0o644)
+		}
 	}
 	if err != nil {
 		// Not fatal for this run, but without a stamp every subsequent
 		// build reconfigures with --fresh; say why instead of looping
 		// silently.
 		fmt.Fprintf(os.Stderr, "cmk: warning: cannot write %s: %v (every build will reconfigure until this is fixed)\n",
-			filepath.Join(dir, injectionStampFile), err)
+			path, err)
 	}
 }
 

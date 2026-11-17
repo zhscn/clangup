@@ -5,9 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 
-	"github.com/BurntSushi/toml"
+	"go.yaml.in/yaml/v3"
 
 	"github.com/zhscn/clangup/internal/platform"
 )
@@ -17,122 +16,76 @@ const lockFileName = "cmk.lock"
 // Lock pins the resolved inputs that cmk.yaml leaves floating: each
 // platform's exact toolchain release and the commit behind each git dep ref.
 type Lock struct {
-	Schema     int                       `toml:"schema"`
-	Toolchain  LockToolchain             `toml:"toolchain,omitempty"`
-	Toolchains map[string]*LockToolchain `toml:"toolchains,omitempty"`
-	Deps       map[string]*LockDep       `toml:"deps"`
+	Version    int                       `yaml:"version"`
+	Toolchains map[string]*LockToolchain `yaml:"toolchains,omitempty"`
+	Deps       map[string]*LockDep       `yaml:"dependencies,omitempty"`
 	dirty      bool
 }
 
 type LockToolchain struct {
-	Selector       string `toml:"selector,omitempty"`
-	Target         string `toml:"target,omitempty"`
-	ManifestSHA256 string `toml:"manifest_sha256,omitempty"`
-	ArtifactSHA256 string `toml:"artifact_sha256,omitempty"`
+	Selector       string `yaml:"selector,omitempty"`
+	Target         string `yaml:"target,omitempty"`
+	ManifestSHA256 string `yaml:"manifest-sha256,omitempty"`
+	ArtifactSHA256 string `yaml:"artifact-sha256,omitempty"`
 }
 
 type LockDep struct {
-	Git    string `toml:"git,omitempty"`
-	Ref    string `toml:"ref,omitempty"`
-	Commit string `toml:"commit,omitempty"`
-	// Stamp is the dep's content hash, which keys its store entry.
-	// Pinned here so build/run/env resolve store paths without
-	// recomputing stamps (and so the entry a build dir was configured
-	// against survives cmk.yaml edits until the next sync).
-	Stamp  string            `toml:"stamp,omitempty"`
-	Stamps map[string]string `toml:"stamps,omitempty"`
+	Git    string `yaml:"git,omitempty"`
+	Ref    string `yaml:"ref,omitempty"`
+	Commit string `yaml:"commit,omitempty"`
+	// Stamps maps platform names to the dep's content hash, which keys its
+	// store entry so build/run/env resolve store paths without recomputing
+	// stamps.
+	Stamps map[string]string `yaml:"stamps,omitempty"`
 }
 
 func loadLock(root string) (*Lock, error) {
-	lk := &Lock{Schema: 2, Toolchains: map[string]*LockToolchain{}, Deps: map[string]*LockDep{}}
-	data, err := os.ReadFile(filepath.Join(root, lockFileName))
+	lk := &Lock{Version: 1, Toolchains: map[string]*LockToolchain{}, Deps: map[string]*LockDep{}}
+	path := filepath.Join(root, lockFileName)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return lk, nil
 		}
 		return nil, err
 	}
-	if _, err := toml.Decode(string(data), lk); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(lk); err != nil {
 		return nil, fmt.Errorf("%s: %w", lockFileName, err)
 	}
-	if lk.Schema > 2 {
-		return nil, fmt.Errorf("%s has schema %d; this cmk only understands 2 (upgrade cmk)", lockFileName, lk.Schema)
-	}
-	if lk.Schema < 2 {
-		lk.dirty = true
+	if lk.Version != 1 {
+		return nil, fmt.Errorf("%s: version must be 1", lockFileName)
 	}
 	if lk.Toolchains == nil {
 		lk.Toolchains = map[string]*LockToolchain{}
-	}
-	platformAliases := map[string]string{}
-	for name, pin := range lk.Toolchains {
-		if name != "linux" && name != "macos" {
-			continue
-		}
-		canonical := platformForTarget(pin.Target)
-		if canonical == "" {
-			continue
-		}
-		platformAliases[name] = canonical
-		if lk.Toolchains[canonical] == nil {
-			lk.Toolchains[canonical] = pin
-		}
-		delete(lk.Toolchains, name)
-		lk.dirty = true
-	}
-	if !lk.Toolchain.empty() {
-		platform := platformForTarget(lk.Toolchain.Target)
-		if platform == "" {
-			platform = hostPlatform(runtime.GOOS, runtime.GOARCH)
-		}
-		if lk.Toolchains[platform] == nil {
-			pin := lk.Toolchain
-			lk.Toolchains[platform] = &pin
-		}
-		lk.Toolchain = LockToolchain{}
 	}
 	if lk.Deps == nil {
 		lk.Deps = map[string]*LockDep{}
 	}
 	for _, dep := range lk.Deps {
-		if dep.Stamps == nil {
+		if dep != nil && dep.Stamps == nil {
 			dep.Stamps = map[string]string{}
-		}
-		for alias, canonical := range platformAliases {
-			if dep.Stamps[alias] != "" && dep.Stamps[canonical] == "" {
-				dep.Stamps[canonical] = dep.Stamps[alias]
-			}
-			if _, ok := dep.Stamps[alias]; ok {
-				delete(dep.Stamps, alias)
-				lk.dirty = true
-			}
-		}
-		if dep.Stamp != "" {
-			platform := hostPlatform(runtime.GOOS, runtime.GOARCH)
-			if len(lk.Toolchains) == 1 {
-				for name := range lk.Toolchains {
-					platform = name
-				}
-			}
-			if dep.Stamps[platform] == "" {
-				dep.Stamps[platform] = dep.Stamp
-			}
-			dep.Stamp = ""
-			lk.dirty = true
 		}
 	}
 	return lk, nil
 }
 
 func saveLock(root string, lk *Lock) error {
-	lk.Schema = 2
-	lk.Toolchain = LockToolchain{}
-	for _, dep := range lk.Deps {
-		dep.Stamp = ""
+	lk.Version = 1
+	for name, pin := range lk.Toolchains {
+		if pin == nil || pin.empty() {
+			delete(lk.Toolchains, name)
+		}
 	}
 	var buf bytes.Buffer
 	buf.WriteString("# Generated by cmk. Commit this file.\n")
-	if err := toml.NewEncoder(&buf).Encode(lk); err != nil {
+	encoder := yaml.NewEncoder(&buf)
+	encoder.SetIndent(2)
+	if err := encoder.Encode(lk); err != nil {
+		return err
+	}
+	if err := encoder.Close(); err != nil {
 		return err
 	}
 	if err := os.WriteFile(filepath.Join(root, lockFileName), buf.Bytes(), 0o644); err != nil {

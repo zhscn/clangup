@@ -3,6 +3,7 @@ package cmk
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"maps"
@@ -39,8 +40,8 @@ func storeDir() string {
 
 // entryDir is one immutable store entry: prefix/ (the install tree),
 // work/ (the build tree, for build-tree consumers like FDB), src/ (the
-// materialized source) and .cmk-complete (written after the recipe
-// succeeds; an entry without it is garbage and gets rebuilt).
+// materialized source) and .cmk-complete.json (written after the recipe
+// succeeds; an entry without a valid record is garbage and gets rebuilt).
 func entryDir(name, stamp string) string {
 	if len(stamp) > 16 {
 		stamp = stamp[:16]
@@ -48,7 +49,39 @@ func entryDir(name, stamp string) string {
 	return filepath.Join(storeDir(), name+"-"+stamp)
 }
 
-const completeMarker = ".cmk-complete"
+const completeMarker = ".cmk-complete.json"
+
+type entryRecord struct {
+	Stamp     string `json:"stamp,omitempty"`
+	Input     string `json:"input,omitempty"`
+	Toolchain string `json:"toolchain,omitempty"`
+	Output    string `json:"output"`
+}
+
+func loadEntryRecord(entry string) *entryRecord {
+	data, err := os.ReadFile(filepath.Join(entry, completeMarker))
+	if err != nil {
+		return nil
+	}
+	var rec entryRecord
+	if json.Unmarshal(data, &rec) != nil || rec.Output == "" {
+		return nil
+	}
+	return &rec
+}
+
+func writeEntryRecord(entry string, rec entryRecord) error {
+	data, err := json.Marshal(&rec)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(entry, completeMarker), append(data, '\n'), 0o644)
+}
+
+func entryCompleted(entry string) bool {
+	rec := loadEntryRecord(entry)
+	return rec != nil && rec.Stamp != ""
+}
 
 // depEntry resolves a dep to its store entry via the stamp pinned in
 // cmk.lock (or quarantined in cmk.dev.yaml for dev-affected deps), so
@@ -495,34 +528,6 @@ func gitCheckout(dir, url, ref, commit string) error {
 	return nil
 }
 
-// outHashFile records a store entry's output identity — the hash of its
-// install tree — computed once after the recipe succeeds. Dependents key
-// their stamps on it (see depStamp).
-const outHashFile = ".cmk-out"
-
-// entryOutHash returns a built entry's output hash, computing and
-// caching it for entries that predate the file.
-func entryOutHash(entry string) (string, error) {
-	path := filepath.Join(entry, outHashFile)
-	if data, err := os.ReadFile(path); err == nil {
-		if out := strings.TrimSpace(string(data)); out != "" {
-			return out, nil
-		}
-	}
-	return writeEntryOutHash(entry)
-}
-
-func writeEntryOutHash(entry string) (string, error) {
-	out, err := hashTree(filepath.Join(entry, "prefix"), false)
-	if err != nil {
-		return "", err
-	}
-	if err := os.WriteFile(filepath.Join(entry, outHashFile), []byte(out+"\n"), 0o644); err != nil {
-		return "", err
-	}
-	return out, nil
-}
-
 // recipeEnv is the environment a dep recipe runs in, shared by pinned
 // and dev builds so a recipe behaves identically in both.
 func recipeEnv(p *Project, name string, d *DepCfg, tc *Toolchain, prefix, work, src string) ([]string, error) {
@@ -565,12 +570,12 @@ func runRecipe(p *Project, name string, d *DepCfg, work string, env []string) er
 	return nil
 }
 
-// buildDep brings one dep's store entry into existence, returning the
-// entry path, whether work was done and whether the lock changed.
+// buildDep brings one dep's store entry into existence, returning its
+// output hash, whether work was done and whether the lock changed.
 // needOut must already contain output hashes for all needs. Entries are
 // immutable once complete: a stamp change lands in a NEW entry, so build
 // dirs that reference the old one stay valid.
-func buildDep(p *Project, name string, tc *Toolchain, needOut map[string]string, force bool) (entry string, built, lockDirty bool, err error) {
+func buildDep(p *Project, name string, tc *Toolchain, needOut map[string]string, force bool) (outHash string, built, lockDirty bool, err error) {
 	d := p.Cfg.Deps[name]
 	lk := p.Lock
 	patches, extras, err := depInputs(p.Root, name, d)
@@ -583,11 +588,10 @@ func buildDep(p *Project, name string, tc *Toolchain, needOut map[string]string,
 	}
 	lockDirty = p.setDepStamp(name, stamp)
 
-	entry = entryDir(name, stamp)
-	marker := filepath.Join(entry, completeMarker)
+	entry := entryDir(name, stamp)
 	if !force {
-		if _, err := os.Stat(marker); err == nil {
-			return entry, false, lockDirty, nil
+		if rec := loadEntryRecord(entry); rec != nil && rec.Stamp != "" {
+			return rec.Output, false, lockDirty, nil
 		}
 	}
 
@@ -599,9 +603,9 @@ func buildDep(p *Project, name string, tc *Toolchain, needOut map[string]string,
 	if !force {
 		// a concurrent cmk (another worktree) may have built it while
 		// we waited for the lock
-		if _, err := os.Stat(marker); err == nil {
+		if rec := loadEntryRecord(entry); rec != nil && rec.Stamp != "" {
 			fmt.Fprintf(os.Stderr, "cmk: dep %s was built by a concurrent cmk\n", name)
-			return entry, false, lockDirty, nil
+			return rec.Output, false, lockDirty, nil
 		}
 	}
 
@@ -628,13 +632,14 @@ func buildDep(p *Project, name string, tc *Toolchain, needOut map[string]string,
 	if err := runRecipe(p, name, d, work, env); err != nil {
 		return "", false, lockDirty, err
 	}
-	if _, err := writeEntryOutHash(entry); err != nil {
+	out, err := hashTree(prefix, false)
+	if err != nil {
 		return "", false, lockDirty, err
 	}
-	if err := os.WriteFile(marker, []byte(stamp+"\n"), 0o644); err != nil {
+	if err := writeEntryRecord(entry, entryRecord{Stamp: stamp, Output: out}); err != nil {
 		return "", false, lockDirty, err
 	}
-	return entry, true, lockDirty, nil
+	return out, true, lockDirty, nil
 }
 
 // needsClosure returns the transitive needs of name (excluding name
@@ -725,13 +730,9 @@ func syncDeps(p *Project, tc *Toolchain, want []string, force bool) (lockDirty b
 		if path, ok := p.devPath(name); ok {
 			out, did, err = buildDevDep(p, name, path, tc, needOut, forced)
 		} else {
-			var entry string
 			var dirty bool
-			entry, did, dirty, err = buildDep(p, name, tc, needOut, forced)
+			out, did, dirty, err = buildDep(p, name, tc, needOut, forced)
 			lockDirty = lockDirty || dirty
-			if err == nil {
-				out, err = entryOutHash(entry)
-			}
 		}
 		if err != nil {
 			return lockDirty, err

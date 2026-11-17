@@ -3,7 +3,6 @@ package cmk
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"hash"
 	"io/fs"
@@ -154,28 +153,12 @@ func devEntryDir(root, name, path string) string {
 	return filepath.Join(storeDir(), "dev", name+"-"+hex.EncodeToString(h[:])[:12])
 }
 
-// devMarker is the dev entry's .cmk-complete: unlike a pinned entry
-// (immutable, marker == built) the dev entry records what it was last
-// built from, so sync knows whether to skip, re-run in place, or wipe.
-type devMarker struct {
-	// Input is the full input identity: toolchain, config, and source tree.
-	Input string `json:"input"`
-	// Toolchain is the wipe key: the work tree is only reusable while the
-	// compiler stays the same (CMake refuses a compiler change in an
-	// existing build tree), so a mismatch rebuilds from scratch.
-	Toolchain string `json:"toolchain"`
-}
-
-func loadDevMarker(entry string) *devMarker {
-	data, err := os.ReadFile(filepath.Join(entry, completeMarker))
-	if err != nil {
+func loadDevMarker(entry string) *entryRecord {
+	rec := loadEntryRecord(entry)
+	if rec == nil || rec.Input == "" {
 		return nil
 	}
-	var m devMarker
-	if json.Unmarshal(data, &m) != nil || m.Input == "" {
-		return nil
-	}
-	return &m
+	return rec
 }
 
 func hashStrings(parts ...string) string {
@@ -265,7 +248,7 @@ func hashTree(dir string, skipGit bool) (string, error) {
 		if skipGit && d.IsDir() && d.Name() == ".git" {
 			return fs.SkipDir
 		}
-		if rel == completeMarker || rel == outHashFile {
+		if rel == completeMarker {
 			return nil
 		}
 		w("path", filepath.ToSlash(rel))
@@ -359,13 +342,10 @@ func buildDevDep(p *Project, name, srcPath string, tc *Toolchain, needOut map[st
 	input := hashStrings("cmk-dev-v1", toolKey, hashStrings(cfgParts...), srcHash)
 
 	entry := devEntryDir(p.Root, name, srcPath)
-	upToDate := func() bool {
-		m := loadDevMarker(entry)
-		return m != nil && m.Input == input
-	}
-	if !force && upToDate() {
-		out, err := entryOutHash(entry)
-		return out, false, err
+	if !force {
+		if m := loadDevMarker(entry); m != nil && m.Input == input {
+			return m.Output, false, nil
+		}
 	}
 
 	flk, err := lockStoreEntry(name, "dev-"+filepath.Base(entry)[len(name)+1:])
@@ -373,9 +353,10 @@ func buildDevDep(p *Project, name, srcPath string, tc *Toolchain, needOut map[st
 		return "", false, err
 	}
 	defer unlockFile(flk)
-	if !force && upToDate() {
-		out, err := entryOutHash(entry)
-		return out, false, err
+	if !force {
+		if m := loadDevMarker(entry); m != nil && m.Input == input {
+			return m.Output, false, nil
+		}
 	}
 
 	if m := loadDevMarker(entry); force || m == nil || m.Toolchain != toolKey {
@@ -410,15 +391,11 @@ func buildDevDep(p *Project, name, srcPath string, tc *Toolchain, needOut map[st
 		return "", false, fmt.Errorf("%w (a stale work tree can break after big changes; `cmk sync --force %s` rebuilds from scratch)", err, name)
 	}
 
-	out, err := writeEntryOutHash(entry)
+	out, err := hashTree(prefix, false)
 	if err != nil {
 		return "", false, err
 	}
-	data, err := json.Marshal(&devMarker{Input: input, Toolchain: toolKey})
-	if err != nil {
-		return "", false, err
-	}
-	if err := os.WriteFile(filepath.Join(entry, completeMarker), append(data, '\n'), 0o644); err != nil {
+	if err := writeEntryRecord(entry, entryRecord{Input: input, Toolchain: toolKey, Output: out}); err != nil {
 		return "", false, err
 	}
 	return out, true, nil

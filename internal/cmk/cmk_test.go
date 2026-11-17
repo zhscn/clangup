@@ -359,39 +359,20 @@ func TestLockRoundTrip(t *testing.T) {
 	}
 }
 
-func TestLegacyToolchainLockMigratesByTargetPlatform(t *testing.T) {
+func TestLockValidationRejectsInvalidSchema(t *testing.T) {
 	root := t.TempDir()
-	legacy := `schema = 1
+	if err := os.WriteFile(filepath.Join(root, lockFileName), []byte("version: 2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadLock(root); err == nil || !strings.Contains(err.Error(), "version must be 1") {
+		t.Fatalf("expected version validation error, got %v", err)
+	}
 
-[toolchain]
-selector = "default@23.1.0-1"
-target = "arm64-apple-darwin"
-manifest_sha256 = "manifest"
-artifact_sha256 = "artifact"
-
-[deps.fmt]
-stamp = "legacy-stamp"
-`
-	if err := os.WriteFile(filepath.Join(root, lockFileName), []byte(legacy), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, lockFileName), []byte("version: 1\nunknown-field: true\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	lk, err := loadLock(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !lk.dirty || lk.Toolchains["macos-aarch64"] == nil || lk.Toolchains["macos-aarch64"].Selector != "default@23.1.0-1" || lk.Deps["fmt"].Stamps["macos-aarch64"] != "legacy-stamp" {
-		t.Fatalf("legacy lock was not migrated: %#v", lk)
-	}
-	if err := saveLock(root, lk); err != nil {
-		t.Fatal(err)
-	}
-	contents, err := os.ReadFile(filepath.Join(root, lockFileName))
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := string(contents)
-	if !strings.Contains(text, "schema = 2") || !strings.Contains(text, "[toolchains.macos-aarch64]") || !strings.Contains(text, "[deps.fmt.stamps]") || strings.Contains(text, "\n[toolchain]\n") || strings.Contains(text, "stamp = \"legacy-stamp\"") {
-		t.Fatalf("unexpected migrated lock:\n%s", text)
+	if _, err := loadLock(root); err == nil {
+		t.Fatal("expected unknown field error")
 	}
 }
 
