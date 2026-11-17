@@ -57,7 +57,8 @@ func cmdNew(name string) error {
 	return nil
 }
 
-const cmkYAMLTemplate = `version: 1
+const cmkYAMLTemplate = schemaModeline + `
+version: 1
 
 # Toolchain selectors are resolved in exact-platform, OS, default order.
 # toolchain:

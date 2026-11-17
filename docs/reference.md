@@ -2,7 +2,10 @@
 
 ## `cmk.yaml`
 
-`cmk.yaml` has `version: 1` and defines a managed CMake project.
+`cmk.yaml` has `version: 1` and defines a managed CMake project. Scaffolded
+files include a `# yaml-language-server: $schema=...` header for editor
+completion and validation; `cmk schema [-o <file>]` prints or writes the
+embedded JSON Schema for offline editor configurations.
 
 | Section | Purpose |
 | --- | --- |

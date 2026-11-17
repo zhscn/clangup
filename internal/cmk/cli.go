@@ -123,7 +123,7 @@ func newRootCommand(version string, rawArgs ...string) *cobra.Command {
 		newEnsureConfiguredCommand(),
 		newRunCommand(rawArgs...), newTestCommand(), newInstallCommand(), newTUCommand(),
 		newFmtCommand(), newLintCommand(), newEnvCommand(),
-		newShellCommand(), newCleanCommand(), newDoctorCommand(), newVersionCommand(version),
+		newShellCommand(), newCleanCommand(), newDoctorCommand(), newSchemaCommand(), newVersionCommand(version),
 	)
 	return root
 }

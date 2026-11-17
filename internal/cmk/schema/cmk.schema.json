@@ -1,0 +1,369 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/zhscn/clangup/main/internal/cmk/schema/cmk.schema.json",
+  "title": "cmk.yaml",
+  "description": "Project configuration for cmk-managed CMake builds.",
+  "type": "object",
+  "required": ["version"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Configuration schema version (must be 1)."
+    },
+    "toolchain": {
+      "type": "object",
+      "description": "clangup toolchain selectors by host platform. Exact os-arch keys override OS keys, then default.",
+      "additionalProperties": false,
+      "properties": {
+        "default": { "$ref": "#/definitions/toolchainSelector" },
+        "linux": { "$ref": "#/definitions/toolchainSelector" },
+        "macos": { "$ref": "#/definitions/toolchainSelector" },
+        "linux-x86_64": { "$ref": "#/definitions/toolchainSelector" },
+        "linux-aarch64": { "$ref": "#/definitions/toolchainSelector" },
+        "macos-x86_64": { "$ref": "#/definitions/toolchainSelector" },
+        "macos-aarch64": { "$ref": "#/definitions/toolchainSelector" }
+      }
+    },
+    "cmake": {
+      "type": "object",
+      "description": "CMake configure presets, multi-config configurations, cache variables, and generator settings.",
+      "additionalProperties": false,
+      "properties": {
+        "generator": {
+          "type": "string",
+          "description": "Default CMake generator (defaults to Ninja Multi-Config).",
+          "examples": ["Ninja Multi-Config", "Ninja", "Xcode"]
+        },
+        "default-preset": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_.-]*$",
+          "description": "Preset used when -p/--preset is omitted."
+        },
+        "default-configuration": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "description": "Default configuration for multi-config presets (defaults to the first entry in configurations)."
+        },
+        "compile-commands": {
+          "type": "string",
+          "anyOf": [
+            { "enum": ["default", "none"] },
+            { "pattern": "^[A-Za-z][A-Za-z0-9_]*$" }
+          ],
+          "description": "Configuration whose compile_commands.json is mirrored into the project root (default, none, or a configured configuration name)."
+        },
+        "user-presets": {
+          "type": "boolean",
+          "default": true,
+          "description": "Generate CMakeUserPresets.json in the project root during configure."
+        },
+        "launcher": {
+          "type": "string",
+          "description": "Compiler launcher injected as CMAKE_<LANG>_COMPILER_LAUNCHER when found on PATH.",
+          "examples": ["ccache", "sccache"]
+        },
+        "variables": {
+          "$ref": "#/definitions/cmakeVariables"
+        },
+        "args": {
+          "$ref": "#/definitions/cmakeArgs"
+        },
+        "presets": {
+          "type": "object",
+          "description": "Named CMake configure/build trees.",
+          "propertyNames": {
+            "pattern": "^[A-Za-z][A-Za-z0-9_.-]*$"
+          },
+          "additionalProperties": {
+            "anyOf": [
+              { "$ref": "#/definitions/preset" },
+              { "type": "null" }
+            ]
+          }
+        },
+        "configurations": {
+          "type": "array",
+          "description": "Configurations exposed by multi-config presets (defaults to Debug and Release).",
+          "items": {
+            "$ref": "#/definitions/configuration"
+          }
+        }
+      }
+    },
+    "dependencies": {
+      "type": "object",
+      "description": "External dependencies built into the content-addressed store via project-owned Bash recipes.",
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9_.-]+$"
+      },
+      "additionalProperties": {
+        "$ref": "#/definitions/dependency"
+      }
+    },
+    "install": {
+      "type": "object",
+      "description": "Defaults for cmk install.",
+      "additionalProperties": false,
+      "properties": {
+        "prefix": {
+          "type": "string",
+          "description": "Default installation prefix."
+        },
+        "component": {
+          "type": "string",
+          "description": "Default installation component."
+        },
+        "strip": {
+          "type": "boolean",
+          "default": false,
+          "description": "Strip installed binaries."
+        }
+      }
+    },
+    "env": {
+      "type": "object",
+      "description": "Environment variables exported to project commands. Supports ${PROJECT_ROOT} expansion.",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "target-env": {
+      "type": "object",
+      "description": "Target-specific environment variables applied during cmk run <target>.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        }
+      }
+    },
+    "format": {
+      "type": "object",
+      "description": "Settings for cmk fmt (clang-format).",
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "Custom clang-format executable path (absolute or project-relative)."
+        },
+        "ignore": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Project-relative globs excluded from cmk fmt."
+        }
+      }
+    },
+    "lint": {
+      "type": "object",
+      "description": "Settings for cmk lint (clang-tidy).",
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "Custom clang-tidy executable path (absolute or project-relative)."
+        },
+        "ignore": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Project-relative globs excluded from cmk lint."
+        },
+        "warnings-as-errors": {
+          "type": "boolean",
+          "default": false,
+          "description": "Treat clang-tidy warnings as errors."
+        },
+        "header-filter": {
+          "type": "string",
+          "description": "Regular expression passed as -header-filter to clang-tidy."
+        },
+        "extra-args": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Additional compiler flags passed to clang-tidy via --extra-arg."
+        }
+      }
+    }
+  },
+  "definitions": {
+    "toolchainSelector": {
+      "type": "string",
+      "minLength": 1,
+      "description": "clangup channel (e.g. default, libcxx, libcxx-pgo) or exact release (e.g. libcxx@23.1.5-1).",
+      "examples": ["default", "libcxx", "libcxx-pgo"]
+    },
+    "cmakeVariables": {
+      "type": "object",
+      "description": "CMake cache variables injected as -D<NAME>=<VALUE>.",
+      "propertyNames": {
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+        "not": {
+          "enum": [
+            "CMAKE_CONFIGURATION_TYPES",
+            "CMAKE_DEFAULT_BUILD_TYPE",
+            "CMAKE_EXPORT_COMPILE_COMMANDS",
+            "CMAKE_PROJECT_INCLUDE",
+            "CMAKE_SUPPRESS_REGENERATION",
+            "CMAKE_C_COMPILER_LAUNCHER",
+            "CMAKE_CXX_COMPILER_LAUNCHER"
+          ]
+        }
+      },
+      "additionalProperties": {
+        "type": ["string", "boolean", "number"]
+      }
+    },
+    "cmakeArgs": {
+      "type": "array",
+      "description": "Additional CMake configure arguments (excluding -S, -B, -G, --preset, --fresh, and cmk-owned cache variables).",
+      "items": {
+        "type": "string"
+      }
+    },
+    "preset": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "build-dir": {
+          "type": "string",
+          "description": "Build directory path (defaults to build/<preset>, or build for default)."
+        },
+        "build-type": {
+          "type": "string",
+          "description": "CMAKE_BUILD_TYPE for single-config generators.",
+          "examples": ["Debug", "Release", "RelWithDebInfo", "MinSizeRel"]
+        },
+        "inherits": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_.-]*$",
+          "description": "Parent preset name to inherit generator, build-type, variables, and args from."
+        },
+        "generator": {
+          "type": "string",
+          "description": "CMake generator override for this preset.",
+          "examples": ["Ninja Multi-Config", "Ninja", "Xcode"]
+        },
+        "variables": {
+          "$ref": "#/definitions/cmakeVariables"
+        },
+        "args": {
+          "$ref": "#/definitions/cmakeArgs"
+        }
+      }
+    },
+    "configuration": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "description": "Configuration name.",
+          "examples": ["Debug", "Release", "RelWithDebInfo", "MinSizeRel", "Asan"]
+        },
+        "compile": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Common C and C++ compile flags for this configuration."
+        },
+        "c": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "C-only compile flags for this configuration."
+        },
+        "cxx": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "C++-only compile flags for this configuration."
+        },
+        "link": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Linker flags for executables, shared libraries, and modules in this configuration."
+        }
+      }
+    },
+    "dependency": {
+      "type": "object",
+      "required": ["script"],
+      "additionalProperties": false,
+      "properties": {
+        "script": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Project-relative path to the Bash build recipe."
+        },
+        "needs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.-]+$"
+          },
+          "description": "Names of other cmk dependencies consumed by this recipe."
+        },
+        "cmake-name": {
+          "type": "string",
+          "description": "CMake package name exported as -D<cmake-name>_ROOT=<prefix> (defaults to dependency name)."
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Environment variables exported to the recipe and included in its store identity."
+        },
+        "patches": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Project-relative patch file globs applied to source before running script."
+        },
+        "extra-inputs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Project-relative file globs whose contents participate in the dependency store identity."
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "description": "Immutable dependency source: either an archive URL (with optional sha256) or a Git repository with ref.",
+      "oneOf": [
+        {
+          "required": ["url"],
+          "additionalProperties": false,
+          "properties": {
+            "url": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Source archive URL."
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$",
+              "description": "Optional lowercase 64-hex SHA-256 digest (pinned in cmk.lock when omitted)."
+            }
+          }
+        },
+        {
+          "required": ["git", "ref"],
+          "additionalProperties": false,
+          "properties": {
+            "git": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Git repository URL."
+            },
+            "ref": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Git tag, branch, or commit SHA (resolved commit is pinned in cmk.lock)."
+            }
+          }
+        }
+      ]
+    }
+  }
+}
