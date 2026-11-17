@@ -74,6 +74,34 @@ func TestFilterCompileCommands(t *testing.T) {
 	if len(got3) != 0 {
 		t.Fatalf("want 0 entries, got %d", len(got3))
 	}
+
+	// A project or target named "Release" must not pull Debug entries into
+	// the Release compilation database.
+	adversarial := `[
+	  {
+	    "directory": "/work/Release/app/build",
+	    "file": "/work/Release/app/src/main.cc",
+	    "output": "/work/Release/app/build/CMakeFiles/Release.dir/Debug/main.cc.o",
+	    "command": "clang++ -DCMAKE_INTDIR=\"Debug\" -I/work/Release/app/include -c /work/Release/app/src/main.cc -o /work/Release/app/build/CMakeFiles/Release.dir/Debug/main.cc.o"
+	  },
+	  {
+	    "directory": "/work/Release/app/build",
+	    "file": "/work/Release/app/src/main.cc",
+	    "output": "/work/Release/app/build/CMakeFiles/Release.dir/Release/source dir/main.cc.o",
+	    "command": "clang++ -I/work/Release/app/include -c /work/Release/app/src/main.cc -o \"/work/Release/app/build/CMakeFiles/Release.dir/Release/source dir/main.cc.o\""
+	  }
+	]`
+	advOut, err := filterCompileCommands([]byte(adversarial), "Release")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotAdv []map[string]any
+	if err := json.Unmarshal(advOut, &gotAdv); err != nil {
+		t.Fatal(err)
+	}
+	if len(gotAdv) != 1 || !strings.Contains(gotAdv[0]["output"].(string), ".dir/Release/") {
+		t.Fatalf("adversarial Release filter = %s", advOut)
+	}
 }
 
 func TestLintCompilationDatabaseSelectsOneConfiguration(t *testing.T) {

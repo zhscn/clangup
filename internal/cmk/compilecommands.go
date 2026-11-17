@@ -64,41 +64,166 @@ func (t *buildTree) syncRootCompileCommands() error {
 }
 
 // filterCompileCommands keeps only the entries a Ninja Multi-Config build
-// emitted for the given configuration. Each object path nests the
-// configuration as a path segment (…/<target>.dir/<Config>/foo.cc.o), so a
-// "/<Config>/" match on the output, command, or arguments selects one
-// configuration's entries. Entry
-// contents are preserved; the file is re-indented.
+// emitted for the given configuration. It inspects CMAKE_INTDIR and the
+// object output paths (entry.Output and `-o <obj>`) relative to entry.Directory
+// rather than substring-matching the whole command line, so parent directories
+// named /Release/ or /Debug/ cannot cause false matches across configurations.
 func filterCompileCommands(data []byte, config string) ([]byte, error) {
 	var raws []json.RawMessage
 	if err := json.Unmarshal(data, &raws); err != nil {
 		return nil, err
 	}
-	marker := "/" + config + "/"
 	kept := make([]json.RawMessage, 0, len(raws))
 	for _, r := range raws {
-		var e struct {
-			Output    string   `json:"output"`
-			Command   string   `json:"command"`
-			Arguments []string `json:"arguments"`
-		}
+		var e compileCommandEntry
 		if err := json.Unmarshal(r, &e); err != nil {
 			return nil, err
 		}
-		haystacks := append([]string{e.Output, e.Command}, e.Arguments...)
-		matched := false
-		for _, haystack := range haystacks {
-			haystack = strings.ReplaceAll(haystack, `\`, "/")
-			if strings.Contains(haystack, marker) {
-				matched = true
-				break
-			}
-		}
-		if matched {
+		if e.matchesConfig(config) {
 			kept = append(kept, r)
 		}
 	}
 	return json.MarshalIndent(kept, "", "  ")
+}
+
+type compileCommandEntry struct {
+	Directory string   `json:"directory"`
+	Output    string   `json:"output"`
+	Command   string   `json:"command"`
+	Arguments []string `json:"arguments"`
+}
+
+func (e *compileCommandEntry) matchesConfig(config string) bool {
+	if intdir := e.cmakeIntDir(); intdir != "" {
+		return intdir == config
+	}
+	for _, out := range e.outputPaths() {
+		if matchesOutputConfig(out, e.Directory, config) {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *compileCommandEntry) cmakeIntDir() string {
+	for _, arg := range e.Arguments {
+		if val, ok := parseCMakeIntDirArg(arg); ok {
+			return val
+		}
+	}
+	for _, token := range splitCommandTokens(e.Command) {
+		if val, ok := parseCMakeIntDirArg(token); ok {
+			return val
+		}
+	}
+	return ""
+}
+
+func parseCMakeIntDirArg(arg string) (string, bool) {
+	const prefix = "-DCMAKE_INTDIR="
+	if !strings.HasPrefix(arg, prefix) {
+		return "", false
+	}
+	val := strings.TrimPrefix(arg, prefix)
+	val = strings.Trim(val, `"'`)
+	return val, val != ""
+}
+
+func (e *compileCommandEntry) outputPaths() []string {
+	var outs []string
+	if e.Output != "" {
+		outs = append(outs, e.Output)
+	}
+	outs = append(outs, extractDashO(e.Arguments)...)
+	if len(e.Arguments) == 0 && e.Command != "" {
+		outs = append(outs, extractDashO(splitCommandTokens(e.Command))...)
+	}
+	return outs
+}
+
+func extractDashO(args []string) []string {
+	var outs []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "-o" && i+1 < len(args) {
+			outs = append(outs, args[i+1])
+			i++
+		} else if strings.HasPrefix(arg, "-o") && len(arg) > 2 {
+			outs = append(outs, arg[2:])
+		}
+	}
+	return outs
+}
+
+// splitCommandTokens splits a compile_commands.json shell command string into
+// unquoted tokens, honoring single quotes, double quotes, and backslash escapes.
+func splitCommandTokens(cmd string) []string {
+	var tokens []string
+	var cur strings.Builder
+	inToken := false
+	quote := byte(0)
+	for i := 0; i < len(cmd); i++ {
+		c := cmd[i]
+		if quote != 0 {
+			if c == '\\' && quote == '"' && i+1 < len(cmd) {
+				i++
+				cur.WriteByte(cmd[i])
+			} else if c == quote {
+				quote = 0
+			} else {
+				cur.WriteByte(c)
+			}
+			continue
+		}
+		switch c {
+		case ' ', '\t', '\n', '\r':
+			if inToken {
+				tokens = append(tokens, cur.String())
+				cur.Reset()
+				inToken = false
+			}
+		case '\'', '"':
+			quote = c
+			inToken = true
+		case '\\':
+			inToken = true
+			if i+1 < len(cmd) {
+				i++
+				cur.WriteByte(cmd[i])
+			}
+		default:
+			inToken = true
+			cur.WriteByte(c)
+		}
+	}
+	if inToken {
+		tokens = append(tokens, cur.String())
+	}
+	return tokens
+}
+
+func matchesOutputConfig(out, directory, config string) bool {
+	p := strings.ReplaceAll(out, `\`, "/")
+	dir := strings.TrimSuffix(strings.ReplaceAll(directory, `\`, "/"), "/")
+	rel := p
+	hasRel := false
+	if dir != "" && strings.HasPrefix(p, dir+"/") {
+		rel = strings.TrimPrefix(p, dir+"/")
+		hasRel = true
+	} else if !strings.HasPrefix(p, "/") && (len(p) < 2 || p[1] != ':') {
+		hasRel = true
+	}
+	// CMake Ninja Multi-Config layout: [subdir/]CMakeFiles/<target>.dir/<Config>/...
+	if idx := strings.Index(rel, "CMakeFiles/"); idx >= 0 {
+		rest := rel[idx+len("CMakeFiles/"):]
+		if _, afterDir, ok := strings.Cut(rest, ".dir/"); ok {
+			return strings.HasPrefix(afterDir, config+"/")
+		}
+	}
+	if hasRel {
+		return strings.HasPrefix(rel, config+"/") || strings.Contains(rel, "/"+config+"/")
+	}
+	return false
 }
 
 // lintCompilationDatabase returns a directory containing exactly the compile
