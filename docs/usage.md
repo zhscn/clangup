@@ -176,3 +176,16 @@ project when one has not been generated yet.
 Set `format.command` or `lint.command` in `cmk.yaml` to use a specific
 clang-format or clang-tidy executable. Relative paths are resolved from the
 project root.
+
+## Shell completion
+
+Generate shell completions for `bash`, `zsh`, `fish`, or `powershell`:
+
+```sh
+source <(cmk completion zsh)
+source <(clangup completion zsh)
+```
+
+`cmk` completes presets (`-p`), configurations (`-c`), build directories (`-b`),
+configured CMake targets (`cmk build`, `cmk run`), translation units (`cmk tu`),
+and dependency names (`cmk sync`, `cmk update`, `cmk dev`).

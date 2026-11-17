@@ -73,6 +73,7 @@ func addVariantFlags(command *cobra.Command, options *variantOptions) {
 	options.Jobs = defaultJobs()
 	flags := command.Flags()
 	addTreeFlags(flags, &options.treeOptions)
+	registerTreeFlagCompletions(command, &options.treeOptions)
 	flags.IntVarP(&options.Jobs, "jobs", "j", options.Jobs, "Parallel jobs")
 	flags.BoolVarP(&options.Verbose, "verbose", "v", false, "Show verbose build commands")
 	flags.BoolVar(&options.Locked, "locked", false, "Fail when configuration is stale")
@@ -99,7 +100,7 @@ func splitPassthrough(command *cobra.Command, args []string) ([]string, []string
 	return args[:at], args[at:]
 }
 
-func newRootCommand(version string) *cobra.Command {
+func newRootCommand(version string, rawArgs ...string) *cobra.Command {
 	var showVersion bool
 	root := &cobra.Command{
 		Use:           "cmk",
@@ -116,12 +117,11 @@ func newRootCommand(version string) *cobra.Command {
 		},
 	}
 	root.Flags().BoolVarP(&showVersion, "version", "V", false, "Print the cmk version")
-	root.CompletionOptions.DisableDefaultCmd = true
 	root.AddCommand(
 		newNewCommand(), newInitCommand(), newSyncCommand(), newUpdateCommand(),
-		newAddCommand(), newDevCommand(), newConfigCommand(), newBuildCommand(),
+		newAddCommand(), newDevCommand(), newConfigCommand(), newBuildCommand(rawArgs...),
 		newEnsureConfiguredCommand(),
-		newRunCommand(), newTestCommand(), newInstallCommand(), newTUCommand(),
+		newRunCommand(rawArgs...), newTestCommand(), newInstallCommand(), newTUCommand(),
 		newFmtCommand(), newLintCommand(), newEnvCommand(),
 		newShellCommand(), newCleanCommand(), newDoctorCommand(), newVersionCommand(version),
 	)
@@ -145,17 +145,30 @@ func newInitCommand() *cobra.Command {
 
 func newSyncCommand() *cobra.Command {
 	var force bool
-	command := &cobra.Command{Use: "sync [dependency...]", Aliases: []string{"s"}, Short: "Build external dependencies", Args: cobra.ArbitraryArgs, RunE: func(_ *cobra.Command, args []string) error {
-		return cmdSync(args, force)
-	}}
+	command := &cobra.Command{
+		Use:               "sync [dependency...]",
+		Aliases:           []string{"s"},
+		Short:             "Build external dependencies",
+		Args:              cobra.ArbitraryArgs,
+		ValidArgsFunction: completeDepNames(false),
+		RunE: func(_ *cobra.Command, args []string) error {
+			return cmdSync(args, force)
+		},
+	}
 	command.Flags().BoolVarP(&force, "force", "f", false, "Rebuild selected dependencies")
 	return command
 }
 
 func newUpdateCommand() *cobra.Command {
-	return &cobra.Command{Use: "update [dependency|toolchain...]", Short: "Re-resolve locked versions", Args: cobra.ArbitraryArgs, RunE: func(_ *cobra.Command, args []string) error {
-		return cmdUpdate(args)
-	}}
+	return &cobra.Command{
+		Use:               "update [dependency|toolchain...]",
+		Short:             "Re-resolve locked versions",
+		Args:              cobra.ArbitraryArgs,
+		ValidArgsFunction: completeDepNames(true),
+		RunE: func(_ *cobra.Command, args []string) error {
+			return cmdUpdate(args)
+		},
+	}
 }
 
 func newAddCommand() *cobra.Command {
@@ -172,6 +185,7 @@ func newAddCommand() *cobra.Command {
 	flags.StringVar(&options.Needs, "needs", "", "Comma-separated dependency names")
 	flags.StringVar(&options.Script, "script", "", "Dependency recipe path")
 	command.MarkFlagsMutuallyExclusive("url", "git")
+	_ = command.RegisterFlagCompletionFunc("needs", completeNeedsFlag)
 	return command
 }
 
@@ -199,6 +213,7 @@ func newConfigCommand() *cobra.Command {
 	flags.BoolVar(&options.IfStale, "if-stale", false, "Configure only when missing or stale")
 	command.MarkFlagsMutuallyExclusive("preset", "build")
 	command.MarkFlagsMutuallyExclusive("fresh", "if-stale")
+	registerPresetAndBuildCompletions(command)
 	return command
 }
 
@@ -216,47 +231,62 @@ func newEnsureConfiguredCommand() *cobra.Command {
 	command.Flags().StringVarP(&preset, "preset", "p", "", "Configure preset")
 	command.Flags().StringVarP(&buildDir, "build", "b", "", "CMake build directory")
 	command.MarkFlagsMutuallyExclusive("preset", "build")
+	registerPresetAndBuildCompletions(command)
 	return command
 }
 
-func newBuildCommand() *cobra.Command {
+func newBuildCommand(rawArgs ...string) *cobra.Command {
 	var options buildOptions
-	command := &cobra.Command{Use: "build [target...] [-- build-tool-args...]", Aliases: []string{"b"}, Short: "Build the project", RunE: func(command *cobra.Command, args []string) error {
-		targets, passthrough := splitPassthrough(command, args)
-		return cmdBuild(targets, passthrough, options)
-	}}
+	command := &cobra.Command{
+		Use:               "build [target...] [-- build-tool-args...]",
+		Aliases:           []string{"b"},
+		Short:             "Build the project",
+		ValidArgsFunction: completeBuildTargets(&options.treeOptions, rawArgs),
+		RunE: func(command *cobra.Command, args []string) error {
+			targets, passthrough := splitPassthrough(command, args)
+			return cmdBuild(targets, passthrough, options)
+		},
+	}
 	addVariantFlags(command, &options.variantOptions)
 	flags := command.Flags()
 	flags.StringArrayVarP(&options.TargetFlags, "target", "t", nil, "Build target (repeatable)")
 	flags.BoolVar(&options.CleanFirst, "clean-first", false, "Clean targets before building")
 	flags.BoolVarP(&options.Interactive, "interactive", "i", false, "Select a target interactively")
+	_ = command.RegisterFlagCompletionFunc("target", completeTargetFlag(&options.treeOptions, false))
 	return command
 }
 
-func newRunCommand() *cobra.Command {
+func newRunCommand(rawArgs ...string) *cobra.Command {
 	var options runOptions
-	command := &cobra.Command{Use: "run [target] [-- program-args...]", Aliases: []string{"r"}, Short: "Build and run an executable", RunE: func(command *cobra.Command, args []string) error {
-		positional, passthrough := splitPassthrough(command, args)
-		if len(positional) > 1 {
-			return fmt.Errorf("accepts at most 1 target, received %d", len(positional))
-		}
-		target := ""
-		if len(positional) == 1 {
-			target = positional[0]
-		}
-		if options.Target != "" {
-			if target != "" {
-				return fmt.Errorf("pass either a positional target or --target, not both")
+	command := &cobra.Command{
+		Use:               "run [target] [-- program-args...]",
+		Aliases:           []string{"r"},
+		Short:             "Build and run an executable",
+		ValidArgsFunction: completeRunTargets(&options.treeOptions, rawArgs),
+		RunE: func(command *cobra.Command, args []string) error {
+			positional, passthrough := splitPassthrough(command, args)
+			if len(positional) > 1 {
+				return fmt.Errorf("accepts at most 1 target, received %d", len(positional))
 			}
-			target = options.Target
-		}
-		options.ProgramArgs = passthrough
-		return cmdRun(target, options)
-	}}
+			target := ""
+			if len(positional) == 1 {
+				target = positional[0]
+			}
+			if options.Target != "" {
+				if target != "" {
+					return fmt.Errorf("pass either a positional target or --target, not both")
+				}
+				target = options.Target
+			}
+			options.ProgramArgs = passthrough
+			return cmdRun(target, options)
+		},
+	}
 	addVariantFlags(command, &options.variantOptions)
 	flags := command.Flags()
 	flags.StringVarP(&options.Target, "target", "t", "", "Executable target")
 	flags.BoolVar(&options.NoBuild, "no-build", false, "Run without building")
+	_ = command.RegisterFlagCompletionFunc("target", completeTargetFlag(&options.treeOptions, true))
 	return command
 }
 
@@ -273,6 +303,7 @@ func newTestCommand() *cobra.Command {
 	flags.StringArrayVarP(&options.BuildTargets, "target", "t", nil, "Build target (repeatable)")
 	flags.StringArrayVarP(&options.Labels, "label", "L", nil, "CTest label (repeatable)")
 	flags.BoolVar(&options.NoBuild, "no-build", false, "Run tests without building")
+	_ = command.RegisterFlagCompletionFunc("target", completeTargetFlag(&options.treeOptions, false))
 	return command
 }
 
@@ -292,9 +323,16 @@ func newInstallCommand() *cobra.Command {
 
 func newTUCommand() *cobra.Command {
 	var options variantOptions
-	command := &cobra.Command{Use: "build-tu [source-or-target...]", Aliases: []string{"tu"}, Short: "Build translation units by source path or object target", Args: cobra.ArbitraryArgs, RunE: func(_ *cobra.Command, args []string) error {
-		return cmdTU(args, options)
-	}}
+	command := &cobra.Command{
+		Use:               "build-tu [source-or-target...]",
+		Aliases:           []string{"tu"},
+		Short:             "Build translation units by source path or object target",
+		Args:              cobra.ArbitraryArgs,
+		ValidArgsFunction: completeTUArgs(&options.treeOptions),
+		RunE: func(_ *cobra.Command, args []string) error {
+			return cmdTU(args, options)
+		},
+	}
 	addVariantFlags(command, &options)
 	return command
 }
@@ -327,6 +365,7 @@ func newLintCommand() *cobra.Command {
 	}}
 	flags := command.Flags()
 	addTreeFlags(flags, &options.treeOptions)
+	registerTreeFlagCompletions(command, &options.treeOptions)
 	flags.BoolVarP(&options.Interactive, "interactive", "i", false, "Select a file from compile_commands.json")
 	flags.BoolVarP(&options.All, "all", "a", false, "Lint all tracked source files")
 	flags.BoolVarP(&options.Staged, "staged", "s", false, "Lint only staged files")
@@ -377,7 +416,7 @@ func newVersionCommand(version string) *cobra.Command {
 }
 
 func Run(args []string, stdout, stderr io.Writer, version string) int {
-	command := newRootCommand(version)
+	command := newRootCommand(version, args...)
 	command.SetArgs(args)
 	command.SetOut(stdout)
 	command.SetErr(stderr)

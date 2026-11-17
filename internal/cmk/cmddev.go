@@ -24,7 +24,8 @@ State lives in ` + devFileName + ` — machine-local, do not commit it.
   cmk dev                  list active overrides
   cmk dev --drop fmt       restore fmt to its pinned source
   cmk dev --drop           restore everything`,
-		Args: cobra.ArbitraryArgs,
+		Args:              cobra.ArbitraryArgs,
+		ValidArgsFunction: completeDevArgs(&drop),
 		RunE: func(_ *cobra.Command, args []string) error {
 			return cmdDev(args, drop)
 		},
