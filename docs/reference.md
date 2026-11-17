@@ -58,6 +58,7 @@ cmake:
   default-preset: default
   default-configuration: Debug
   compile-commands: default
+  user-presets: true
   launcher: ccache
   variables:
     CMAKE_COLOR_DIAGNOSTICS: true
@@ -94,7 +95,10 @@ from another preset. A multi-config preset exposes every entry in
 
 IDE integrations use `cmk config --if-stale -p <preset>` before loading the
 CMake File API model. The command configures a missing or stale tree and does
-not write to a current tree, allowing file-watcher reloads to converge.
+not write to a current tree, allowing file-watcher reloads to converge. Set
+`cmake.user-presets: false` to disable generating `CMakeUserPresets.json` in the
+project root, or `cmake.compile-commands: none` (or omit it) to skip mirroring
+`compile_commands.json` into the project root.
 
 `compile` supplies common C and C++ flags. `c`, `cxx`, and `link` supply
 language- or linker-specific flags. cmk passes them through

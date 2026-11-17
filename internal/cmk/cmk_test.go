@@ -733,6 +733,47 @@ func TestWriteUserPresetsMatrix(t *testing.T) {
 	}
 }
 
+func TestUserPresetsAndCompileCommandsCanBeDisabled(t *testing.T) {
+	root := t.TempDir()
+	body := `version: 1
+cmake:
+  user-presets: false
+  compile-commands: none
+`
+	if err := os.WriteFile(filepath.Join(root, configFileName), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, err := loadConfig(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Configure.emitUserPresets() {
+		t.Fatal("user-presets: false was not honored")
+	}
+	p := &Project{Root: root, Managed: true, Cfg: cfg, Lock: &Lock{}}
+	tc := &Toolchain{CC: "/opt/clang/bin/clang", CXX: "/opt/clang/bin/clang++"}
+	if err := writeUserPresets(p, tc); err != nil {
+		t.Fatal(err)
+	}
+	if fileExists(filepath.Join(root, "CMakeUserPresets.json")) {
+		t.Fatal("writeUserPresets wrote CMakeUserPresets.json when disabled")
+	}
+
+	buildDir := filepath.Join(root, "build")
+	if err := os.MkdirAll(buildDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(buildDir, "compile_commands.json"), []byte(`[{"file":"a.cc","output":"CMakeFiles/a.dir/Debug/a.cc.o"}]`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.treeAt(buildDir, "").syncRootCompileCommands(); err != nil {
+		t.Fatal(err)
+	}
+	if fileExists(filepath.Join(root, "compile_commands.json")) {
+		t.Fatal("syncRootCompileCommands wrote compile_commands.json when set to none")
+	}
+}
+
 func TestInstallPrefix(t *testing.T) {
 	p := &Project{Root: "/proj", Cfg: &Config{}}
 	// nothing configured -> empty (respect the configure-time prefix)

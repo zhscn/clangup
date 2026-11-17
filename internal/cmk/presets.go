@@ -53,6 +53,9 @@ type presetsFile struct {
 // A cmk-owned file carries the vendor marker and is rewritten wholesale. A
 // user-owned file keeps its own entries while cmk refreshes its namespace.
 func writeUserPresets(p *Project, tc *Toolchain) error {
+	if !p.Cfg.Configure.emitUserPresets() {
+		return nil
+	}
 	path := filepath.Join(p.Root, "CMakeUserPresets.json")
 	existing, _ := os.ReadFile(path)
 	merge := false

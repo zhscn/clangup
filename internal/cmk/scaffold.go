@@ -68,6 +68,7 @@ const cmkYAMLTemplate = `version: 1
 # Defaults when omitted: Ninja Multi-Config in ./build with Debug and Release.
 cmake:
   compile-commands: default
+  # user-presets: false
   # launcher: ccache
 
   # A preset is a separate configure/build tree. A configuration is selected

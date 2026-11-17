@@ -101,7 +101,13 @@ func cmdDoctor() error {
 	fmt.Println("locations:")
 	fmt.Printf("  store      %s\n", storeDir())
 	fmt.Printf("  downloads  %s\n", downloadsDir())
-	fmt.Printf("  presets    %s (machine-local, gitignored)\n", filepath.Join(p.Root, "CMakeUserPresets.json"))
+	if p.Managed {
+		if p.Cfg.Configure.emitUserPresets() {
+			fmt.Printf("  presets    %s (machine-local, gitignored)\n", filepath.Join(p.Root, "CMakeUserPresets.json"))
+		} else {
+			fmt.Println("  presets    disabled (cmake.user-presets: false)")
+		}
+	}
 
 	if c.failed {
 		return fmt.Errorf("problems found")

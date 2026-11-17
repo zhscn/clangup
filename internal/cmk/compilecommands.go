@@ -23,7 +23,7 @@ import (
 func (t *buildTree) syncRootCompileCommands() error {
 	p, buildDir, preset := t.p, t.dir, t.preset()
 	sel := p.Cfg.Configure.CompileCommands
-	if sel == "" {
+	if sel == "" || sel == "none" {
 		return nil
 	}
 	data, err := os.ReadFile(filepath.Join(buildDir, "compile_commands.json"))

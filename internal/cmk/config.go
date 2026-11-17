@@ -84,12 +84,17 @@ type ConfigureCfg struct {
 	DefaultPreset        string                `yaml:"default-preset"`
 	DefaultConfiguration string                `yaml:"default-configuration"`
 	CompileCommands      string                `yaml:"compile-commands"`
+	UserPresets          *bool                 `yaml:"user-presets"`
 	CompilerLauncher     string                `yaml:"launcher"`
 	Variables            map[string]any        `yaml:"variables"`
 	Args                 []string              `yaml:"args"`
 	Presets              map[string]*PresetCfg `yaml:"presets"`
 	Configurations       []*ConfigurationCfg   `yaml:"configurations"`
 	configurationByName  map[string]*ConfigurationCfg
+}
+
+func (c ConfigureCfg) emitUserPresets() bool {
+	return c.UserPresets == nil || *c.UserPresets
 }
 
 // ConfigurationCfg sets the compile and link flags for one multi-config
@@ -387,8 +392,8 @@ func validateConfig(cfg *Config, root string) error {
 		if len(cfg.Configure.Configurations) > 0 || cfg.Configure.DefaultConfiguration != "" {
 			return fmt.Errorf("cmake configurations and default-configuration require a multi-config generator")
 		}
-		if selection := cfg.Configure.CompileCommands; selection != "" && selection != "default" {
-			return fmt.Errorf("cmake.compile-commands must be default with a single-config generator")
+		if selection := cfg.Configure.CompileCommands; selection != "" && selection != "none" && selection != "default" {
+			return fmt.Errorf("cmake.compile-commands must be default or none with a single-config generator")
 		}
 	}
 	return nil
@@ -443,7 +448,7 @@ func validateConfigurations(cfg *Config) error {
 	if !known[cfg.Configure.DefaultConfiguration] {
 		return fmt.Errorf("cmake.default-configuration %q is not configured", cfg.Configure.DefaultConfiguration)
 	}
-	if selection := cfg.Configure.CompileCommands; selection != "" && selection != "default" && !known[selection] {
+	if selection := cfg.Configure.CompileCommands; selection != "" && selection != "none" && selection != "default" && !known[selection] {
 		return fmt.Errorf("cmake.compile-commands %q is not configured", selection)
 	}
 	return nil
