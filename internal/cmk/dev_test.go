@@ -1,11 +1,18 @@
 package cmk
 
 import (
+	"archive/tar"
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -306,5 +313,110 @@ func TestDevStateRoundTrip(t *testing.T) {
 	}
 	if fileExists(filepath.Join(root, devFileName)) {
 		t.Fatal("empty dev state should remove the file")
+	}
+}
+
+func makeTarballBytes(t *testing.T, topDir, fileName, content string) ([]byte, string) {
+	t.Helper()
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	data := []byte(content)
+	if err := tw.WriteHeader(&tar.Header{
+		Name: topDir + "/" + fileName,
+		Mode: 0o644,
+		Size: int64(len(data)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(buf.Bytes())
+	return buf.Bytes(), hex.EncodeToString(sum[:])
+}
+
+func TestArchiveDependencyPinsOptionalSHA256InLock(t *testing.T) {
+	tarV1, shaV1 := makeTarballBytes(t, "pkg-1.0", "ver.txt", "1.0\n")
+	tarV2, shaV2 := makeTarballBytes(t, "pkg-2.0", "ver.txt", "2.0\n")
+
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		switch r.URL.Path {
+		case "/pkg-1.0.tar":
+			_, _ = w.Write(tarV1)
+		case "/pkg-2.0.tar":
+			_, _ = w.Write(tarV2)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
+	deps := map[string]*DepCfg{
+		"pkg": {
+			Script: "pkg.sh",
+			Source: &SourceCfg{URL: server.URL + "/pkg-1.0.tar"}, // sha256 omitted
+		},
+	}
+	p := devTestProject(t, deps, map[string]string{
+		"pkg.sh": "#!/bin/bash\nset -e\ncp \"$CMK_SRC/ver.txt\" \"$CMK_PREFIX/ver.txt\"\n",
+	})
+
+	// cmk.yaml without sha256 validates cleanly.
+	if err := validateDeps(p.Cfg); err != nil {
+		t.Fatalf("validateDeps rejected omitted sha256: %v", err)
+	}
+	// Before sync, --locked rejects the unlocked URL dependency.
+	if err := verifyLockedDeps(p.Cfg, p.Lock); err == nil {
+		t.Fatal("verifyLockedDeps accepted unlocked URL dependency")
+	}
+
+	dirty, err := syncDeps(p, &Toolchain{ID: "tc-test"}, nil, false)
+	if err != nil || !dirty {
+		t.Fatalf("first syncDeps = (%v, %v), want dirty=true", dirty, err)
+	}
+	if gotHits := hits.Load(); gotHits != 1 {
+		t.Fatalf("first sync downloaded %d times, want 1", gotHits)
+	}
+	ld := p.Lock.Deps["pkg"]
+	if ld == nil || ld.URL != server.URL+"/pkg-1.0.tar" || ld.SHA256 != shaV1 {
+		t.Fatalf("locked dep = %+v, want url=%s sha256=%s", ld, server.URL+"/pkg-1.0.tar", shaV1)
+	}
+	if err := verifyLockedDeps(p.Cfg, p.Lock); err != nil {
+		t.Fatalf("verifyLockedDeps after sync: %v", err)
+	}
+
+	// Second sync hits the locked sha256 and store without touching HTTP.
+	if _, err := syncDeps(p, &Toolchain{ID: "tc-test"}, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if gotHits := hits.Load(); gotHits != 1 {
+		t.Fatalf("second sync downloaded %d times, want 1", gotHits)
+	}
+
+	// Bumping the URL in cmk.yaml invalidates the lock until synced.
+	p.Cfg.Deps["pkg"].Source.URL = server.URL + "/pkg-2.0.tar"
+	if err := verifyLockedDeps(p.Cfg, p.Lock); err == nil {
+		t.Fatal("verifyLockedDeps accepted stale URL lock after URL bump")
+	}
+	dirty, err = syncDeps(p, &Toolchain{ID: "tc-test"}, nil, false)
+	if err != nil || !dirty {
+		t.Fatalf("v2 syncDeps = (%v, %v), want dirty=true", dirty, err)
+	}
+	if p.Lock.Deps["pkg"].SHA256 != shaV2 {
+		t.Fatalf("v2 locked sha256 = %q, want %q", p.Lock.Deps["pkg"].SHA256, shaV2)
+	}
+	pfx, err := p.depPrefix("pkg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ver, err := os.ReadFile(filepath.Join(pfx, "ver.txt"))
+	if err != nil || string(ver) != "2.0\n" {
+		t.Fatalf("installed ver.txt = %q, %v", ver, err)
 	}
 }

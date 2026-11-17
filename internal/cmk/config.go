@@ -412,8 +412,8 @@ func validateDeps(cfg *Config) error {
 			if urlSet == gitSet {
 				return fmt.Errorf("dependencies.%s.source: set exactly one of url or git", name)
 			}
-			if urlSet && !sha256Re.MatchString(dep.Source.SHA256) {
-				return fmt.Errorf("dependencies.%s.source: url requires a 64-hex sha256", name)
+			if urlSet && dep.Source.SHA256 != "" && !sha256Re.MatchString(dep.Source.SHA256) {
+				return fmt.Errorf("dependencies.%s.source: sha256 must be a 64-hex digest", name)
 			}
 			if gitSet && dep.Source.Ref == "" {
 				return fmt.Errorf("dependencies.%s.source: git requires ref", name)

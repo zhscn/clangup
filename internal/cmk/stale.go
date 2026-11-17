@@ -72,6 +72,9 @@ func (t *buildTree) ensureConfigured(policy configurePolicy) error {
 		if dirty {
 			return fmt.Errorf("--locked: cmk.lock does not match toolchain in cmk.yaml; run `cmk config` (or `cmk update toolchain`) and commit the lock")
 		}
+		if err := verifyLockedDeps(p.Cfg, p.Lock); err != nil {
+			return err
+		}
 		p.tc = tc
 		if reason := t.reconfigureReason(tc); reason != "" {
 			return fmt.Errorf("--locked: configuration of %s is stale (%s); run `cmk config`", p.relToRoot(dir), reason)
@@ -115,6 +118,28 @@ func (t *buildTree) ensureConfigured(policy configurePolicy) error {
 	// Re-apply the ad-hoc args from the last explicit configure: an
 	// automatic reconfigure must not silently change the configuration.
 	return t.configureLocked(stampExtra(dir), false)
+}
+
+func verifyLockedDeps(cfg *Config, lk *Lock) error {
+	for _, name := range sortedDepNames(cfg.Deps) {
+		d := cfg.Deps[name]
+		if d == nil || d.Source == nil {
+			continue
+		}
+		ld := lk.Deps[name]
+		switch {
+		case d.Source.URL != "":
+			wantSHA := effectiveSHA256(d, ld)
+			if ld == nil || ld.URL != d.Source.URL || wantSHA == "" || ld.SHA256 != wantSHA {
+				return fmt.Errorf("--locked: cmk.lock does not match dependencies.%s in cmk.yaml; run `cmk sync` and commit the lock", name)
+			}
+		case d.Source.Git != "":
+			if ld == nil || ld.Git != d.Source.Git || ld.Ref != d.Source.Ref || !fullShaRe.MatchString(ld.Commit) {
+				return fmt.Errorf("--locked: cmk.lock does not match dependencies.%s in cmk.yaml; run `cmk sync` and commit the lock", name)
+			}
+		}
+	}
+	return nil
 }
 
 // bootstrapIfUnconfigured configures the selected preset when its build tree

@@ -14,7 +14,7 @@ import (
 const lockFileName = "cmk.lock"
 
 // Lock pins the resolved inputs that cmk.yaml leaves floating: each
-// platform's exact toolchain release and the commit behind each git dep ref.
+// platform's exact toolchain release, archive sha256 digests, and git commits.
 type Lock struct {
 	Version    int                       `yaml:"version"`
 	Toolchains map[string]*LockToolchain `yaml:"toolchains,omitempty"`
@@ -30,6 +30,8 @@ type LockToolchain struct {
 }
 
 type LockDep struct {
+	URL    string `yaml:"url,omitempty"`
+	SHA256 string `yaml:"sha256,omitempty"`
 	Git    string `yaml:"git,omitempty"`
 	Ref    string `yaml:"ref,omitempty"`
 	Commit string `yaml:"commit,omitempty"`

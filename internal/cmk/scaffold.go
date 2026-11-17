@@ -96,13 +96,13 @@ cmake:
   #     link: [-fsanitize=address]
 
 # External dependencies use immutable sources and project-owned recipes.
+# Archive sha256 digests and Git commits are pinned in cmk.lock.
 # dependencies:
 #   zlib:
 #     script: cmk/deps/zlib.sh
 #     cmake-name: ZLIB
 #     source:
 #       url: https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz
-#       sha256: 9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23
 
 # env:
 #   MY_VAR: ${PROJECT_ROOT}/config

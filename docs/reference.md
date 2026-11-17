@@ -116,16 +116,16 @@ dependencies:
     needs: [openssl]
     source:
       url: https://example.com/zlib.tar.gz
-      sha256: <sha256>
     env:
       BUILD_SHARED_LIBS: "OFF"
     patches: [cmk/patches/zlib-fix.patch]
     extra-inputs: [cmk/deps/zlib-options.cmake]
 ```
 
-`source` accepts either `url` with `sha256`, or `git` with `ref`. `cmk.lock`
-pins Git refs to commits. `patches` and `extra-inputs` are project-relative
-globs. Their contents participate in the dependency identity.
+`source` accepts either `url` (with optional `sha256`), or `git` with `ref`.
+`cmk.lock` pins archive `sha256` digests and Git refs to commits. `patches` and
+`extra-inputs` are project-relative globs. Their contents participate in the
+dependency identity.
 
 Each dependency has an immutable store entry after a successful pinned build.
 Its identity includes the recipe, source, selected toolchain, declared

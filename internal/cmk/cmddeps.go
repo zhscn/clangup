@@ -152,12 +152,16 @@ func cmdAdd(name string, options addOptions) error {
 		script = "cmk/deps/" + name + ".sh"
 	}
 
-	if url != "" && sha == "" {
+	if url != "" && sha != "" && !sha256Re.MatchString(sha) {
+		return fmt.Errorf("--sha256 must be a 64-hex digest")
+	}
+	resolvedSHA := sha
+	if url != "" && resolvedSHA == "" {
 		fmt.Fprintf(os.Stderr, "cmk: downloading %s to compute its sha256\n", url)
-		if _, sha, err = download(url, ""); err != nil {
+		if _, resolvedSHA, err = download(url, ""); err != nil {
 			return err
 		}
-		fmt.Fprintf(os.Stderr, "cmk: sha256 %s\n", sha)
+		fmt.Fprintf(os.Stderr, "cmk: sha256 %s (pinned in %s)\n", resolvedSHA, lockFileName)
 	}
 	if gitURL != "" {
 		commit, err := resolveGitCommit(gitURL, ref)
@@ -170,12 +174,23 @@ func cmdAdd(name string, options addOptions) error {
 	dep := &DepCfg{Script: script, CMakeName: cmakeName, Needs: needsList}
 	switch {
 	case url != "":
+		// Keep cmk.yaml free of sha256 unless the user explicitly passed --sha256;
+		// the resolved digest lives in cmk.lock.
 		dep.Source = &SourceCfg{URL: url, SHA256: sha}
 	case gitURL != "":
 		dep.Source = &SourceCfg{Git: gitURL, Ref: ref}
 	}
 	if err := addDependencyToConfig(filepath.Join(p.Root, configFileName), name, dep); err != nil {
 		return err
+	}
+	if url != "" {
+		if p.Lock.Deps == nil {
+			p.Lock.Deps = map[string]*LockDep{}
+		}
+		p.Lock.Deps[name] = &LockDep{URL: url, SHA256: resolvedSHA}
+		if err := saveLock(p.Root, p.Lock); err != nil {
+			return err
+		}
 	}
 
 	scriptPath := filepath.Join(p.Root, script)

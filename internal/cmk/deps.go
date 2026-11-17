@@ -171,6 +171,19 @@ func topoOrder(deps map[string]*DepCfg, want []string) ([]string, error) {
 	return order, nil
 }
 
+func effectiveSHA256(d *DepCfg, ld *LockDep) string {
+	if d == nil || d.Source == nil || d.Source.URL == "" {
+		return ""
+	}
+	if d.Source.SHA256 != "" {
+		return d.Source.SHA256
+	}
+	if ld != nil && ld.URL == d.Source.URL && sha256Re.MatchString(ld.SHA256) {
+		return ld.SHA256
+	}
+	return ""
+}
+
 // sourceID is the part of the stamp describing where the source came
 // from: tarball sha256, locked git commit, or "none".
 func sourceID(d *DepCfg, ld *LockDep) string {
@@ -178,7 +191,10 @@ func sourceID(d *DepCfg, ld *LockDep) string {
 	case d.Source == nil:
 		return "none"
 	case d.Source.URL != "":
-		return "url:" + d.Source.SHA256
+		if sha := effectiveSHA256(d, ld); sha != "" {
+			return "url:" + sha
+		}
+		return "url:" + d.Source.URL + "@unresolved"
 	default:
 		commit := ""
 		if ld != nil {
@@ -320,11 +336,10 @@ func resolveGitCommit(url, ref string) (string, error) {
 	return "", fmt.Errorf("ref %q not found in %s", ref, url)
 }
 
-// ensureLockEntries pins every floating git dep and drops entries for
-// dependencies no longer in cmk.yaml, returning whether the lock changed.
-// Stamps are filled in later, during the sync itself. A dev-overridden
-// dep builds from its local checkout, so its pin is left exactly as it
-// was — dropping the override falls back to it.
+// ensureLockEntries pins every floating archive sha256 or git commit and drops
+// entries for dependencies no longer in cmk.yaml, returning whether the lock
+// changed. Stamps are filled in later, during the sync itself. A dev-overridden
+// dep builds from its local checkout, so its pin is left as it was.
 func ensureLockEntries(cfg *Config, lk *Lock, names []string, overridden map[string]*DevDep) (bool, error) {
 	dirty := false
 	for name := range lk.Deps {
@@ -335,14 +350,48 @@ func ensureLockEntries(cfg *Config, lk *Lock, names []string, overridden map[str
 	}
 	for _, name := range names {
 		d := cfg.Deps[name]
-		if d.Source == nil || d.Source.Git == "" {
+		if d.Source == nil {
 			continue
 		}
 		if _, ok := overridden[name]; ok {
 			continue
 		}
 		ld := lk.Deps[name]
-		if ld != nil && ld.Git == d.Source.Git && ld.Ref == d.Source.Ref && fullShaRe.MatchString(ld.Commit) {
+		if d.Source.URL != "" {
+			sha := d.Source.SHA256
+			if sha == "" {
+				if ld != nil && ld.URL == d.Source.URL && sha256Re.MatchString(ld.SHA256) {
+					sha = ld.SHA256
+				} else {
+					if _, sha, err := download(d.Source.URL, ""); err != nil {
+						return dirty, fmt.Errorf("dependencies.%s: %w", name, err)
+					} else {
+						if ld == nil {
+							ld = &LockDep{}
+							lk.Deps[name] = ld
+						}
+						ld.URL, ld.SHA256 = d.Source.URL, sha
+						ld.Git, ld.Ref, ld.Commit = "", "", ""
+						dirty = true
+						continue
+					}
+				}
+			}
+			if ld == nil {
+				ld = &LockDep{}
+				lk.Deps[name] = ld
+			}
+			if ld.URL != d.Source.URL || ld.SHA256 != sha || ld.Git != "" || ld.Ref != "" || ld.Commit != "" {
+				ld.URL, ld.SHA256 = d.Source.URL, sha
+				ld.Git, ld.Ref, ld.Commit = "", "", ""
+				dirty = true
+			}
+			continue
+		}
+		if d.Source.Git == "" {
+			continue
+		}
+		if ld != nil && ld.Git == d.Source.Git && ld.Ref == d.Source.Ref && fullShaRe.MatchString(ld.Commit) && ld.URL == "" && ld.SHA256 == "" {
 			continue
 		}
 		fmt.Fprintf(os.Stderr, "cmk: resolving %s %s@%s\n", name, d.Source.Git, d.Source.Ref)
@@ -355,6 +404,7 @@ func ensureLockEntries(cfg *Config, lk *Lock, names []string, overridden map[str
 			lk.Deps[name] = ld
 		}
 		ld.Git, ld.Ref, ld.Commit = d.Source.Git, d.Source.Ref, commit
+		ld.URL, ld.SHA256 = "", ""
 		dirty = true
 	}
 	return dirty, nil
@@ -420,7 +470,7 @@ func download(url, want string) (path, sha string, err error) {
 // patches, and returns its path. A .cmk-src marker records what's
 // checked out (including patch identity) so an up-to-date tree is
 // reused and a changed patch re-materializes the tree.
-func prepareSrc(entry, root string, d *DepCfg, ld *LockDep, patches []string) (string, error) {
+func prepareSrc(entry, root, name string, d *DepCfg, ld *LockDep, patches []string) (string, error) {
 	if d.Source == nil {
 		return "", nil
 	}
@@ -445,7 +495,11 @@ func prepareSrc(entry, root string, d *DepCfg, ld *LockDep, patches []string) (s
 	}
 
 	if d.Source.URL != "" {
-		tarball, err := fetchTarball(d.Source.URL, d.Source.SHA256)
+		sha := effectiveSHA256(d, ld)
+		if sha == "" {
+			return "", fmt.Errorf("dependencies.%s: archive sha256 is not resolved (run `cmk sync`)", name)
+		}
+		tarball, err := fetchTarball(d.Source.URL, sha)
 		if err != nil {
 			return "", err
 		}
@@ -620,7 +674,7 @@ func buildDep(p *Project, name string, tc *Toolchain, needOut map[string]string,
 			return "", false, lockDirty, err
 		}
 	}
-	src, err := prepareSrc(entry, p.Root, d, lk.Deps[name], patches)
+	src, err := prepareSrc(entry, p.Root, name, d, lk.Deps[name], patches)
 	if err != nil {
 		return "", false, lockDirty, err
 	}
