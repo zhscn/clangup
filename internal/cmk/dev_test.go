@@ -420,3 +420,55 @@ func TestArchiveDependencyPinsOptionalSHA256InLock(t *testing.T) {
 		t.Fatalf("installed ver.txt = %q, %v", ver, err)
 	}
 }
+
+func TestRecipeStubForwardsToolchainFileWhenSet(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "bin")
+	work := filepath.Join(dir, "work")
+	for _, d := range []string{bin, work} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	log := filepath.Join(dir, "cmake.log")
+	fakeCMake := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + shellQuote([]string{log}) + "\n"
+	if err := os.WriteFile(filepath.Join(bin, "cmake"), []byte(fakeCMake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(dir, "recipe.sh")
+	if err := os.WriteFile(script, []byte(recipeStub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	runStub := func(tcFile string) string {
+		_ = os.Remove(log)
+		cmd := exec.Command("bash", script)
+		cmd.Dir = work
+		cmd.Env = []string{
+			"PATH=" + bin + ":" + os.Getenv("PATH"),
+			"CMK_SRC=/src",
+			"CMK_PREFIX=/pfx",
+			"CMK_JOBS=4",
+		}
+		if tcFile != "" {
+			cmd.Env = append(cmd.Env, "CMK_TOOLCHAIN_FILE="+tcFile)
+		}
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("recipeStub failed: %v\n%s", err, out)
+		}
+		got, err := os.ReadFile(log)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(got)
+	}
+
+	withTC := runStub("/opt/clangup/toolchain.cmake")
+	if !strings.Contains(withTC, "-DCMAKE_TOOLCHAIN_FILE=/opt/clangup/toolchain.cmake") {
+		t.Fatalf("recipeStub did not forward CMK_TOOLCHAIN_FILE:\n%s", withTC)
+	}
+	withoutTC := runStub("")
+	if strings.Contains(withoutTC, "CMAKE_TOOLCHAIN_FILE") {
+		t.Fatalf("recipeStub passed empty CMAKE_TOOLCHAIN_FILE:\n%s", withoutTC)
+	}
+}

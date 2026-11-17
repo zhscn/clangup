@@ -264,6 +264,7 @@ set -e
 # $CMK_SRC; needs are at $CMK_DEP_<NAME>_PREFIX and on CMAKE_PREFIX_PATH.
 # Adjust for the dep's real build system.
 cmake -S "$CMK_SRC" -B . -G Ninja \
+  ${CMK_TOOLCHAIN_FILE:+-DCMAKE_TOOLCHAIN_FILE="$CMK_TOOLCHAIN_FILE"} \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX="$CMK_PREFIX" \
   -DBUILD_SHARED_LIBS=OFF
