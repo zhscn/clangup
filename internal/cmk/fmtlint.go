@@ -458,6 +458,9 @@ func cmdLint(explicitFiles []string, options lintOptions) error {
 	if err != nil {
 		return err
 	}
+	if err := tree.prepareLintModuleDeps(lintDBDir, files, defaultJobs(), options.Verbose); err != nil {
+		return err
+	}
 
 	jobs := defaultJobs()
 	if options.Fix {

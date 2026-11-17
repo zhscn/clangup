@@ -102,6 +102,53 @@ func TestFilterCompileCommands(t *testing.T) {
 	if len(gotAdv) != 1 || !strings.Contains(gotAdv[0]["output"].(string), ".dir/Release/") {
 		t.Fatalf("adversarial Release filter = %s", advOut)
 	}
+
+	// Synthetic `--precompile` BMI entries (`@synth_*.bmi`) are dropped in
+	// both multi-config and single-config modes so a `.cppm` unit does not
+	// appear twice alongside its `.cppm.o` compile command.
+	moduleDB := `[
+	  {"directory":"/b","file":"/s/m.cppm","output":"/b/CMakeFiles/m.dir/Debug/m.cppm.o","command":"clang++ -DCMAKE_INTDIR=\"Debug\" @CMakeFiles/m.dir/Debug/m.cppm.o.modmap -o CMakeFiles/m.dir/Debug/m.cppm.o -c /s/m.cppm"},
+	  {"directory":"/b","file":"/s/m.cppm","output":"/b/CMakeFiles/m@synth_1234.dir/Debug/abcd.bmi","command":"clang++ -DCMAKE_INTDIR=\"Debug\" --precompile @CMakeFiles/m@synth_1234.dir/Debug/abcd.bmi.modmap -o CMakeFiles/m@synth_1234.dir/Debug/abcd.bmi -c /s/m.cppm"}
+	]`
+	for _, cfg := range []string{"Debug", ""} {
+		modOut, err := filterCompileCommands([]byte(moduleDB), cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var gotMod []map[string]any
+		if err := json.Unmarshal(modOut, &gotMod); err != nil {
+			t.Fatal(err)
+		}
+		if len(gotMod) != 1 || !strings.HasSuffix(gotMod[0]["output"].(string), "m.cppm.o") {
+			t.Fatalf("filterCompileCommands(cfg=%q) = %s, want only m.cppm.o", cfg, modOut)
+		}
+	}
+}
+
+func TestBMITargetsFromModmap(t *testing.T) {
+	dir := t.TempDir()
+	modmap := filepath.Join(dir, "CMakeFiles", "app.dir", "Debug", "main.cc.o.modmap")
+	if err := os.MkdirAll(filepath.Dir(modmap), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := strings.Join([]string{
+		"-x c++-module",
+		`-fmodule-output="CMakeFiles/app.dir/Debug/own.pcm"`,
+		`-fmodule-file="m=CMakeFiles/m@synth_1234.dir/Debug/abcd.bmi"`,
+		`-fmodule-file=std=` + filepath.ToSlash(filepath.Join(dir, "CMakeFiles/__cmake_cxx23.dir/Debug/std.pcm")),
+		`-fmodule-file=/outside/prebuilt.pcm`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(modmap, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := bmiTargetsFromModmap(dir, dir, modmap)
+	want := []string{
+		"CMakeFiles/m@synth_1234.dir/Debug/abcd.bmi",
+		"CMakeFiles/__cmake_cxx23.dir/Debug/std.pcm",
+	}
+	if !eqStrings(got, want) {
+		t.Fatalf("bmiTargetsFromModmap = %v, want %v", got, want)
+	}
 }
 
 func TestLintCompilationDatabaseSelectsOneConfiguration(t *testing.T) {

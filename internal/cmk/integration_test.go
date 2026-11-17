@@ -290,3 +290,63 @@ func TestIntegrationForeignProjectLeftAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestIntegrationLintPreparesModuleModmapsAndBMIs(t *testing.T) {
+	requireTools(t)
+	home, _ := os.UserHomeDir()
+	var clangupPrefix string
+	if matches, _ := filepath.Glob(filepath.Join(home, ".local/share/clangup/toolchains/*/*/*")); len(matches) > 0 {
+		for _, m := range matches {
+			if fileExists(filepath.Join(m, "bin/clang-tidy")) && fileExists(filepath.Join(m, "bin/clang-scan-deps")) {
+				clangupPrefix = m
+				break
+			}
+		}
+	}
+	if clangupPrefix == "" {
+		t.Skip("no local clangup toolchain with clang-tidy and clang-scan-deps installed")
+	}
+
+	root := t.TempDir()
+	write := func(rel, content string) {
+		t.Helper()
+		path := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("CMakeLists.txt", `cmake_minimum_required(VERSION 3.28)
+project(modlint LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+add_library(base)
+target_sources(base PUBLIC FILE_SET CXX_MODULES FILES src/base.cppm)
+add_library(m)
+target_sources(m PUBLIC FILE_SET CXX_MODULES FILES src/m.cppm)
+target_link_libraries(m PUBLIC base)
+add_executable(app src/main.cc)
+target_link_libraries(app PRIVATE m)
+`)
+	write("src/base.cppm", "export module base;\nexport int base_val() { return 40; }\n")
+	write("src/m.cppm", "export module m;\nimport base;\nexport int answer() { return base_val() + 2; }\n")
+	write("src/main.cc", "import m;\nint main() { return answer() - 42; }\n")
+	write(".clang-tidy", "Checks: 'bugprone-*'\n")
+	write("cmk.yaml", "version: 1\ncmake:\n  compile-commands: default\n  args:\n    - -DCMAKE_TOOLCHAIN_FILE="+filepath.ToSlash(filepath.Join(clangupPrefix, "toolchain.cmake"))+"\n    - -DCMAKE_CXX_COMPILER_CLANG_SCAN_DEPS="+filepath.ToSlash(filepath.Join(clangupPrefix, "bin/clang-scan-deps"))+"\nlint:\n  command: "+filepath.ToSlash(filepath.Join(clangupPrefix, "bin/clang-tidy"))+"\n")
+
+	t.Chdir(root)
+	if err := cmdConfig(configOptions{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	// Lint directly on an unbuilt tree: cmk must materialize .modmap and
+	// .bmi files via Ninja without compiling object files or linking app.
+	if err := cmdLint([]string{"src/m.cppm", "src/main.cc"}, lintOptions{}); err != nil {
+		t.Fatalf("cmdLint on unbuilt C++23 module tree failed: %v", err)
+	}
+	if fileExists(filepath.Join(root, "build/Debug/app")) || fileExists(filepath.Join(root, "build/CMakeFiles/app.dir/Debug/src/main.cc.o")) {
+		t.Fatal("cmdLint compiled object or executable targets instead of only module metadata/BMIs")
+	}
+}

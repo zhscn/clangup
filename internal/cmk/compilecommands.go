@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -42,6 +44,10 @@ func (t *buildTree) syncRootCompileCommands() error {
 		if out, err = filterCompileCommands(data, cfg); err != nil {
 			return fmt.Errorf("filtering compile_commands.json to %s: %w", cfg, err)
 		}
+	} else if hasSyntheticBMIEntries(data) {
+		if out, err = filterCompileCommands(data, ""); err != nil {
+			return fmt.Errorf("filtering synthetic BMI entries from compile_commands.json: %w", err)
+		}
 	}
 
 	dst := filepath.Join(p.Root, "compile_commands.json")
@@ -63,11 +69,11 @@ func (t *buildTree) syncRootCompileCommands() error {
 	return nil
 }
 
-// filterCompileCommands keeps only the entries a Ninja Multi-Config build
-// emitted for the given configuration. It inspects CMAKE_INTDIR and the
-// object output paths (entry.Output and `-o <obj>`) relative to entry.Directory
-// rather than substring-matching the whole command line, so parent directories
-// named /Release/ or /Debug/ cannot cause false matches across configurations.
+// filterCompileCommands narrows compile_commands.json to the entries clangd and
+// clang-tidy should consume: when config is non-empty, only entries for that
+// configuration are kept; in all modes, CMake's synthetic `--precompile` BMI
+// rules (`@synth_*.dir/*.bmi`) are dropped so a module interface unit does not
+// appear twice alongside its `.cppm.o` compilation entry.
 func filterCompileCommands(data []byte, config string) ([]byte, error) {
 	var raws []json.RawMessage
 	if err := json.Unmarshal(data, &raws); err != nil {
@@ -79,18 +85,88 @@ func filterCompileCommands(data []byte, config string) ([]byte, error) {
 		if err := json.Unmarshal(r, &e); err != nil {
 			return nil, err
 		}
-		if e.matchesConfig(config) {
+		if e.isSyntheticBMI() {
+			continue
+		}
+		if config == "" || e.matchesConfig(config) {
 			kept = append(kept, r)
 		}
 	}
 	return json.MarshalIndent(kept, "", "  ")
 }
 
+func hasSyntheticBMIEntries(data []byte) bool {
+	var entries []compileCommandEntry
+	if json.Unmarshal(data, &entries) != nil {
+		return false
+	}
+	for i := range entries {
+		if entries[i].isSyntheticBMI() {
+			return true
+		}
+	}
+	return false
+}
+
 type compileCommandEntry struct {
 	Directory string   `json:"directory"`
+	File      string   `json:"file"`
 	Output    string   `json:"output"`
 	Command   string   `json:"command"`
 	Arguments []string `json:"arguments"`
+}
+
+func (e *compileCommandEntry) tokens() []string {
+	if len(e.Arguments) > 0 {
+		return e.Arguments
+	}
+	if e.Command != "" {
+		return splitCommandTokens(e.Command)
+	}
+	return nil
+}
+
+func (e *compileCommandEntry) isSyntheticBMI() bool {
+	for _, out := range e.outputPaths() {
+		slash := strings.ReplaceAll(out, `\`, "/")
+		if strings.HasSuffix(slash, ".bmi") || strings.HasSuffix(slash, ".ifc") || strings.Contains(slash, "@synth_") {
+			return true
+		}
+	}
+	return slices.Contains(e.tokens(), "--precompile")
+}
+
+func (e *compileCommandEntry) resolvedFile(fallbackDir string) string {
+	if e.File == "" {
+		return ""
+	}
+	if filepath.IsAbs(e.File) {
+		return filepath.Clean(e.File)
+	}
+	base := e.Directory
+	if base == "" {
+		base = fallbackDir
+	}
+	return filepath.Clean(filepath.Join(base, e.File))
+}
+
+func (e *compileCommandEntry) modmapFiles(fallbackDir string) []string {
+	base := e.Directory
+	if base == "" {
+		base = fallbackDir
+	}
+	var out []string
+	for _, tok := range e.tokens() {
+		if !strings.HasPrefix(tok, "@") || !strings.HasSuffix(tok, ".modmap") {
+			continue
+		}
+		p := strings.TrimPrefix(tok, "@")
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(base, filepath.FromSlash(p))
+		}
+		out = append(out, filepath.Clean(p))
+	}
+	return out
 }
 
 func (e *compileCommandEntry) matchesConfig(config string) bool {
@@ -234,11 +310,26 @@ func matchesOutputConfig(out, directory, config string) bool {
 func (t *buildTree) lintCompilationDatabase() (string, string, error) {
 	buildDir := t.dir
 	config, multi := t.lintConfiguration()
+	source := filepath.Join(buildDir, "compile_commands.json")
 	if !multi {
-		return buildDir, "", nil
+		data, err := os.ReadFile(source)
+		if err != nil {
+			return "", "", err
+		}
+		if !hasSyntheticBMIEntries(data) {
+			return buildDir, "", nil
+		}
+		filtered, err := filterCompileCommands(data, "")
+		if err != nil {
+			return "", "", fmt.Errorf("filtering synthetic BMI entries from compile_commands.json: %w", err)
+		}
+		dir := filepath.Join(buildDir, ".cmk", "lint", "default")
+		if err := writeIfChanged(filepath.Join(dir, "compile_commands.json"), filtered); err != nil {
+			return "", "", err
+		}
+		return dir, "", nil
 	}
 
-	source := filepath.Join(buildDir, "compile_commands.json")
 	data, err := os.ReadFile(source)
 	if err != nil {
 		return "", "", err
@@ -262,16 +353,164 @@ func (t *buildTree) lintCompilationDatabase() (string, string, error) {
 		return '_'
 	}, config)
 	dir := filepath.Join(buildDir, ".cmk", "lint", component)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := writeIfChanged(filepath.Join(dir, "compile_commands.json"), filtered); err != nil {
 		return "", "", err
 	}
-	destination := filepath.Join(dir, "compile_commands.json")
-	if current, readErr := os.ReadFile(destination); readErr != nil || !bytes.Equal(current, filtered) {
-		if err := os.WriteFile(destination, filtered, 0o644); err != nil {
-			return "", "", err
+	return dir, config, nil
+}
+
+func writeIfChanged(destination string, content []byte) error {
+	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+		return err
+	}
+	if current, err := os.ReadFile(destination); err == nil && bytes.Equal(current, content) {
+		return nil
+	}
+	return os.WriteFile(destination, content, 0o644)
+}
+
+// prepareLintModuleDeps materializes CMake's `@*.modmap` response files and
+// any referenced `-fmodule-file=` BMIs via Ninja before clang-tidy runs,
+// without compiling object files or linking targets. Non-Ninja trees and
+// projects without module response files return immediately.
+func (t *buildTree) prepareLintModuleDeps(lintDBDir string, selectedFiles []string, jobs int, verbose bool) error {
+	if !fileExists(filepath.Join(t.dir, "build.ninja")) {
+		return nil
+	}
+	if _, err := exec.LookPath("ninja"); err != nil {
+		return nil
+	}
+	data, err := os.ReadFile(filepath.Join(lintDBDir, "compile_commands.json"))
+	if err != nil {
+		return nil
+	}
+	var entries []compileCommandEntry
+	if err := json.Unmarshal(data, &entries); err != nil {
+		return nil
+	}
+
+	inspectAll := false
+	selectedSet := make(map[string]bool, len(selectedFiles))
+	for _, f := range selectedFiles {
+		clean := filepath.Clean(f)
+		selectedSet[clean] = true
+		if cppHeaderExts[filepath.Ext(clean)] {
+			inspectAll = true
 		}
 	}
-	return dir, config, nil
+
+	type modmapRef struct {
+		entryDir string
+		absPath  string
+		target   string
+	}
+	var modmaps []modmapRef
+	seenModmaps := map[string]bool{}
+	for i := range entries {
+		e := &entries[i]
+		if !inspectAll && !selectedSet[e.resolvedFile(t.dir)] {
+			continue
+		}
+		entryDir := e.Directory
+		if entryDir == "" {
+			entryDir = t.dir
+		}
+		for _, abs := range e.modmapFiles(t.dir) {
+			target, ok := ninjaTargetInDir(t.dir, abs)
+			if !ok || seenModmaps[target] {
+				continue
+			}
+			seenModmaps[target] = true
+			modmaps = append(modmaps, modmapRef{entryDir: entryDir, absPath: abs, target: target})
+		}
+	}
+	if len(modmaps) == 0 {
+		return nil
+	}
+
+	modmapTargets := make([]string, len(modmaps))
+	for i, m := range modmaps {
+		modmapTargets[i] = m.target
+	}
+	if err := t.runNinjaTargets(modmapTargets, jobs, verbose); err != nil {
+		return fmt.Errorf("preparing C++ module modmaps: %w", err)
+	}
+
+	var bmiTargets []string
+	seenBMIs := map[string]bool{}
+	for _, m := range modmaps {
+		for _, bmi := range bmiTargetsFromModmap(t.dir, m.entryDir, m.absPath) {
+			if !seenBMIs[bmi] {
+				seenBMIs[bmi] = true
+				bmiTargets = append(bmiTargets, bmi)
+			}
+		}
+	}
+	if len(bmiTargets) > 0 {
+		if err := t.runNinjaTargets(bmiTargets, jobs, verbose); err != nil {
+			return fmt.Errorf("preparing C++ module BMIs: %w", err)
+		}
+	}
+	return nil
+}
+
+func ninjaTargetInDir(buildDir, absPath string) (string, bool) {
+	rel, err := filepath.Rel(buildDir, absPath)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return filepath.ToSlash(rel), true
+}
+
+func bmiTargetsFromModmap(buildDir, entryDir, modmapPath string) []string {
+	data, err := os.ReadFile(modmapPath)
+	if err != nil {
+		return nil
+	}
+	var targets []string
+	for _, tok := range splitCommandTokens(string(data)) {
+		if !strings.HasPrefix(tok, "-fmodule-file=") {
+			continue
+		}
+		rest := strings.TrimPrefix(tok, "-fmodule-file=")
+		bmiPath := rest
+		if _, p, ok := strings.Cut(rest, "="); ok {
+			bmiPath = p
+		}
+		bmiPath = strings.Trim(bmiPath, `"'`)
+		if bmiPath == "" {
+			continue
+		}
+		if !filepath.IsAbs(bmiPath) {
+			bmiPath = filepath.Join(entryDir, filepath.FromSlash(bmiPath))
+		}
+		if target, ok := ninjaTargetInDir(buildDir, filepath.Clean(bmiPath)); ok {
+			targets = append(targets, target)
+		}
+	}
+	return targets
+}
+
+func (t *buildTree) runNinjaTargets(targets []string, jobs int, verbose bool) error {
+	env, err := t.p.buildEnv()
+	if err != nil {
+		return err
+	}
+	args := []string{"-C", t.dir}
+	if t.config != "" {
+		args = append(args, "-f", "build-"+t.config+".ninja")
+	}
+	args = append(args, "-j", fmt.Sprint(jobs))
+	args = append(args, targets...)
+	if verbose {
+		return runStreaming(env, "ninja", args...)
+	}
+	cmd := exec.Command("ninja", args...)
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("%w\n%s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // lintConfiguration reports the configuration whose compile commands
