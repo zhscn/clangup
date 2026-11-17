@@ -177,3 +177,30 @@ func TestConsumerResultServesInstalledExactWithoutTheIndex(t *testing.T) {
 		t.Fatal("an uninstalled selector resolved without the index")
 	}
 }
+
+func TestListHostToolchainsOrdersDefaultFirst(t *testing.T) {
+	t.Setenv("CLANGUP_HOME", t.TempDir())
+	t.Setenv("CLANGUP_CACHE_HOME", t.TempDir())
+	t.Setenv("CLANGUP_CONFIG_HOME", t.TempDir())
+	installFixture(t, "default", "23.1.0", 1, "x86_64-unknown-linux-gnu")
+	preferred := installFixture(t, "libcxx-pgo", "23.1.5", 1, "x86_64-unknown-linux-gnu")
+	installFixture(t, "libcxx-pgo", "23.1.0", 1, "x86_64-unknown-linux-gnu")
+	installFixture(t, "libcxx", "23.1.0", 1, "aarch64-unknown-linux-gnu")
+	if err := toolchain.SetDefault(preferred); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ListHostToolchains("x86_64-unknown-linux-gnu")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("len(got) = %d, want 3: %#v", len(got), got)
+	}
+	if !got[0].IsDefault || got[0].ExactSelector() != "libcxx-pgo@23.1.5-1" || got[0].PreferredSelector() != "libcxx-pgo@23.1.5-1" {
+		t.Fatalf("got[0] = %#v", got[0])
+	}
+	if got[1].ExactSelector() != "default@23.1.0-1" || got[2].ExactSelector() != "libcxx-pgo@23.1.0-1" {
+		t.Fatalf("unexpected ordering: %#v", got)
+	}
+}

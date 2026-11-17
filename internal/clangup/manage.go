@@ -59,6 +59,73 @@ func removeMissingInstallRecords() error {
 	return nil
 }
 
+// InstalledToolchain summarizes a validated local toolchain installation for
+// consumer discovery (such as `cmk init`).
+type InstalledToolchain struct {
+	Channel   string
+	Version   string
+	Release   int
+	Target    string
+	IsDefault bool
+	InIndex   bool
+}
+
+func (t InstalledToolchain) ExactSelector() string {
+	return fmt.Sprintf("%s@%s-%d", t.Channel, t.Version, t.Release)
+}
+
+func (t InstalledToolchain) PreferredSelector() string {
+	if t.InIndex {
+		return t.Channel
+	}
+	return t.ExactSelector()
+}
+
+// ListHostToolchains returns validated installed toolchains matching target
+// (or all targets when empty), ordered with the active default first and
+// newer releases ahead of older ones. It never performs network I/O.
+func ListHostToolchains(target string) ([]InstalledToolchain, error) {
+	records, defaultPrefix, err := installedToolchains()
+	if err != nil {
+		return nil, err
+	}
+	index, _ := toolchain.LoadIndex()
+	var out []InstalledToolchain
+	for _, record := range records {
+		if target != "" && record.Target != target {
+			continue
+		}
+		if !toolchain.IsInstalled(record.Prefix, record.ManifestSHA256, record.ArtifactSHA256) {
+			continue
+		}
+		inIndex := false
+		if index != nil {
+			_, inIndex = index.Channels[record.Channel]
+		}
+		out = append(out, InstalledToolchain{
+			Channel:   record.Channel,
+			Version:   record.Version,
+			Release:   record.Release,
+			Target:    record.Target,
+			IsDefault: defaultPrefix != "" && record.Prefix == defaultPrefix,
+			InIndex:   inIndex,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].IsDefault != out[j].IsDefault {
+			return out[i].IsDefault
+		}
+		if out[i].Channel != out[j].Channel {
+			return out[i].Channel < out[j].Channel
+		}
+		if cmp := compareNumericVersion(out[i].Version, out[j].Version); cmp != 0 {
+			return cmp > 0
+		}
+		return out[i].Release > out[j].Release
+	})
+	return out, nil
+}
+
 // installedToolchains lists every install record together with the prefix
 // currently marked default.
 func installedToolchains() (records []toolchain.InstallRecord, defaultPrefix string, err error) {

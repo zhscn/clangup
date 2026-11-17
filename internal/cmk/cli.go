@@ -135,11 +135,28 @@ func newNewCommand() *cobra.Command {
 }
 
 func newInitCommand() *cobra.Command {
-	var force bool
-	command := &cobra.Command{Use: "init", Short: "Scaffold cmk.yaml in the current project", Args: cobra.NoArgs, RunE: func(_ *cobra.Command, _ []string) error {
-		return cmdInit(force)
-	}}
-	command.Flags().BoolVarP(&force, "force", "f", false, "Overwrite an existing cmk.yaml")
+	var options initOptions
+	command := &cobra.Command{
+		Use:   "init",
+		Short: "Scaffold cmk.yaml in the current project",
+		Args:  cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			flags := command.Flags()
+			options.ToolchainSet = flags.Changed("toolchain")
+			options.LauncherSet = flags.Changed("launcher")
+			options.AsanSet = flags.Changed("asan")
+			options.GitignoreSet = flags.Changed("gitignore")
+			return cmdInit(options, command.InOrStdin(), command.ErrOrStderr())
+		},
+	}
+	flags := command.Flags()
+	flags.BoolVarP(&options.Force, "force", "f", false, "Overwrite an existing cmk.yaml")
+	flags.BoolVarP(&options.Yes, "yes", "y", false, "Accept detected defaults without prompting")
+	flags.StringVar(&options.Toolchain, "toolchain", "", "Toolchain selector (or 'system')")
+	flags.StringVar(&options.Launcher, "launcher", "", "Compiler launcher (ccache, sccache, or 'none')")
+	flags.BoolVar(&options.Asan, "asan", false, "Include an Asan build configuration")
+	flags.BoolVar(&options.Gitignore, "gitignore", false, "Add cmk local files to .gitignore")
+	registerInitFlagCompletions(command)
 	return command
 }
 

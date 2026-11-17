@@ -38,9 +38,14 @@ archive with `clangup install --file <archive>` or `clangup install --url
 
 ## Configure a cmk project
 
-Create `cmk.yaml` with a toolchain selector and configure its build tree:
+Scaffold `cmk.yaml` in an existing project (detecting installed clangup
+toolchains, `ccache`/`sccache`, vendor directories, and `.gitignore` entries,
+with interactive prompts on a terminal or `-y`/explicit flags in scripts) and
+configure its build tree:
 
 ```sh
+cmk init
+cmk init -y --toolchain libcxx-pgo --asan --gitignore
 cmk config
 cmk config -p default --fresh
 ```

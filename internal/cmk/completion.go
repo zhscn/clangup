@@ -15,6 +15,32 @@ import (
 // so it must stay read-only and non-interactive: never configure CMake, never
 // install toolchains, and never invoke fzf.
 
+func registerInitFlagCompletions(command *cobra.Command) {
+	_ = command.RegisterFlagCompletionFunc("toolchain", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+		var out []string
+		seen := map[string]bool{}
+		add := func(s string) {
+			if s != "" && !seen[s] {
+				seen[s] = true
+				out = append(out, s)
+			}
+		}
+		if installed, err := clangupHostToolchains(hostTarget()); err == nil {
+			for _, tc := range installed {
+				add(tc.Channel)
+				add(tc.ExactSelector())
+			}
+		}
+		for _, builtin := range []string{"default", "libcxx", "libcxx-pgo", "system"} {
+			add(builtin)
+		}
+		return out, cobra.ShellCompDirectiveNoFileComp
+	})
+	_ = command.RegisterFlagCompletionFunc("launcher", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+		return []string{"ccache", "sccache", "none"}, cobra.ShellCompDirectiveNoFileComp
+	})
+}
+
 func registerPresetAndBuildCompletions(command *cobra.Command) {
 	_ = command.RegisterFlagCompletionFunc("preset", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 		p, err := openProject()
