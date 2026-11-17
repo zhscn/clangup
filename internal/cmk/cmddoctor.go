@@ -45,14 +45,16 @@ func cmdDoctor() error {
 
 	fmt.Println("build tools:")
 	checkTool(c, "cmake")
-	for _, preset := range p.Cfg.Configure.Presets {
-		if strings.HasPrefix(strings.ToLower(effectiveGenerator(p.Cfg, preset)), "ninja") {
-			checkTool(c, "ninja")
-			break
+	if p.hasCmkConfig() {
+		for _, preset := range p.Cfg.Configure.Presets {
+			if strings.HasPrefix(strings.ToLower(effectiveGenerator(p.Cfg, preset)), "ninja") {
+				checkTool(c, "ninja")
+				break
+			}
 		}
 	}
 
-	if hasMultiConfigPreset(p.Cfg) {
+	if p.hasCmkConfig() && hasMultiConfigPreset(p.Cfg) {
 		fmt.Println("configurations (multi-config):")
 		doctorConfigurations(c, p)
 	}

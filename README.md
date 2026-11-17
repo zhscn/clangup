@@ -36,24 +36,15 @@ version: 1
 
 toolchain:
   default: default
-
-cmake:
-  generator: Ninja Multi-Config
-  default-preset: default
-  default-configuration: Debug
-  presets:
-    default:
-      build-dir: build
-  configurations:
-    - name: Debug
-    - name: Release
 ```
 
-Configure and build:
+Configure and build (`Ninja Multi-Config` in `build/` with `Debug` and
+`Release` by default):
 
 ```sh
 cmk config
 cmk build
+cmk build -c Release
 cmk test
 ```
 

@@ -65,20 +65,10 @@ const cmkYAMLTemplate = `version: 1
 #   linux: libcxx@23.1.0-1
 #   linux-aarch64: libcxx@23.1.0-1
 
+# Defaults when omitted: Ninja Multi-Config in ./build with Debug and Release.
 cmake:
-  generator: Ninja Multi-Config
-  default-preset: default
-  default-configuration: Debug
   compile-commands: default
   # launcher: ccache
-
-  presets:
-    default:
-      build-dir: build
-
-  configurations:
-    - name: Debug
-    - name: Release
 
   # A preset is a separate configure/build tree. A configuration is selected
   # inside every multi-config tree with cmk build -p <preset> -c <config>.

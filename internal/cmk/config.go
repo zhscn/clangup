@@ -173,9 +173,7 @@ func normalizeConfig(cfg *Config) error {
 	if cfg.TargetEnv == nil {
 		cfg.TargetEnv = map[string]map[string]string{}
 	}
-	if cfg.Configure.Generator == "" {
-		cfg.Configure.Generator = "Ninja"
-	}
+	explicitGenerator := cfg.Configure.Generator != ""
 	if cfg.Configure.Presets == nil {
 		cfg.Configure.Presets = map[string]*PresetCfg{}
 	}
@@ -192,6 +190,14 @@ func normalizeConfig(cfg *Config) error {
 	if err := resolvePresetInheritance(cfg); err != nil {
 		return err
 	}
+	if !explicitGenerator {
+		for _, preset := range cfg.Configure.Presets {
+			if preset.Generator == "" && presetUsesSingleConfigBuildType(cfg, preset) {
+				preset.Generator = "Ninja"
+			}
+		}
+		cfg.Configure.Generator = defaultGenerator
+	}
 	if cfg.Configure.DefaultPreset == "" {
 		if cfg.Configure.Presets["default"] != nil {
 			cfg.Configure.DefaultPreset = "default"
@@ -202,7 +208,7 @@ func normalizeConfig(cfg *Config) error {
 		}
 	}
 	if hasMultiConfigPreset(cfg) && len(cfg.Configure.Configurations) == 0 {
-		for _, name := range standardConfigs {
+		for _, name := range defaultConfigurations {
 			cfg.Configure.Configurations = append(cfg.Configure.Configurations, &ConfigurationCfg{Name: name})
 		}
 	}
@@ -216,6 +222,19 @@ func normalizeConfig(cfg *Config) error {
 		cfg.Configure.DefaultConfiguration = cfg.Configure.Configurations[0].Name
 	}
 	return nil
+}
+
+func presetUsesSingleConfigBuildType(cfg *Config, preset *PresetCfg) bool {
+	if preset.BuildType != "" {
+		return true
+	}
+	if _, ok := cfg.Configure.Variables["CMAKE_BUILD_TYPE"]; ok {
+		return true
+	}
+	if _, ok := preset.Variables["CMAKE_BUILD_TYPE"]; ok {
+		return true
+	}
+	return definesVar(cfg.Configure.Args, "CMAKE_BUILD_TYPE") || definesVar(preset.Args, "CMAKE_BUILD_TYPE")
 }
 
 func resolvePresetInheritance(cfg *Config) error {

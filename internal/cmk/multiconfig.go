@@ -8,9 +8,11 @@ import (
 	"strings"
 )
 
+const defaultGenerator = "Ninja Multi-Config"
+
 var configNameRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*$`)
 
-var standardConfigs = []string{"Debug", "Release", "RelWithDebInfo", "MinSizeRel"}
+var defaultConfigurations = []string{"Debug", "Release"}
 
 func effectiveGenerator(cfg *Config, preset *PresetCfg) string {
 	if preset != nil && preset.Generator != "" {
@@ -19,7 +21,7 @@ func effectiveGenerator(cfg *Config, preset *PresetCfg) string {
 	if cfg.Configure.Generator != "" {
 		return cfg.Configure.Generator
 	}
-	return "Ninja"
+	return defaultGenerator
 }
 
 func isMultiConfigGenerator(generator string) bool {

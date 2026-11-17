@@ -486,7 +486,7 @@ func TestCcacheEnv(t *testing.T) {
 
 func TestIsMultiConfig(t *testing.T) {
 	cases := map[string]bool{
-		"":                      false,
+		"":                      true,
 		"Ninja":                 false,
 		"Unix Makefiles":        false,
 		"Ninja Multi-Config":    true,
@@ -506,6 +506,29 @@ func TestIsMultiConfig(t *testing.T) {
 	cfg.Configure.Generator = "Ninja"
 	if !isMultiConfig(cfg, &PresetCfg{Generator: "Ninja Multi-Config"}) {
 		t.Error("preset generator must override the global single-config generator")
+	}
+}
+
+func TestMinimalConfigDefaultsToMultiConfig(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, configFileName), []byte("version: 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfig(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Configure.Generator != "Ninja Multi-Config" {
+		t.Fatalf("generator = %q, want Ninja Multi-Config", cfg.Configure.Generator)
+	}
+	if cfg.Configure.DefaultPreset != "default" || cfg.Configure.Presets["default"].BuildDir != "build" {
+		t.Fatalf("default preset = %q -> %+v", cfg.Configure.DefaultPreset, cfg.Configure.Presets["default"])
+	}
+	if got := strings.Join(configuredConfigurations(cfg), ","); got != "Debug,Release" {
+		t.Fatalf("configurations = %q, want Debug,Release", got)
+	}
+	if cfg.Configure.DefaultConfiguration != "Debug" {
+		t.Fatalf("default-configuration = %q, want Debug", cfg.Configure.DefaultConfiguration)
 	}
 }
 

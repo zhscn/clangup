@@ -84,10 +84,13 @@ cmake:
       link: [-fsanitize=address]
 ```
 
-Every preset owns its `build-dir`; an omitted directory is `build/<preset>`.
-`inherits` merges variables and arguments from another preset. A
-multi-config preset exposes every entry in `configurations`; a single-config
-preset uses `build-type`.
+Every preset owns its `build-dir`; an omitted directory is `build/<preset>`
+(`build` for the implicit `default` preset). When `cmake.generator` is omitted,
+cmk defaults to `Ninja Multi-Config` with `Debug` and `Release` configurations
+(`Debug` as default), unless a preset sets `build-type` (which defaults that
+preset to single-config `Ninja`). `inherits` merges variables and arguments
+from another preset. A multi-config preset exposes every entry in
+`configurations`; a single-config preset uses `build-type`.
 
 IDE integrations use `cmk config --if-stale -p <preset>` before loading the
 CMake File API model. The command configures a missing or stale tree and does
