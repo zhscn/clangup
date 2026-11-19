@@ -24,7 +24,7 @@ func cmakeLiteral(value string) string {
 	return "[" + eq + "[" + value + "]" + eq + "]"
 }
 
-func writeRustCMakeConfig(projectRoot, buildDir, name string, c *RustCrateCfg, cargo string, env map[string]string, nativeLibs []string) error {
+func writeRustCMakeConfig(projectRoot, buildDir, name string, c *RustCrateCfg, cargo string, env map[string]string) error {
 	manifest := c.Manifest
 	if !filepath.IsAbs(manifest) {
 		manifest = filepath.Join(projectRoot, manifest)
@@ -56,7 +56,7 @@ func writeRustCMakeConfig(projectRoot, buildDir, name string, c *RustCrateCfg, c
 		fmt.Fprintf(&script, "set(expected_lib %s)\n", cmakeLiteral(strings.ReplaceAll(c.LibName, "-", "_")))
 	}
 	fmt.Fprintf(&script, "set(cargo_dir %s)\n", cmakeLiteral(filepath.Dir(manifest)))
-	args := []string{cargo, "build", "--message-format=json", "--lib", "--manifest-path", manifest, "--package", rustPackageName(name, c)}
+	args := []string{cargo, "rustc", "--message-format=json", "--lib", "--manifest-path", manifest, "--package", rustPackageName(name, c)}
 	if c.NoDefaultFeatures {
 		args = append(args, "--no-default-features")
 	}
@@ -75,7 +75,7 @@ func writeRustCMakeConfig(projectRoot, buildDir, name string, c *RustCrateCfg, c
 	for _, arg := range args {
 		fmt.Fprintf(&script, " %s", cmakeLiteral(arg))
 	}
-	fmt.Fprint(&script, ` --target-dir "${out}/cargo-target" ${profile_arg}
+	fmt.Fprint(&script, ` --target-dir "${out}/cargo-target" ${profile_arg} -- --print native-static-libs
   WORKING_DIRECTORY "${cargo_dir}" OUTPUT_FILE "${out}/cargo.jsonl" RESULT_VARIABLE status)
 `)
 	script.WriteString(rustCollectCargoOutputs)
@@ -103,6 +103,7 @@ if(NOT TARGET %[1]s)
   set(_cmk_rust_root %[2]s)
   set(_cmk_rust_release "$<CONFIG:Release,RelWithDebInfo,MinSizeRel>")
   set(_cmk_rust_out "${_cmk_rust_root}/config-$<CONFIG>")
+  set(_cmk_rust_rsp "${_cmk_rust_out}/native-libs.rsp")
   if(MSVC)
     set(_cmk_rust_lib rust.lib)
   else()
@@ -110,8 +111,8 @@ if(NOT TARGET %[1]s)
   endif()
   add_custom_target(%[3]s
     COMMAND "${CMAKE_COMMAND}" "-Dout=${_cmk_rust_out}" "-Darchive=${_cmk_rust_lib}"
-      "-Drelease=${_cmk_rust_release}" "-Ddebug_info=$<CONFIG:RelWithDebInfo>" -P %[4]s
-    BYPRODUCTS "${_cmk_rust_out}/${_cmk_rust_lib}"
+      "-Dmsvc=${MSVC}" "-Drelease=${_cmk_rust_release}" "-Ddebug_info=$<CONFIG:RelWithDebInfo>" -P %[4]s
+    BYPRODUCTS "${_cmk_rust_out}/${_cmk_rust_lib}" "${_cmk_rust_rsp}"
 `, publicTarget, cmakeLiteral(filepath.ToSlash(filepath.Join(rustRootDir(buildDir), "crate-"+name))),
 		cargoTarget, cmakeLiteral(filepath.ToSlash(scriptPath)))
 	if c.CxxBridge {
@@ -128,14 +129,13 @@ if(NOT TARGET %[1]s)
       "${_cmk_rust_root}/config-${_cmk_rust_config}/${_cmk_rust_lib}")
     set_property(TARGET %[1]s PROPERTY "MAP_IMPORTED_CONFIG_${_cmk_rust_upper}" "${_cmk_rust_config}")
   endforeach()
+  if(MSVC)
+    target_link_options(%[1]s INTERFACE "LINKER:@${_cmk_rust_rsp}")
+  else()
+    target_link_libraries(%[1]s INTERFACE "-Xlinker \"@${_cmk_rust_rsp}\"")
+  endif()
+  set_property(TARGET %[1]s APPEND PROPERTY INTERFACE_LINK_DEPENDS "${_cmk_rust_rsp}")
 `, archiveTarget, cargoTarget)
-	if len(nativeLibs) != 0 {
-		fmt.Fprintf(&config, "  set_property(TARGET %s APPEND PROPERTY INTERFACE_LINK_LIBRARIES", archiveTarget)
-		for _, lib := range nativeLibs {
-			fmt.Fprintf(&config, " %s", cmakeLiteral(lib))
-		}
-		fmt.Fprintln(&config, ")")
-	}
 	if c.CxxBridge {
 		bridgeTarget := "_cmk_" + cmakeName + "_cxxbridge"
 		fmt.Fprintf(&config, `  set(%[1]s_CXXBRIDGE_INCLUDE_DIR "${_cmk_rust_out}/cargo-target/cxxbridge/include")

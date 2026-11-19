@@ -12,7 +12,7 @@ import (
 
 func TestIntegrationRustCMakeTargets(t *testing.T) {
 	requireTools(t)
-	for _, tool := range []string{"cargo", "rustc"} {
+	for _, tool := range []string{"cargo", "rustc", "cc", "ar"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			t.Skipf("%s not on PATH", tool)
 		}
@@ -25,6 +25,14 @@ func TestIntegrationRustCMakeTargets(t *testing.T) {
 	host := detectRustHostTriple(root, os.Environ())
 	if host == "" {
 		t.Fatal("could not determine the Rust host target")
+	}
+	run := func(command string, args ...string) string {
+		t.Helper()
+		out, err := exec.Command(command, args...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s %v: %v\n%s", command, args, err, out)
+		}
+		return string(out)
 	}
 	write := func(name, content string) {
 		t.Helper()
@@ -39,6 +47,8 @@ func TestIntegrationRustCMakeTargets(t *testing.T) {
 cmake:
   variables:
     CMAKE_CROSS_CONFIGS: all
+    # GNU ld's dependency file can emit unescaped spaces in native archive paths.
+    CMAKE_LINK_DEPENDS_USE_LINKER: false
   configurations:
     - name: Debug
     - name: Release
@@ -55,6 +65,12 @@ rust:
     lib-name: facade
 `)
 	write("crate/.cargo/config.toml", "[build]\ntarget = \""+host+"\"\n")
+	buildNative := func(value string) {
+		write("native libs/native.c", "int cmk_native_value(void) { return "+value+"; }\n")
+		run("cc", "-c", "native libs/native.c", "-o", "native libs/value.o")
+		run("ar", "rcs", "native libs/libcmk_rust_native.a", "native libs/value.o")
+	}
+	buildNative("1")
 	write("CMakeLists.txt", `cmake_minimum_required(VERSION 3.20)
 project(rust_targets LANGUAGES CXX)
 find_package(example REQUIRED)
@@ -83,11 +99,17 @@ edition = "2021"
 name = "facade"
 crate-type = ["staticlib"]
 `)
-	write("crate/src/lib.rs", "#[no_mangle] pub extern \"C\" fn rust_value() -> i32 { 1 }\n")
+	const rustSource = `extern "C" { fn cmk_native_value() -> i32; }
+#[no_mangle] pub extern "C" fn rust_value() -> i32 { unsafe { cmk_native_value() } }
+`
+	write("crate/src/lib.rs", rustSource)
 	write("crate/value.txt", "10")
 	write("crate/build.rs", `use std::{env, fs, path::PathBuf};
 
 fn main() {
+    println!("cargo:rustc-link-search=native=../native libs");
+    println!("cargo:rustc-link-lib=static:-bundle=cmk_rust_native");
+    println!("cargo:rerun-if-changed=../native libs/libcmk_rust_native.a");
     println!("cargo:rerun-if-changed=value.txt");
     println!("cargo:rerun-if-env-changed=CXXBRIDGE_OUT_DIR");
     let Some(out) = env::var_os("CXXBRIDGE_OUT_DIR") else { return; };
@@ -115,14 +137,6 @@ extern "C" int bridge_value() { return rust_value(); }
 		t.Fatal(err)
 	}
 
-	run := func(command string, args ...string) string {
-		t.Helper()
-		out, err := exec.Command(command, args...).CombinedOutput()
-		if err != nil {
-			t.Fatalf("%s %v: %v\n%s", command, args, err, out)
-		}
-		return string(out)
-	}
 	build := func(config, target string, extra ...string) string {
 		t.Helper()
 		return run("cmake", append([]string{"--build", tree.dir, "--config", config, "--target", target}, extra...)...)
@@ -151,16 +165,19 @@ extern "C" int bridge_value() { return rust_value(); }
 	if out := build("Debug", "app"); strings.Contains(out, "Building CXX") || strings.Contains(out, "Linking CXX") {
 		t.Fatalf("no-op build rebuilt C++ targets:\n%s", out)
 	}
-	write("crate/src/lib.rs", "#[no_mangle] pub extern \"C\" fn rust_value() -> i32 { 2 }\n")
+	write("crate/src/lib.rs", strings.Replace(rustSource, "cmk_native_value() }", "cmk_native_value() + 1 }", 1))
 	build("Debug", "app")
 	checkApp("Debug", "12")
 	write("crate/value.txt", "20")
 	build("Debug", "app")
 	checkApp("Debug", "22")
+	buildNative("5")
+	build("Debug", "app")
+	checkApp("Debug", "26")
 
 	run("cmake", "--build", tree.dir, "--config", "Debug", "--target", "app:Release", "app:RelWithDebInfo", "--parallel", "4")
-	checkApp("Release", "22")
-	checkApp("RelWithDebInfo", "22")
+	checkApp("Release", "26")
+	checkApp("RelWithDebInfo", "26")
 	for _, config := range []string{"Release", "RelWithDebInfo"} {
 		if _, err := os.Stat(filepath.Join(rustDir, "config-"+config, "cargo-target", host, "release")); err != nil {
 			t.Fatal(err)
@@ -168,5 +185,5 @@ extern "C" int bridge_value() { return rust_value(); }
 	}
 
 	build("Debug", "app", "--clean-first")
-	checkApp("Debug", "22")
+	checkApp("Debug", "26")
 }

@@ -212,8 +212,7 @@ In-tree Rust `staticlib` crates managed directly by `cmk`. Crate keys match `^[A
 | `env` | `map<string, string>` | Extra environment variables passed to Cargo and folded into the configure stamp. |
 
 The generated package requires CMake 3.20 or newer. During `cmk config`,
-cmk probes Rust's native runtime link requirements for the selected target and
-writes `<build-dir>/cmk-rust/cmake/<cmake-name>/<cmake-name>Config.cmake`.
+cmk writes `<build-dir>/cmk-rust/cmake/<cmake-name>/<cmake-name>Config.cmake`.
 It passes that directory to CMake as `<cmake-name>_DIR` and records it in
 `CMakeUserPresets.json` when preset generation is enabled.
 
@@ -223,7 +222,10 @@ C/C++ toolchain environment, starting in the directory containing the configured
 manifest so Cargo can read the applicable `.cargo/config.toml`. Cargo handles
 incremental rebuilds and puts its outputs in
 `<build-dir>/cmk-rust/crate-<name>/config-<configuration>/cargo-target`.
-The generated build rule stages the staticlib reported by Cargo.
+The generated build rule stages the staticlib reported by Cargo and passes the
+crate's native linker arguments and its build scripts' native library search
+paths to the CMake link step. Configure runtime search paths in CMake for
+shared libraries outside the system loader's search paths.
 
 `Release`, `RelWithDebInfo` and `MinSizeRel` use the release profile, with
 `RelWithDebInfo` enabling Rust debug information. Other configurations use the

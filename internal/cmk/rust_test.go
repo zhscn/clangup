@@ -3,22 +3,9 @@ package cmk
 import (
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 )
-
-func TestParseNativeStaticLibs(t *testing.T) {
-	stderr := `
-note: Link against the following native artifacts when linking against this static library.
-note: native-static-libs: -lgcc_s -lutil -lrt -lpthread -lm -ldl -lc -lstdc++ -lc++ -framework Security -lm
-`
-	got := parseNativeStaticLibs(stderr)
-	want := []string{"gcc_s", "util", "rt", "pthread", "m", "dl", "c", "-framework Security"}
-	if !slices.Equal(got, want) {
-		t.Fatalf("parseNativeStaticLibs() = %v, want %v", got, want)
-	}
-}
 
 func TestLoadConfigRustAndWriteCMakeConfig(t *testing.T) {
 	root := t.TempDir()
@@ -55,7 +42,7 @@ rust:
 	if err := os.WriteFile(filepath.Join(root, crate.Manifest), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeRustCMakeConfig(root, buildDir, "rust-cli", crate, "/tools/cargo", nil, []string{"pthread", "dl", "m"}); err != nil {
+	if err := writeRustCMakeConfig(root, buildDir, "rust-cli", crate, "/tools/cargo", nil); err != nil {
 		t.Fatalf("writeRustCMakeConfig failed: %v", err)
 	}
 
@@ -71,7 +58,7 @@ rust:
 		"add_library(rust_cli::rust_cli ALIAS _cmk_rust_cli_cxxbridge)",
 		"add_custom_target(_cmk_rust_cli_cargo",
 		"add_dependencies(_cmk_rust_cli_archive _cmk_rust_cli_cargo)",
-		"INTERFACE_LINK_LIBRARIES [[pthread]] [[dl]] [[m]]",
+		"INTERFACE_LINK_DEPENDS",
 		"target_include_directories(_cmk_rust_cli_cxxbridge PUBLIC",
 		"set(rust_cli_FOUND TRUE)",
 	} {

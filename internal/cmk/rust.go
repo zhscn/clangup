@@ -1,10 +1,8 @@
 package cmk
 
 import (
-	"bytes"
 	"fmt"
 	"maps"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -93,7 +91,7 @@ func rustStampEntries(p *Project) []string {
 	if len(p.Cfg.Rust) == 0 {
 		return nil
 	}
-	out := []string{"rust:cmake-build-rules=2"}
+	out := []string{"rust:cmake-build-rules=3"}
 	for _, name := range sortedRustNames(p.Cfg.Rust) {
 		c := p.Cfg.Rust[name]
 		out = append(out,
@@ -131,74 +129,8 @@ func detectRustHostTriple(root string, env []string) string {
 	return ""
 }
 
-// probeRustNativeLibs asks rustc what native system libraries a staticlib
-// requires on the target platform. C++ stdlib entries (-lstdc++, -lc++) are
-// intentionally omitted so CMake's own C++ compiler/stdlib stays authoritative.
-func probeRustNativeLibs(root string, env []string, target string) ([]string, error) {
-	rustcBin, err := exec.LookPath("rustc")
-	if err != nil {
-		return nil, fmt.Errorf("rustc not found on PATH (required by cmk.yaml rust section)")
-	}
-	tmpDir, err := os.MkdirTemp("", "cmk-rust-probe-*")
-	if err != nil {
-		return nil, err
-	}
-	defer os.RemoveAll(tmpDir)
-
-	args := []string{
-		"--crate-type", "staticlib",
-		"--print", "native-static-libs",
-		"-o", filepath.Join(tmpDir, "libprobe.a"),
-		"-",
-	}
-	if target != "" {
-		args = append(args, "--target", target)
-	}
-	cmd := exec.Command(rustcBin, args...)
-	cmd.Dir = root
-	cmd.Env = env
-	cmd.Stdin = bytes.NewReader(nil)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("rustc native-static-libs probe failed: %w\n%s", err, strings.TrimSpace(stderr.String()))
-	}
-	return parseNativeStaticLibs(stderr.String()), nil
-}
-
-func parseNativeStaticLibs(stderr string) []string {
-	var libs []string
-	for line := range strings.Lines(stderr) {
-		line = strings.TrimSpace(line)
-		rest, ok := strings.CutPrefix(line, "note: native-static-libs:")
-		if !ok {
-			continue
-		}
-		fields := strings.Fields(rest)
-		for i := 0; i < len(fields); i++ {
-			tok := fields[i]
-			if tok == "-framework" && i+1 < len(fields) {
-				libs = append(libs, "-framework "+fields[i+1])
-				i++
-				continue
-			}
-			if lib, ok := strings.CutPrefix(tok, "-l"); ok && lib != "" {
-				if lib == "stdc++" || lib == "c++" {
-					continue
-				}
-				libs = append(libs, lib)
-				continue
-			}
-			if strings.HasSuffix(tok, ".lib") || strings.HasSuffix(tok, ".a") {
-				libs = append(libs, tok)
-			}
-		}
-	}
-	return uniqueStrings(libs)
-}
-
-// prepareRustPackages probes the Rust runtime link requirements and writes the
-// packages consumed by CMake before any project crate is built.
+// prepareRustPackages writes the build rules CMake uses to obtain Cargo's
+// archive and native linker arguments.
 func prepareRustPackages(p *Project, tc *Toolchain, buildDir string) error {
 	if len(p.Cfg.Rust) == 0 {
 		return nil
@@ -213,17 +145,8 @@ func prepareRustPackages(p *Project, tc *Toolchain, buildDir string) error {
 	}
 	baseEnv := p.commandEnv(tc.envMap())
 	host := detectRustHostTriple(p.Root, baseEnv)
-	probed := map[string][]string{}
 	for _, name := range sortedRustNames(p.Cfg.Rust) {
 		c := p.Cfg.Rust[name]
-		libs, ok := probed[c.Target]
-		if !ok {
-			libs, err = probeRustNativeLibs(p.Root, baseEnv, c.Target)
-			if err != nil {
-				return err
-			}
-			probed[c.Target] = libs
-		}
 		env := maps.Clone(c.Env)
 		if env == nil {
 			env = make(map[string]string)
@@ -241,7 +164,7 @@ func prepareRustPackages(p *Project, tc *Toolchain, buildDir string) error {
 				env["CXX_"+key] = tc.CXX
 			}
 		}
-		if err := writeRustCMakeConfig(p.Root, buildDir, name, c, cargo, p.commandEnvOverrides(tc.envMap(), env), libs); err != nil {
+		if err := writeRustCMakeConfig(p.Root, buildDir, name, c, cargo, p.commandEnvOverrides(tc.envMap(), env)); err != nil {
 			return err
 		}
 	}
