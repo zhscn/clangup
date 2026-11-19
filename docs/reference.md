@@ -207,6 +207,7 @@ In-tree Rust `staticlib` crates managed directly by `cmk`. Crate keys match `^[A
 | `no-default-features` | `bool` | Pass `--no-default-features` to `cargo build` (default `false`). |
 | `target` | `string` | Explicit Rust target triple passed to `--target`. |
 | `cxxbridge` | `bool` | Set `CXXBRIDGE_OUT_DIR=<build-dir>/cmk-rust/<name>/cxxbridge` when invoking Cargo and export generated headers/sources via `<cmake-name>Config.cmake` (default `false`). |
+| `lto` | `string` | LTO mode for release-profile builds (`Release`, `RelWithDebInfo`, `MinSizeRel`): `off` (default), `thin`, `fat`, or `linker-plugin` (cross-language ThinLTO via `-Clinker-plugin-lto` + `CFLAGS`/`CXXFLAGS` `-flto=thin` for `lld`). Ignored in `Debug`/custom configs. |
 | `env` | `map<string, string>` | Extra environment variables passed to `cargo build` and folded into the configure stamp. |
 
 **Build & CMake export contract:**

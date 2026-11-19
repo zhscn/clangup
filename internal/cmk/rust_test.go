@@ -111,4 +111,49 @@ rust:
 	if _, _, err := loadConfig(root); err == nil || !strings.Contains(err.Error(), "manifest is required") {
 		t.Fatalf("expected manifest error, got: %v", err)
 	}
+
+	badLTO := `version: 1
+rust:
+  bad:
+    manifest: Cargo.toml
+    lto: invalid-mode
+`
+	if err := os.WriteFile(filepath.Join(root, configFileName), []byte(badLTO), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := loadConfig(root); err == nil || !strings.Contains(err.Error(), "unsupported mode") {
+		t.Fatalf("expected lto mode error, got: %v", err)
+	}
+}
+
+func TestApplyRustLTOEnv(t *testing.T) {
+	// Debug builds must never get LTO flags.
+	debugEnv := map[string]string{}
+	applyRustLTOEnv(debugEnv, nil, "linker-plugin", false)
+	if len(debugEnv) != 0 {
+		t.Fatalf("expected no LTO env in debug, got %v", debugEnv)
+	}
+
+	// thin LTO on Release.
+	thinEnv := map[string]string{}
+	applyRustLTOEnv(thinEnv, nil, "thin", true)
+	if thinEnv["CARGO_PROFILE_RELEASE_LTO"] != "thin" {
+		t.Fatalf("expected thin LTO, got %v", thinEnv)
+	}
+
+	// linker-plugin preserves existing RUSTFLAGS/CXXFLAGS and disables rustc internal LTO.
+	lpEnv := map[string]string{"RUSTFLAGS": "-Ctarget-cpu=native"}
+	applyRustLTOEnv(lpEnv, []string{"CXXFLAGS=-O3"}, "linker-plugin", true)
+	if lpEnv["CARGO_PROFILE_RELEASE_LTO"] != "off" {
+		t.Fatalf("expected CARGO_PROFILE_RELEASE_LTO=off, got %v", lpEnv)
+	}
+	if lpEnv["RUSTFLAGS"] != "-Ctarget-cpu=native -Clinker-plugin-lto" {
+		t.Fatalf("unexpected RUSTFLAGS: %q", lpEnv["RUSTFLAGS"])
+	}
+	if lpEnv["CXXFLAGS"] != "-O3 -flto=thin" {
+		t.Fatalf("unexpected CXXFLAGS: %q", lpEnv["CXXFLAGS"])
+	}
+	if lpEnv["CFLAGS"] != "-flto=thin" {
+		t.Fatalf("unexpected CFLAGS: %q", lpEnv["CFLAGS"])
+	}
 }

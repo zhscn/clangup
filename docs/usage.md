@@ -330,6 +330,7 @@ rust:
   rust_cli:
     manifest: rust_cli/Cargo.toml
     cxxbridge: true
+    lto: linker-plugin   # optional: off | thin | fat | linker-plugin (Release profiles only)
 ```
 
 On `cmk config`, `cmk` builds the crate with the pinned C/C++ toolchain environment, probes required Rust native static libraries, and generates `<build-dir>/cmk-rust/cmake/rust_cli/rust_cliConfig.cmake` (injected via `-Drust_cli_DIR=...`). On every `cmk build`, `cmk run`, or `cmk test`, `cmk` runs an incremental `cargo build --lib` for the selected configuration (`Debug` vs. `Release`) before invoking CMake/Ninja.

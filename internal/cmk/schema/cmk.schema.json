@@ -394,6 +394,12 @@
           "default": false,
           "description": "Export CXXBRIDGE_OUT_DIR to build.rs and expose generated include/ and bridge.cc via <cmake-name>Config.cmake."
         },
+        "lto": {
+          "type": "string",
+          "enum": ["off", "thin", "fat", "linker-plugin"],
+          "default": "off",
+          "description": "LTO mode applied to release-profile Cargo builds (off, thin, fat, or linker-plugin for cross-language ThinLTO with Clang/lld)."
+        },
         "env": {
           "type": "object",
           "additionalProperties": { "type": "string" },

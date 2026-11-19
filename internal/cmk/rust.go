@@ -25,6 +25,7 @@ type RustCrateCfg struct {
 	NoDefaultFeatures bool              `yaml:"no-default-features,omitempty"`
 	Target            string            `yaml:"target,omitempty"`
 	CxxBridge         bool              `yaml:"cxxbridge,omitempty"`
+	LTO               string            `yaml:"lto,omitempty"`
 	Env               map[string]string `yaml:"env,omitempty"`
 }
 
@@ -41,6 +42,11 @@ func validateRust(cfg *Config) error {
 		}
 		if c.CMakeName != "" && !cmakeCacheNameRe.MatchString(c.CMakeName) {
 			return fmt.Errorf("rust.%s.cmake-name: invalid CMake package name %q", name, c.CMakeName)
+		}
+		switch c.LTO {
+		case "", "off", "thin", "fat", "linker-plugin":
+		default:
+			return fmt.Errorf("rust.%s.lto: unsupported mode %q (expected off, thin, fat, or linker-plugin)", name, c.LTO)
 		}
 	}
 	return nil
@@ -135,6 +141,7 @@ func rustStampEntries(p *Project) []string {
 			fmt.Sprintf("rust:%s:cmake=%s", name, rustCMakeName(name, c)),
 			fmt.Sprintf("rust:%s:target=%s", name, c.Target),
 			fmt.Sprintf("rust:%s:cxxbridge=%v", name, c.CxxBridge),
+			fmt.Sprintf("rust:%s:lto=%s", name, c.LTO),
 			fmt.Sprintf("rust:%s:no-default-features=%v", name, c.NoDefaultFeatures),
 			fmt.Sprintf("rust:%s:features=%s", name, strings.Join(c.Features, ",")),
 		)
@@ -293,6 +300,7 @@ func buildRustCrate(p *Project, tc *Toolchain, buildDir, name string, c *RustCra
 	if strings.EqualFold(strings.TrimSpace(configName), "RelWithDebInfo") {
 		extraEnv["CARGO_PROFILE_RELEASE_DEBUG"] = "true"
 	}
+	applyRustLTOEnv(extraEnv, baseEnv, c.LTO, release)
 
 	env := p.commandEnv(tc.envMap(), extraEnv)
 	fmt.Fprintf(os.Stderr, "+ %s %s\n", shellQuote([]string{cargoBin}), shellQuote(args))
@@ -300,6 +308,58 @@ func buildRustCrate(p *Project, tc *Toolchain, buildDir, name string, c *RustCra
 		return fmt.Errorf("rust.%s cargo build failed: %w", name, err)
 	}
 	return nil
+}
+
+func lookupEnvSlice(env []string, key string) string {
+	prefix := key + "="
+	val := ""
+	for _, entry := range env {
+		if rest, ok := strings.CutPrefix(entry, prefix); ok {
+			val = rest
+		}
+	}
+	return val
+}
+
+func appendFlag(existing, flag string) string {
+	existing = strings.TrimSpace(existing)
+	if existing == "" {
+		return flag
+	}
+	if slices.Contains(strings.Fields(existing), flag) {
+		return existing
+	}
+	return existing + " " + flag
+}
+
+// applyRustLTOEnv injects Cargo/rustc LTO settings for release-profile builds.
+// Non-release builds (Debug, Asan, etc.) stay untouched for fast incremental builds.
+func applyRustLTOEnv(extraEnv map[string]string, baseEnv []string, lto string, release bool) {
+	if !release {
+		return
+	}
+	switch lto {
+	case "", "off":
+		return
+	case "thin", "fat":
+		extraEnv["CARGO_PROFILE_RELEASE_LTO"] = lto
+	case "linker-plugin":
+		// Defer LTO to the final linker (lld) so Rust and C++ LLVM bitcode are optimized together.
+		extraEnv["CARGO_PROFILE_RELEASE_LTO"] = "off"
+		curRustflags := extraEnv["RUSTFLAGS"]
+		if curRustflags == "" {
+			curRustflags = lookupEnvSlice(baseEnv, "RUSTFLAGS")
+		}
+		extraEnv["RUSTFLAGS"] = appendFlag(curRustflags, "-Clinker-plugin-lto")
+
+		for _, key := range []string{"CFLAGS", "CXXFLAGS"} {
+			cur := extraEnv[key]
+			if cur == "" {
+				cur = lookupEnvSlice(baseEnv, key)
+			}
+			extraEnv[key] = appendFlag(cur, "-flto=thin")
+		}
+	}
 }
 
 func buildAllRustCrates(p *Project, tc *Toolchain, buildDir, configName string, verbose bool) error {
