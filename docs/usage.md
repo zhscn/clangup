@@ -333,7 +333,7 @@ rust:
     lto: linker-plugin   # optional: off | thin | fat | linker-plugin (Release profiles only)
 ```
 
-Run `cmk config` to generate the CMake package and record the C/C++ toolchain environment for Cargo. Rust packages require CMake 3.20 or newer. When a CMake target uses the package, its build runs Cargo for the selected configuration, then uses the reported staticlib and native libraries for the CMake link. Cargo checks its own inputs, including changes tracked by `build.rs`. Both `cmk build` and `cmake --build <build-dir> --config <configuration>` use these rules. Cargo honors `.cargo/config.toml` from the manifest directory and its parents. If `rust.<name>.target` is set, it overrides the Cargo target. Run `cmk config` again after changing the Rust declaration in `cmk.yaml` or its configured C/C++ toolchain.
+`cmk config` generates the CMake package (requires CMake 3.20+) and records the C/C++ toolchain environment for Cargo. When any CMake target links the package, both `cmk build` and plain `cmake --build <build-dir> --config <configuration>` invoke Cargo on demand for the selected configuration and forward the reported staticlib and native link libraries. Cargo honors `.cargo/config.toml` from the manifest directory and its parents unless `rust.<name>.target` overrides the target. `cmk build` automatically reconfigures when `rust:` settings or the toolchain change; re-run `cmk config` manually only when driving `cmake --build` directly.
 
 In `CMakeLists.txt`, use `find_package` and link the exported target.
 

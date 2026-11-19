@@ -211,33 +211,28 @@ In-tree Rust `staticlib` crates managed directly by `cmk`. Crate keys match `^[A
 | `lto` | `string` | LTO mode for release-profile builds (`Release`, `RelWithDebInfo`, `MinSizeRel`): `off` (default), `thin`, `fat`, or `linker-plugin` (cross-language ThinLTO via `-Clinker-plugin-lto` + `CFLAGS`/`CXXFLAGS` `-flto=thin` for `lld`). Ignored in `Debug`/custom configs. |
 | `env` | `map<string, string>` | Extra environment variables passed to Cargo and folded into the configure stamp. |
 
-The generated package requires CMake 3.20 or newer. During `cmk config`,
-cmk writes `<build-dir>/cmk-rust/cmake/<cmake-name>/<cmake-name>Config.cmake`.
-It passes that directory to CMake as `<cmake-name>_DIR` and records it in
-`CMakeUserPresets.json` when preset generation is enabled.
+The generated package requires CMake 3.20+. During `cmk config`, `cmk` writes
+`<build-dir>/cmk-rust/cmake/<cmake-name>/<cmake-name>Config.cmake`, injects
+`-D<cmake-name>_DIR=...`, and mirrors it into `CMakeUserPresets.json`.
 
-`find_package(<cmake-name> REQUIRED)` makes the `<cmake-name>::<cmake-name>`
-target available. Building a target that links it runs Cargo in the configured
-C/C++ toolchain environment, starting in the directory containing the configured
-manifest so Cargo can read the applicable `.cargo/config.toml`. Cargo handles
-incremental rebuilds and puts its outputs in
-`<build-dir>/cmk-rust/crate-<name>/config-<configuration>/cargo-target`.
-The generated build rule stages the staticlib reported by Cargo and passes the
-crate's native linker arguments and its build scripts' native library search
-paths to the CMake link step. Configure runtime search paths in CMake for
-shared libraries outside the system loader's search paths.
+`find_package(<cmake-name> REQUIRED)` exports `<cmake-name>::<cmake-name>`.
+Building a consumer invokes `cargo rustc` from the manifest's directory (so
+`.cargo/config.toml` applies) inside `cmk`'s C/C++ toolchain environment, with
+outputs isolated under `<build-dir>/cmk-rust/crate-<name>/config-<configuration>/cargo-target`.
+The generated rule stages Cargo's reported staticlib and forwards its native
+linker arguments and build-script search paths (stripping `-lstdc++`/`-lc++` so
+CMake's C++ standard library remains authoritative). For non-system shared
+libraries, configure runtime search paths in CMake.
 
-`Release`, `RelWithDebInfo` and `MinSizeRel` use the release profile, with
-`RelWithDebInfo` enabling Rust debug information. Other configurations use the
-dev profile.
+`Release`, `RelWithDebInfo` (with Rust debug info), and `MinSizeRel` use the
+release profile; other configurations use the dev profile.
 
-With `cxxbridge: true`, Cargo generates the bridge before CMake compiles
-`bridge.cc` with the project's C++ toolchain. The public target links the Rust
-archive and exposes the generated headers. The package also sets
-`<cmake-name>_CXXBRIDGE_INCLUDE_DIR` and `<cmake-name>_CXXBRIDGE_SOURCE` as
-paths with configuration generator expressions for use in CMake target
-properties. A bridge header change invalidates the C++ compile steps in the
-same build.
+With `cxxbridge: true`, Cargo generates `bridge.cc` and `include/` before CMake
+compiles `bridge.cc` with the project's C++ toolchain. The exported target links
+the Rust archive, exposes the generated headers, and tracks header changes so
+affected C++ targets recompile automatically. `<cmake-name>_CXXBRIDGE_INCLUDE_DIR`
+and `<cmake-name>_CXXBRIDGE_SOURCE` are also set (with `$<CONFIG>` generator
+expressions) for use in target properties.
 
 #### `install`, `env`, `target-env`, `format`, `lint`
 
@@ -249,7 +244,7 @@ same build.
 
 #### Variable expansion (`${NAME}`)
 
-Strings in `variables`, `args`, `build-dir`, `configurations` flags, `install.prefix`, `env`, `target-env`, `dependencies.<name>.env`, and `format.command`/`lint.command` expand **`${NAME}`** up to 10 passes:
+Strings in `variables`, `args`, `build-dir`, `configurations` flags, `install.prefix`, `env`, `target-env`, `dependencies.<name>.env`, `rust.<name>.env`, and `format.command`/`lint.command` expand **`${NAME}`** up to 10 passes:
 1. Built-in `${PROJECT_ROOT}` (absolute path to the project root).
 2. Process environment variables (`os.LookupEnv`).
 3. Unknown `${NAME}` tokens remain literal.

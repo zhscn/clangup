@@ -383,7 +383,7 @@
         "no-default-features": {
           "type": "boolean",
           "default": false,
-          "description": "Pass --no-default-features to cargo build."
+          "description": "Pass --no-default-features to Cargo."
         },
         "target": {
           "type": "string",
@@ -408,7 +408,7 @@
         "env": {
           "type": "object",
           "additionalProperties": { "type": "string" },
-          "description": "Extra environment variables passed to cargo build."
+          "description": "Extra environment variables passed to Cargo."
         }
       }
     },
