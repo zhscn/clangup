@@ -20,27 +20,6 @@ note: native-static-libs: -lgcc_s -lutil -lrt -lpthread -lm -ldl -lc -lstdc++ -l
 	}
 }
 
-func TestRustProfileForConfig(t *testing.T) {
-	cases := []struct {
-		cfg     string
-		release bool
-		dir     string
-	}{
-		{"Debug", false, "debug"},
-		{"", false, "debug"},
-		{"Asan", false, "debug"},
-		{"Release", true, "release"},
-		{"RelWithDebInfo", true, "release"},
-		{"MinSizeRel", true, "release"},
-	}
-	for _, tc := range cases {
-		rel, dir := rustProfileForConfig(tc.cfg)
-		if rel != tc.release || dir != tc.dir {
-			t.Errorf("rustProfileForConfig(%q) = (%v, %q), want (%v, %q)", tc.cfg, rel, dir, tc.release, tc.dir)
-		}
-	}
-}
-
 func TestLoadConfigRustAndWriteCMakeConfig(t *testing.T) {
 	root := t.TempDir()
 	yaml := `version: 1
@@ -73,7 +52,13 @@ rust:
 	}
 
 	buildDir := filepath.Join(root, "build")
-	if err := writeRustCMakeConfig(root, buildDir, "rust-cli", crate, "Debug", []string{"pthread", "dl", "m"}); err != nil {
+	if err := os.Mkdir(filepath.Join(root, "rust_cli"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, crate.Manifest), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRustCMakeConfig(root, buildDir, "rust-cli", crate, "/tools/cargo", nil, []string{"pthread", "dl", "m"}); err != nil {
 		t.Fatalf("writeRustCMakeConfig failed: %v", err)
 	}
 
@@ -87,9 +72,9 @@ rust:
 		"add_library(_cmk_rust_cli_archive STATIC IMPORTED GLOBAL)",
 		"add_library(_cmk_rust_cli_cxxbridge STATIC",
 		"add_library(rust_cli::rust_cli ALIAS _cmk_rust_cli_cxxbridge)",
-		"IMPORTED_LOCATION_DEBUG",
-		"IMPORTED_LOCATION_RELEASE",
-		`INTERFACE_LINK_LIBRARIES "pthread" "dl" "m"`,
+		"add_custom_target(_cmk_rust_cli_cargo",
+		"add_dependencies(_cmk_rust_cli_archive _cmk_rust_cli_cargo)",
+		"INTERFACE_LINK_LIBRARIES [[pthread]] [[dl]] [[m]]",
 		"target_include_directories(_cmk_rust_cli_cxxbridge PUBLIC",
 		"set(rust_cli_FOUND TRUE)",
 	} {
@@ -124,37 +109,5 @@ rust:
 	}
 	if _, _, err := loadConfig(root); err == nil || !strings.Contains(err.Error(), "unsupported mode") {
 		t.Fatalf("expected lto mode error, got: %v", err)
-	}
-}
-
-func TestApplyRustLTOEnv(t *testing.T) {
-	// Debug builds must never get LTO flags.
-	debugEnv := map[string]string{}
-	applyRustLTOEnv(debugEnv, nil, "linker-plugin", false)
-	if len(debugEnv) != 0 {
-		t.Fatalf("expected no LTO env in debug, got %v", debugEnv)
-	}
-
-	// thin LTO on Release.
-	thinEnv := map[string]string{}
-	applyRustLTOEnv(thinEnv, nil, "thin", true)
-	if thinEnv["CARGO_PROFILE_RELEASE_LTO"] != "thin" {
-		t.Fatalf("expected thin LTO, got %v", thinEnv)
-	}
-
-	// linker-plugin preserves existing RUSTFLAGS/CXXFLAGS and disables rustc internal LTO.
-	lpEnv := map[string]string{"RUSTFLAGS": "-Ctarget-cpu=native"}
-	applyRustLTOEnv(lpEnv, []string{"CXXFLAGS=-O3"}, "linker-plugin", true)
-	if lpEnv["CARGO_PROFILE_RELEASE_LTO"] != "off" {
-		t.Fatalf("expected CARGO_PROFILE_RELEASE_LTO=off, got %v", lpEnv)
-	}
-	if lpEnv["RUSTFLAGS"] != "-Ctarget-cpu=native -Clinker-plugin-lto" {
-		t.Fatalf("unexpected RUSTFLAGS: %q", lpEnv["RUSTFLAGS"])
-	}
-	if lpEnv["CXXFLAGS"] != "-O3 -flto=thin" {
-		t.Fatalf("unexpected CXXFLAGS: %q", lpEnv["CXXFLAGS"])
-	}
-	if lpEnv["CFLAGS"] != "-flto=thin" {
-		t.Fatalf("unexpected CFLAGS: %q", lpEnv["CFLAGS"])
 	}
 }

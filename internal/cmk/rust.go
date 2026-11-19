@@ -7,15 +7,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 )
 
 // RustCrateCfg describes an in-tree Rust staticlib crate managed by cmk.
-// cmk drives Cargo with the pinned C/C++ toolchain environment and exports a
-// standard <cmake-name>Config.cmake package so CMake consumes it via
-// find_package(<cmake-name> REQUIRED) without Corrosion or CMake-side Rust logic.
+// cmk exports a CMake package that drives Cargo with the resolved C/C++ toolchain
+// environment when a target needs the crate.
 type RustCrateCfg struct {
 	Manifest          string            `yaml:"manifest"`
 	Package           string            `yaml:"package,omitempty"`
@@ -82,38 +80,8 @@ func rustRootDir(buildDir string) string {
 	return filepath.Join(buildDir, "cmk-rust")
 }
 
-func rustCargoTargetDir(buildDir string) string {
-	return filepath.Join(rustRootDir(buildDir), "cargo-target")
-}
-
 func rustPackageConfigDir(buildDir, cmakeName string) string {
 	return filepath.Join(rustRootDir(buildDir), "cmake", cmakeName)
-}
-
-func rustCxxBridgeDir(buildDir, name string) string {
-	return filepath.Join(rustRootDir(buildDir), name, "cxxbridge")
-}
-
-func rustProfileForConfig(configName string) (release bool, profileDir string) {
-	switch strings.ToLower(strings.TrimSpace(configName)) {
-	case "release", "relwithdebinfo", "minsizerel":
-		return true, "release"
-	default:
-		return false, "debug"
-	}
-}
-
-func rustArtifactPath(buildDir, name string, c *RustCrateCfg, profileDir string) string {
-	prefix, suffix := "lib", ".a"
-	if runtime.GOOS == "windows" {
-		prefix, suffix = "", ".lib"
-	}
-	parts := []string{rustCargoTargetDir(buildDir)}
-	if c.Target != "" {
-		parts = append(parts, c.Target)
-	}
-	parts = append(parts, profileDir, prefix+rustLibName(name, c)+suffix)
-	return filepath.Join(parts...)
 }
 
 func allRustExports(p *Project, buildDir string) []string {
@@ -132,7 +100,7 @@ func rustStampEntries(p *Project) []string {
 	if len(p.Cfg.Rust) == 0 {
 		return nil
 	}
-	var out []string
+	out := []string{"rust:cmake-build-rules=1"}
 	for _, name := range sortedRustNames(p.Cfg.Rust) {
 		c := p.Cfg.Rust[name]
 		out = append(out,
@@ -154,8 +122,9 @@ func rustStampEntries(p *Project) []string {
 	return out
 }
 
-func detectRustHostTriple(env []string) string {
+func detectRustHostTriple(root string, env []string) string {
 	cmd := exec.Command("rustc", "-vV")
+	cmd.Dir = root
 	cmd.Env = env
 	out, err := cmd.Output()
 	if err != nil {
@@ -172,7 +141,7 @@ func detectRustHostTriple(env []string) string {
 // probeRustNativeLibs asks rustc what native system libraries a staticlib
 // requires on the target platform. C++ stdlib entries (-lstdc++, -lc++) are
 // intentionally omitted so CMake's own C++ compiler/stdlib stays authoritative.
-func probeRustNativeLibs(env []string, target string) ([]string, error) {
+func probeRustNativeLibs(root string, env []string, target string) ([]string, error) {
 	rustcBin, err := exec.LookPath("rustc")
 	if err != nil {
 		return nil, fmt.Errorf("rustc not found on PATH (required by cmk.yaml rust section)")
@@ -193,6 +162,7 @@ func probeRustNativeLibs(env []string, target string) ([]string, error) {
 		args = append(args, "--target", target)
 	}
 	cmd := exec.Command(rustcBin, args...)
+	cmd.Dir = root
 	cmd.Env = env
 	cmd.Stdin = bytes.NewReader(nil)
 	var stderr bytes.Buffer
@@ -234,283 +204,53 @@ func parseNativeStaticLibs(stderr string) []string {
 	return uniqueStrings(libs)
 }
 
-func buildRustCrate(p *Project, tc *Toolchain, buildDir, name string, c *RustCrateCfg, configName string, verbose bool) error {
-	cargoBin, err := exec.LookPath("cargo")
+// prepareRustPackages probes the Rust runtime link requirements and writes the
+// packages consumed by CMake before any project crate is built.
+func prepareRustPackages(p *Project, tc *Toolchain, buildDir string) error {
+	if len(p.Cfg.Rust) == 0 {
+		return nil
+	}
+	cargo, err := exec.LookPath("cargo")
 	if err != nil {
-		return fmt.Errorf("cargo not found on PATH (required by rust.%s)", name)
+		return fmt.Errorf("cargo not found on PATH (required by cmk.yaml rust section): %w", err)
 	}
-
-	manifest := c.Manifest
-	if !filepath.IsAbs(manifest) {
-		manifest = filepath.Join(p.Root, manifest)
-	}
-	manifest = filepath.Clean(manifest)
-	if !fileExists(manifest) {
-		return fmt.Errorf("rust.%s: manifest not found: %s", name, manifest)
-	}
-
-	targetDir := rustCargoTargetDir(buildDir)
-	release, _ := rustProfileForConfig(configName)
-
-	args := []string{
-		"build",
-		"--lib",
-		"--manifest-path", manifest,
-		"--target-dir", targetDir,
-	}
-	if pkg := rustPackageName(name, c); pkg != "" {
-		args = append(args, "--package", pkg)
-	}
-	if release {
-		args = append(args, "--release")
-	}
-	if c.NoDefaultFeatures {
-		args = append(args, "--no-default-features")
-	}
-	if len(c.Features) > 0 {
-		args = append(args, "--features", strings.Join(c.Features, ","))
-	}
-	if c.Target != "" {
-		args = append(args, "--target", c.Target)
-	}
-	if verbose {
-		args = append(args, "--verbose")
-	}
-
-	baseEnv := p.commandEnv(tc.envMap())
-	triple := c.Target
-	if triple == "" {
-		triple = detectRustHostTriple(baseEnv)
-	}
-
-	extraEnv := map[string]string{}
-	for k, v := range c.Env {
-		extraEnv[k] = v
-	}
-	if triple != "" {
-		ccKey := strings.ReplaceAll(triple, "-", "_")
-		if tc.CC != "" {
-			extraEnv["CC_"+ccKey] = tc.CC
-		}
-		if tc.CXX != "" {
-			extraEnv["CXX_"+ccKey] = tc.CXX
-		}
-	}
-	if c.CxxBridge {
-		extraEnv["CXXBRIDGE_OUT_DIR"] = rustCxxBridgeDir(buildDir, name)
-	}
-	if strings.EqualFold(strings.TrimSpace(configName), "RelWithDebInfo") {
-		extraEnv["CARGO_PROFILE_RELEASE_DEBUG"] = "true"
-	}
-	applyRustLTOEnv(extraEnv, baseEnv, c.LTO, release)
-
-	env := p.commandEnv(tc.envMap(), extraEnv)
-	fmt.Fprintf(os.Stderr, "+ %s %s\n", shellQuote([]string{cargoBin}), shellQuote(args))
-	if err := runStreaming(env, cargoBin, args...); err != nil {
-		return fmt.Errorf("rust.%s cargo build failed: %w", name, err)
-	}
-	return nil
-}
-
-func lookupEnvSlice(env []string, key string) string {
-	prefix := key + "="
-	val := ""
-	for _, entry := range env {
-		if rest, ok := strings.CutPrefix(entry, prefix); ok {
-			val = rest
-		}
-	}
-	return val
-}
-
-func appendFlag(existing, flag string) string {
-	existing = strings.TrimSpace(existing)
-	if existing == "" {
-		return flag
-	}
-	if slices.Contains(strings.Fields(existing), flag) {
-		return existing
-	}
-	return existing + " " + flag
-}
-
-// applyRustLTOEnv injects Cargo/rustc LTO settings for release-profile builds.
-// Non-release builds (Debug, Asan, etc.) stay untouched for fast incremental builds.
-func applyRustLTOEnv(extraEnv map[string]string, baseEnv []string, lto string, release bool) {
-	if !release {
-		return
-	}
-	switch lto {
-	case "", "off":
-		return
-	case "thin", "fat":
-		extraEnv["CARGO_PROFILE_RELEASE_LTO"] = lto
-	case "linker-plugin":
-		// Defer LTO to the final linker (lld) so Rust and C++ LLVM bitcode are optimized together.
-		extraEnv["CARGO_PROFILE_RELEASE_LTO"] = "off"
-		curRustflags := extraEnv["RUSTFLAGS"]
-		if curRustflags == "" {
-			curRustflags = lookupEnvSlice(baseEnv, "RUSTFLAGS")
-		}
-		extraEnv["RUSTFLAGS"] = appendFlag(curRustflags, "-Clinker-plugin-lto")
-
-		for _, key := range []string{"CFLAGS", "CXXFLAGS"} {
-			cur := extraEnv[key]
-			if cur == "" {
-				cur = lookupEnvSlice(baseEnv, key)
-			}
-			extraEnv[key] = appendFlag(cur, "-flto=thin")
-		}
-	}
-}
-
-func buildAllRustCrates(p *Project, tc *Toolchain, buildDir, configName string, verbose bool) error {
-	if len(p.Cfg.Rust) == 0 {
-		return nil
-	}
-	for _, name := range sortedRustNames(p.Cfg.Rust) {
-		if err := buildRustCrate(p, tc, buildDir, name, p.Cfg.Rust[name], configName, verbose); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func writeRustCMakeConfig(projectRoot, buildDir, name string, c *RustCrateCfg, defaultConfig string, nativeLibs []string) error {
-	cmakeName := rustCMakeName(name, c)
-	cfgDir := rustPackageConfigDir(buildDir, cmakeName)
-	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+	cargo, err = filepath.Abs(cargo)
+	if err != nil {
 		return err
 	}
-
-	_, defaultProfile := rustProfileForConfig(defaultConfig)
-	defaultLib := filepath.ToSlash(rustArtifactPath(buildDir, name, c, defaultProfile))
-	debugLib := filepath.ToSlash(rustArtifactPath(buildDir, name, c, "debug"))
-	releaseLib := filepath.ToSlash(rustArtifactPath(buildDir, name, c, "release"))
-
-	var b strings.Builder
-	fmt.Fprintf(&b, "# Generated by cmk for rust.%s — do not edit.\n", name)
-	fmt.Fprintf(&b, "if(NOT TARGET %s::%s)\n", cmakeName, cmakeName)
-
-	if !c.CxxBridge {
-		fmt.Fprintf(&b, "    add_library(%s::%s STATIC IMPORTED GLOBAL)\n", cmakeName, cmakeName)
-		fmt.Fprintf(&b, "    set_target_properties(%s::%s PROPERTIES\n", cmakeName, cmakeName)
-		fmt.Fprintf(&b, "        IMPORTED_LOCATION %q\n", defaultLib)
-		fmt.Fprintf(&b, "        IMPORTED_LOCATION_DEBUG %q\n", debugLib)
-		fmt.Fprintf(&b, "        IMPORTED_LOCATION_RELEASE %q\n", releaseLib)
-		fmt.Fprintf(&b, "        IMPORTED_LOCATION_RELWITHDEBINFO %q\n", releaseLib)
-		fmt.Fprintf(&b, "        IMPORTED_LOCATION_MINSIZEREL %q\n", releaseLib)
-		fmt.Fprintf(&b, "    )\n")
-		if len(nativeLibs) > 0 {
-			fmt.Fprintf(&b, "    set_property(TARGET %s::%s APPEND PROPERTY INTERFACE_LINK_LIBRARIES", cmakeName, cmakeName)
-			for _, lib := range nativeLibs {
-				fmt.Fprintf(&b, " %q", lib)
-			}
-			b.WriteString(")\n")
-		}
-	} else {
-		archiveTarget := "_cmk_" + cmakeName + "_archive"
-		bridgeTarget := "_cmk_" + cmakeName + "_cxxbridge"
-		bridgeDir := rustCxxBridgeDir(buildDir, name)
-		incDir := filepath.ToSlash(filepath.Join(bridgeDir, "include"))
-		bridgeCC := filepath.ToSlash(filepath.Join(bridgeDir, "bridge.cc"))
-
-		fmt.Fprintf(&b, "    add_library(%s STATIC IMPORTED GLOBAL)\n", archiveTarget)
-		fmt.Fprintf(&b, "    set_target_properties(%s PROPERTIES\n", archiveTarget)
-		fmt.Fprintf(&b, "        IMPORTED_LOCATION %q\n", defaultLib)
-		fmt.Fprintf(&b, "        IMPORTED_LOCATION_DEBUG %q\n", debugLib)
-		fmt.Fprintf(&b, "        IMPORTED_LOCATION_RELEASE %q\n", releaseLib)
-		fmt.Fprintf(&b, "        IMPORTED_LOCATION_RELWITHDEBINFO %q\n", releaseLib)
-		fmt.Fprintf(&b, "        IMPORTED_LOCATION_MINSIZEREL %q\n", releaseLib)
-		fmt.Fprintf(&b, "    )\n")
-		if len(nativeLibs) > 0 {
-			fmt.Fprintf(&b, "    set_property(TARGET %s APPEND PROPERTY INTERFACE_LINK_LIBRARIES", archiveTarget)
-			for _, lib := range nativeLibs {
-				fmt.Fprintf(&b, " %q", lib)
-			}
-			b.WriteString(")\n")
-		}
-
-		// Compile bridge.cc with the project's CMake C++ toolchain and place it before
-		// the Rust staticlib archive so link order is bridge.cc -> librust.a -> syslibs.
-		fmt.Fprintf(&b, "    add_library(%s STATIC %q)\n", bridgeTarget, bridgeCC)
-		fmt.Fprintf(&b, "    target_include_directories(%s PUBLIC %q)\n", bridgeTarget, incDir)
-		for _, inc := range c.CxxBridgeIncludes {
-			if !filepath.IsAbs(inc) {
-				inc = filepath.Join(projectRoot, inc)
-			}
-			fmt.Fprintf(&b, "    target_include_directories(%s PRIVATE %q)\n", bridgeTarget, filepath.ToSlash(filepath.Clean(inc)))
-		}
-		fmt.Fprintf(&b, "    target_link_libraries(%s PUBLIC %s)\n", bridgeTarget, archiveTarget)
-		fmt.Fprintf(&b, "    add_library(%s::%s ALIAS %s)\n", cmakeName, cmakeName, bridgeTarget)
-		fmt.Fprintf(&b, "    set(%s_CXXBRIDGE_INCLUDE_DIR %q)\n", cmakeName, incDir)
-		fmt.Fprintf(&b, "    set(%s_CXXBRIDGE_SOURCE %q)\n", cmakeName, bridgeCC)
-	}
-
-	b.WriteString("endif()\n")
-	fmt.Fprintf(&b, "set(%s_FOUND TRUE)\n", cmakeName)
-
-	cfgPath := filepath.Join(cfgDir, cmakeName+"Config.cmake")
-	return writeFileIfChanged(cfgPath, []byte(b.String()), 0o644)
-}
-
-func writeFileIfChanged(path string, content []byte, perm os.FileMode) error {
-	if existing, err := os.ReadFile(path); err == nil && bytes.Equal(existing, content) {
-		return nil
-	}
-	return os.WriteFile(path, content, perm)
-}
-
-// prepareRustCrates runs during `cmk config`: it builds each configured crate
-// for the default configuration (producing the initial staticlib and any
-// cxxbridge generated headers/sources), probes required native static libs,
-// and writes <cmake-name>Config.cmake files consumed by find_package().
-func prepareRustCrates(p *Project, tc *Toolchain, buildDir string, preset *PresetCfg) error {
-	if len(p.Cfg.Rust) == 0 {
-		return nil
-	}
-	defaultCfg := defaultRustConfig(p, preset)
-	if err := buildAllRustCrates(p, tc, buildDir, defaultCfg, false); err != nil {
-		return err
-	}
-
 	baseEnv := p.commandEnv(tc.envMap())
+	host := detectRustHostTriple(p.Root, baseEnv)
 	probed := map[string][]string{}
 	for _, name := range sortedRustNames(p.Cfg.Rust) {
 		c := p.Cfg.Rust[name]
 		libs, ok := probed[c.Target]
 		if !ok {
-			var err error
-			libs, err = probeRustNativeLibs(baseEnv, c.Target)
+			libs, err = probeRustNativeLibs(p.Root, baseEnv, c.Target)
 			if err != nil {
 				return err
 			}
 			probed[c.Target] = libs
 		}
-		if err := writeRustCMakeConfig(p.Root, buildDir, name, c, defaultCfg, libs); err != nil {
+		env := maps.Clone(c.Env)
+		if env == nil {
+			env = make(map[string]string)
+		}
+		triple := c.Target
+		if triple == "" {
+			triple = host
+		}
+		if triple != "" {
+			key := strings.ReplaceAll(triple, "-", "_")
+			if tc.CC != "" {
+				env["CC_"+key] = tc.CC
+			}
+			if tc.CXX != "" {
+				env["CXX_"+key] = tc.CXX
+			}
+		}
+		if err := writeRustCMakeConfig(p.Root, buildDir, name, c, cargo, p.commandEnvOverrides(tc.envMap(), env), libs); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-func defaultRustConfig(p *Project, preset *PresetCfg) string {
-	if preset != nil && preset.BuildType != "" {
-		return preset.BuildType
-	}
-	if p.Cfg.Configure.DefaultConfiguration != "" {
-		return p.Cfg.Configure.DefaultConfiguration
-	}
-	return "Debug"
-}
-
-func effectiveBuildConfig(t *buildTree) string {
-	if t.config != "" {
-		return t.config
-	}
-	if preset := t.preset(); preset != nil && preset.BuildType != "" {
-		return preset.BuildType
-	}
-	val, _ := readCMakeCacheVar(t.dir, "CMAKE_BUILD_TYPE")
-	return val
 }

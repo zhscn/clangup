@@ -172,7 +172,7 @@ func (t *buildTree) configureLocked(extraArgs []string, forceFresh bool) error {
 	if err != nil {
 		return err
 	}
-	if err := prepareRustCrates(p, tc, dir, preset); err != nil {
+	if err := prepareRustPackages(p, tc, dir); err != nil {
 		return err
 	}
 

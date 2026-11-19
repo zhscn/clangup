@@ -424,8 +424,17 @@ func (p *Project) vars() map[string]string {
 // section, and any extra layers (later layers win: [env] overrides the
 // ccache defaults, explicit layers override [env]).
 func (p *Project) commandEnv(layers ...map[string]string) []string {
-	vars := p.vars()
 	env := os.Environ()
+	for k, val := range p.commandEnvOverrides(layers...) {
+		env = append(env, k+"="+val)
+	}
+	return env
+}
+
+// commandEnvOverrides captures the project environment layers separately from
+// the caller's environment so generated build commands can inherit the latter.
+func (p *Project) commandEnvOverrides(layers ...map[string]string) map[string]string {
+	vars := p.vars()
 	merged := map[string]string{}
 	for k, val := range p.ccacheEnv() {
 		merged[k] = val
@@ -448,10 +457,7 @@ func (p *Project) commandEnv(layers ...map[string]string) []string {
 		}
 		merged["PATH"] = prependPath(basePath, dirs...)
 	}
-	for k, val := range merged {
-		env = append(env, k+"="+val)
-	}
-	return env
+	return merged
 }
 
 // buildEnv is the environment for driving a build tool (cmake --build,

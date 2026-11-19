@@ -206,17 +206,32 @@ In-tree Rust `staticlib` crates managed directly by `cmk`. Crate keys match `^[A
 | `features` | `string[]` | Cargo features passed to `--features`. |
 | `no-default-features` | `bool` | Pass `--no-default-features` to `cargo build` (default `false`). |
 | `target` | `string` | Explicit Rust target triple passed to `--target`. |
-| `cxxbridge` | `bool` | Set `CXXBRIDGE_OUT_DIR=<build-dir>/cmk-rust/<name>/cxxbridge` when invoking Cargo, automatically compile `bridge.cc` into the exported CMake target, and expose generated headers via `<cmake-name>::<cmake-name>` (default `false`). |
+| `cxxbridge` | `bool` | Set `CXXBRIDGE_OUT_DIR` when invoking Cargo. The crate build script writes `bridge.cc` and an `include/` tree there. The exported target compiles the bridge and exposes its headers (default `false`). |
 | `cxxbridge-includes` | `string[]` | Optional include directories (project-relative or absolute) passed privately when compiling `bridge.cc` (only needed if `#[cxx::bridge]` contains `extern "C++"` includes). |
 | `lto` | `string` | LTO mode for release-profile builds (`Release`, `RelWithDebInfo`, `MinSizeRel`): `off` (default), `thin`, `fat`, or `linker-plugin` (cross-language ThinLTO via `-Clinker-plugin-lto` + `CFLAGS`/`CXXFLAGS` `-flto=thin` for `lld`). Ignored in `Debug`/custom configs. |
 | `env` | `map<string, string>` | Extra environment variables passed to `cargo build` and folded into the configure stamp. |
 
-**Build & CMake export contract:**
-- **Out-of-source layout**: All crates in a build tree share `<build-dir>/cmk-rust/cargo-target`. Package configs are written to `<build-dir>/cmk-rust/cmake/<cmake-name>/<cmake-name>Config.cmake` and injected as `-D<cmake-name>_DIR=...` (mirrored into `CMakeUserPresets.json`).
-- **Lifecycle**: `cmk config` builds each crate once for the default configuration, probes required native system libraries via `rustc --print native-static-libs` (filtering out `-lstdc++`/`-lc++` so the CMake C++ toolchain stays authoritative), and generates `<cmake-name>Config.cmake`. Subsequent `cmk build` / `run` / `test` runs invoke `cargo build --lib` before `cmake --build`.
-- **Configuration mapping**: `Release`, `RelWithDebInfo` (with `CARGO_PROFILE_RELEASE_DEBUG=true`), and `MinSizeRel` build with `--release`; `Debug` and custom configurations build with the `dev` profile.
-- **Toolchain environment**: `cargo` runs inside `cmk`'s toolchain environment with `CC`, `CXX`, `AR`, `CC_<target>`, and `CXX_<target>` pointing at the resolved toolchain.
-- **Exported CMake interface**: `find_package(<cmake-name> REQUIRED)` provides the static target `<cmake-name>::<cmake-name>` (with per-config `IMPORTED_LOCATION_<CONFIG>` and probed `INTERFACE_LINK_LIBRARIES`). When `cxxbridge: true`, `<cmake-name>Config.cmake` compiles `bridge.cc` automatically with the project's CMake C++ toolchain (inheriting flags/LTO/sanitizers), links it before the Rust staticlib archive, exposes generated headers on `PUBLIC` include directories, and aliases `<cmake-name>::<cmake-name>` to that static target (also setting `<cmake-name>_CXXBRIDGE_INCLUDE_DIR` and `<cmake-name>_CXXBRIDGE_SOURCE`). Because `<cmake-name>::<cmake-name>` is a real `STATIC` target (not an `INTERFACE` wrapper), it works both in acyclic graphs and inside CMake 3.24+ `$<LINK_GROUP:RESCAN,...>` for bidirectional static calls between Rust and C++.
+The generated package requires CMake 3.20 or newer. During `cmk config`,
+cmk probes Rust's native runtime link requirements for the selected target and
+writes `<build-dir>/cmk-rust/cmake/<cmake-name>/<cmake-name>Config.cmake`.
+It passes that directory to CMake as `<cmake-name>_DIR` and records it in
+`CMakeUserPresets.json` when preset generation is enabled.
+
+`find_package(<cmake-name> REQUIRED)` makes the `<cmake-name>::<cmake-name>`
+target available. Building a target that links it runs Cargo in the configured
+C/C++ toolchain environment. Cargo handles incremental rebuilds and puts its
+outputs in `<build-dir>/cmk-rust/crate-<name>/config-<configuration>/cargo-target`.
+`Release`, `RelWithDebInfo` and `MinSizeRel` use the release profile, with
+`RelWithDebInfo` enabling Rust debug information. Other configurations use the
+dev profile.
+
+With `cxxbridge: true`, Cargo generates the bridge before CMake compiles
+`bridge.cc` with the project's C++ toolchain. The public target links the Rust
+archive and exposes the generated headers. The package also sets
+`<cmake-name>_CXXBRIDGE_INCLUDE_DIR` and `<cmake-name>_CXXBRIDGE_SOURCE` as
+paths with configuration generator expressions for use in CMake target
+properties. A bridge header change invalidates the C++ compile steps in the
+same build.
 
 #### `install`, `env`, `target-env`, `format`, `lint`
 

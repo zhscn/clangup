@@ -458,6 +458,9 @@ func cmdLint(explicitFiles []string, options lintOptions) error {
 	if err != nil {
 		return err
 	}
+	if err := tree.prepareLintRustDeps(defaultJobs(), options.Verbose); err != nil {
+		return err
+	}
 	if err := tree.prepareLintModuleDeps(lintDBDir, files, defaultJobs(), options.Verbose); err != nil {
 		return err
 	}
@@ -545,6 +548,37 @@ func cmdLint(explicitFiles []string, options lintOptions) error {
 	}
 	fmt.Printf("Linted %d file(s), %d with diagnostics.\n", len(files), len(reports))
 	return nil
+}
+
+// prepareLintRustDeps refreshes generated bridge headers for clang-tidy, which
+// reads compilation commands without asking CMake to build their targets.
+func (t *buildTree) prepareLintRustDeps(jobs int, verbose bool) error {
+	if t.foreign {
+		return nil
+	}
+	bridges := map[string]bool{}
+	for name, crate := range t.p.Cfg.Rust {
+		if crate.CxxBridge {
+			bridges[rustCargoTargetName(rustCMakeName(name, crate))] = true
+		}
+	}
+	if len(bridges) == 0 {
+		return nil
+	}
+	targets, err := t.collectTargets()
+	if err != nil {
+		return err
+	}
+	var generators []string
+	for _, target := range targets {
+		if target.Type == "UTILITY" && bridges[target.Name] {
+			generators = append(generators, target.Name)
+		}
+	}
+	if len(generators) == 0 {
+		return nil
+	}
+	return t.build(jobs, generators, false, verbose, nil)
 }
 
 func countDiagnostics(text, marker string) int {

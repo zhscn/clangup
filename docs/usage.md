@@ -333,9 +333,9 @@ rust:
     lto: linker-plugin   # optional: off | thin | fat | linker-plugin (Release profiles only)
 ```
 
-On `cmk config`, `cmk` builds the crate with the pinned C/C++ toolchain environment, probes required Rust native static libraries, and generates `<build-dir>/cmk-rust/cmake/rust_cli/rust_cliConfig.cmake` (injected via `-Drust_cli_DIR=...`). On every `cmk build`, `cmk run`, or `cmk test`, `cmk` runs an incremental `cargo build --lib` for the selected configuration (`Debug` vs. `Release`) before invoking CMake/Ninja.
+Run `cmk config` to generate the CMake package and record the C/C++ toolchain environment for Cargo. Rust packages require CMake 3.20 or newer. When a CMake target uses the package, its build runs `cargo build --lib` for the selected configuration before compiling the bridge or linking the Rust archive. Cargo checks its own inputs, including changes tracked by `build.rs`. Both `cmk build` and `cmake --build <build-dir> --config <configuration>` use these rules. Run `cmk config` again after changing the Rust declaration or its configured toolchain.
 
-In `CMakeLists.txt`, consume the crate like any standard package with zero Rust-specific logic:
+In `CMakeLists.txt`, use `find_package` and link the exported target.
 
 ```cmake
 find_package(rust_cli REQUIRED)
@@ -347,14 +347,19 @@ add_executable(app main.cpp)
 target_link_libraries(app PRIVATE cpp_core)
 ```
 
-`cmk` does not force a specific call direction between C++ and Rust:
-- **Acyclic (one-way) dependencies**: When Rust is a leaf library (C++ calls Rust, and any Rust→C++ callbacks go through runtime vtables/function pointers) or when a C++ leaf library is only called by Rust (`target_link_libraries(rust_cli::rust_cli INTERFACE cpp_leaf)`), standard `target_link_libraries` works with no extra linker flags.
-- **Bidirectional static dependencies**: If Rust statically calls into `cpp_core` via `#[cxx::bridge]` `extern "C++"`, list the required C++ header directories in `rust.<name>.cxxbridge-includes` so `cmk`'s generated target can compile `bridge.cc`, and link the executable with CMake's `RESCAN` link group to resolve the static library cycle across GNU `ld`, `lld`, `ld64`, and MSVC:
-  ```cmake
-  target_link_libraries(app PRIVATE "$<LINK_GROUP:RESCAN,rust_cli::rust_cli,cpp_core>")
-  ```
+The example uses ordinary target linking because its static dependencies go in
+one direction. Calls back into C++ through a function pointer still fit this
+model. If Rust statically calls into `cpp_core` via `#[cxx::bridge]`
+`extern "C++"`, list the headers' include directories in
+`rust.<name>.cxxbridge-includes` so the generated target can compile
+`bridge.cc`. Where the toolchain supports CMake's `RESCAN` link group, use it
+to resolve the static library cycle.
 
-For Cargo workspaces with multiple executables, declare one `rust:` entry per `staticlib` facade package pointing to the same workspace `manifest`; all entries share `<build-dir>/cmk-rust/cargo-target` so common `rlib` dependencies are compiled once.
+```cmake
+target_link_libraries(app PRIVATE "$<LINK_GROUP:RESCAN,rust_cli::rust_cli,cpp_core>")
+```
+
+For Cargo workspaces with multiple executables, declare one `rust:` entry per `staticlib` facade package and point each entry at the workspace manifest. Each entry and CMake configuration has its own Cargo target directory so different features, bridge outputs, and profile settings can be built independently.
 
 ---
 
