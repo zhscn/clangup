@@ -140,7 +140,7 @@ jobs:
           retention-days: 7
 
   macos:
-    name: build aarch64-apple-darwin
+    name: build arm64-apple-darwin
     runs-on: macos-15
     timeout-minutes: 30
     permissions:
@@ -159,10 +159,11 @@ jobs:
           TOOLCHAIN_SELECTOR: ${{ inputs.macos_toolchain }}
           MACOSX_DEPLOYMENT_TARGET: "13.0"
         run: |
-          mkdir -p out/bin out/targets/aarch64-apple-darwin /tmp/ninja-build /tmp/ninja-stage/bin
+          mkdir -p out/bin out/targets/arm64-apple-darwin /tmp/ninja-build /tmp/ninja-stage/bin
           go build -o out/bin/clangup ./cmd/clangup
           ./out/bin/clangup install "$TOOLCHAIN_SELECTOR"
           prefix="$(./out/bin/clangup path "$TOOLCHAIN_SELECTOR")"
+          export SDKROOT="$(xcrun --show-sdk-path)"
           cd /tmp/ninja-build
           curl -fsSL -o "v${NINJA_VERSION}.tar.gz" "https://github.com/ninja-build/ninja/archive/refs/tags/v${NINJA_VERSION}.tar.gz"
           echo "${NINJA_SHA256}  v${NINJA_VERSION}.tar.gz" | shasum -a 256 -c -
@@ -174,11 +175,11 @@ jobs:
           otool -L ninja
           install -m 0755 ninja /tmp/ninja-stage/bin/ninja
           gtar --sort=name --owner=0 --group=0 --numeric-owner -C /tmp/ninja-stage -cf - bin/ninja \
-            | zstd -19 -T0 -o "$GITHUB_WORKSPACE/out/targets/aarch64-apple-darwin/ninja.tar.zst"
+            | zstd -19 -T0 -o "$GITHUB_WORKSPACE/out/targets/arm64-apple-darwin/ninja.tar.zst"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: ninja-aarch64-apple-darwin
-          path: out/targets/aarch64-apple-darwin/ninja.tar.zst
+          name: ninja-arm64-apple-darwin
+          path: out/targets/arm64-apple-darwin/ninja.tar.zst
           if-no-files-found: error
           retention-days: 7
 
@@ -202,8 +203,8 @@ jobs:
           path: out/targets/aarch64-unknown-linux-gnu
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: ninja-aarch64-apple-darwin
-          path: out/targets/aarch64-apple-darwin
+          name: ninja-arm64-apple-darwin
+          path: out/targets/arm64-apple-darwin
       - name: Publish ninja release
         env:
           UPLOAD_ENDPOINT: ${{ vars.CLANGUP_UPLOAD_ENDPOINT }}
