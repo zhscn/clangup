@@ -341,12 +341,12 @@ target_link_libraries(app PRIVATE m)
 	if err := cmdConfig(configOptions{}, nil); err != nil {
 		t.Fatal(err)
 	}
-	// Lint directly on an unbuilt tree: cmk must materialize .modmap and
-	// .bmi files via Ninja without compiling object files or linking app.
+	// Lint an unbuilt tree. cmk can compile module providers to get their
+	// BMIs, while the application's object and link steps are unnecessary.
 	if err := cmdLint([]string{"src/m.cppm", "src/main.cc"}, lintOptions{}); err != nil {
 		t.Fatalf("cmdLint on unbuilt C++23 module tree failed: %v", err)
 	}
 	if fileExists(filepath.Join(root, "build/Debug/app")) || fileExists(filepath.Join(root, "build/CMakeFiles/app.dir/Debug/src/main.cc.o")) {
-		t.Fatal("cmdLint compiled object or executable targets instead of only module metadata/BMIs")
+		t.Fatal("cmdLint ran an application compile or link step")
 	}
 }

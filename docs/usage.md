@@ -223,7 +223,7 @@ target_sources(app
 
 `cmk` also handles two sharp edges of C++ modules in tooling:
 1. **`clangd` compatibility** — When mirroring `compile_commands.json` to the project root, `cmk` strips CMake's synthetic `__cmake_cxx23` / `__cmake_cxx26` stdlib BMI compilation entries so `clangd` does not misindex standard library sources.
-2. **`cmk lint` BMI pre-warming** — Before running `clang-tidy` on files in a modular build tree, `cmk lint` automatically builds any Ninja `.pcm` / `.bmi` targets so `clang-tidy` can resolve imported modules on a clean tree.
+2. **`cmk lint` and imported modules** — Before running `clang-tidy` on a Ninja build tree, `cmk lint` builds the BMIs needed by the selected files. If a BMI is produced by compiling a module object, cmk builds that object. Linking is unnecessary.
 
 ---
 

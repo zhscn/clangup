@@ -151,6 +151,26 @@ func TestBMITargetsFromModmap(t *testing.T) {
 	}
 }
 
+func TestCxxDyndepOutputs(t *testing.T) {
+	dir := t.TempDir()
+	content := `ninja_dyndep_version = 1.0
+build some$ dir/src/module$$.cppm.o | some$ dir/module$:part.pcm some$ dir/extra.pcm: dyndep | another.pcm
+  restat = 1
+build standalone.bmi: dyndep
+`
+	if err := os.WriteFile(filepath.Join(dir, "CXX.dd"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outputs, err := cxxDyndepOutputs(dir, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const producer = "some dir/src/module$.cppm.o"
+	if len(outputs) != 2 || outputs["some dir/module:part.pcm"] != producer || outputs["some dir/extra.pcm"] != producer {
+		t.Fatalf("unexpected implicit outputs: %v", outputs)
+	}
+}
+
 func TestLintCompilationDatabaseSelectsOneConfiguration(t *testing.T) {
 	root := t.TempDir()
 	buildDir := filepath.Join(root, "build")
