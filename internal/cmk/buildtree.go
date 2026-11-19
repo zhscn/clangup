@@ -123,6 +123,15 @@ func (p *Project) resolveManagedTree(options treeOptions, policy configurePolicy
 // never reconfigure behind cmk's back — resolveBuildTree already brought
 // everything in step.
 func (t *buildTree) build(jobs int, targets []string, cleanFirst, verbose bool, passthrough []string) error {
+	if t.p.Managed && len(t.p.Cfg.Rust) > 0 {
+		tc, err := t.p.toolchain()
+		if err != nil {
+			return err
+		}
+		if err := buildAllRustCrates(t.p, tc, t.dir, effectiveBuildConfig(t), verbose); err != nil {
+			return err
+		}
+	}
 	env, err := t.p.buildEnv()
 	if err != nil {
 		return err

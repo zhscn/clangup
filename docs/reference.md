@@ -86,6 +86,16 @@ dependencies:
       git: https://github.com/fmtlib/fmt.git
       ref: 11.0.2
 
+rust:
+  rust_cli:
+    manifest: rust_cli/Cargo.toml
+    package: rust_cli
+    cmake-name: rust_cli
+    cxxbridge: true
+    features: ["derive"]
+    env:
+      CARGO_NET_OFFLINE: "false"
+
 install:
   prefix: ${PROJECT_ROOT}/dist
   component: runtime
@@ -182,6 +192,29 @@ Dependency names match `^[A-Za-z0-9_.-]+$`.
 | `patches` | `string[]` | Project-relative globs of unified diffs applied (`git apply` / `patch -p1`) to `source` before running `script`. Requires `source`. |
 | `extra-inputs` | `string[]` | Project-relative file globs hashed into the dependency's store identity. |
 | `env` | `map<string, string>` | Environment variables expanded, exported to `script`, and hashed into the store identity. |
+
+#### `rust.<name>`
+
+In-tree Rust `staticlib` crates managed directly by `cmk`. Crate keys match `^[A-Za-z0-9_.-]+$`.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `manifest` | `string` (required) | Path to `Cargo.toml` (project-relative or absolute). |
+| `package` | `string` | Cargo package name passed to `--package` (defaults to `<name>`). |
+| `lib-name` | `string` | Staticlib base name without `lib` prefix or `.a`/`.lib` suffix (defaults to `package` with `-` replaced by `_`). |
+| `cmake-name` | `string` | CMake package and target name exported as `<cmake-name>::<cmake-name>` (defaults to `<name>`). |
+| `features` | `string[]` | Cargo features passed to `--features`. |
+| `no-default-features` | `bool` | Pass `--no-default-features` to `cargo build` (default `false`). |
+| `target` | `string` | Explicit Rust target triple passed to `--target`. |
+| `cxxbridge` | `bool` | Set `CXXBRIDGE_OUT_DIR=<build-dir>/cmk-rust/<name>/cxxbridge` when invoking Cargo and export generated headers/sources via `<cmake-name>Config.cmake` (default `false`). |
+| `env` | `map<string, string>` | Extra environment variables passed to `cargo build` and folded into the configure stamp. |
+
+**Build & CMake export contract:**
+- **Out-of-source layout**: All crates in a build tree share `<build-dir>/cmk-rust/cargo-target`. Package configs are written to `<build-dir>/cmk-rust/cmake/<cmake-name>/<cmake-name>Config.cmake` and injected as `-D<cmake-name>_DIR=...` (mirrored into `CMakeUserPresets.json`).
+- **Lifecycle**: `cmk config` builds each crate once for the default configuration, probes required native system libraries via `rustc --print native-static-libs` (filtering out `-lstdc++`/`-lc++` so the CMake C++ toolchain stays authoritative), and generates `<cmake-name>Config.cmake`. Subsequent `cmk build` / `run` / `test` runs invoke `cargo build --lib` before `cmake --build`.
+- **Configuration mapping**: `Release`, `RelWithDebInfo` (with `CARGO_PROFILE_RELEASE_DEBUG=true`), and `MinSizeRel` build with `--release`; `Debug` and custom configurations build with the `dev` profile.
+- **Toolchain environment**: `cargo` runs inside `cmk`'s toolchain environment with `CC`, `CXX`, `AR`, `CC_<target>`, and `CXX_<target>` pointing at the resolved toolchain.
+- **Exported CMake interface**: `find_package(<cmake-name> REQUIRED)` provides the `IMPORTED STATIC` target `<cmake-name>::<cmake-name>` (with per-config `IMPORTED_LOCATION_<CONFIG>` and probed `INTERFACE_LINK_LIBRARIES`). When `cxxbridge: true`, it also sets `INTERFACE_INCLUDE_DIRECTORIES`, `<cmake-name>_CXXBRIDGE_INCLUDE_DIR`, and `<cmake-name>_CXXBRIDGE_SOURCE`.
 
 #### `install`, `env`, `target-env`, `format`, `lint`
 

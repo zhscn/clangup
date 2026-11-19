@@ -23,6 +23,7 @@ type Config struct {
 	Version   int                          `yaml:"version"`
 	Toolchain ToolchainCfg                 `yaml:"toolchain"`
 	Deps      map[string]*DepCfg           `yaml:"dependencies"`
+	Rust      map[string]*RustCrateCfg     `yaml:"rust"`
 	Configure ConfigureCfg                 `yaml:"cmake"`
 	Install   InstallCfg                   `yaml:"install"`
 	Env       map[string]string            `yaml:"env"`
@@ -142,6 +143,7 @@ func loadConfig(root string) (*Config, bool, error) {
 	cfg := &Config{
 		Toolchain: ToolchainCfg{},
 		Deps:      map[string]*DepCfg{},
+		Rust:      map[string]*RustCrateCfg{},
 		Env:       map[string]string{},
 		TargetEnv: map[string]map[string]string{},
 	}
@@ -176,6 +178,9 @@ func normalizeConfig(cfg *Config) error {
 	}
 	if cfg.Deps == nil {
 		cfg.Deps = map[string]*DepCfg{}
+	}
+	if cfg.Rust == nil {
+		cfg.Rust = map[string]*RustCrateCfg{}
 	}
 	if cfg.Env == nil {
 		cfg.Env = map[string]string{}
@@ -344,6 +349,9 @@ func validateConfig(cfg *Config, root string) error {
 		return fmt.Errorf("cmake.ninja: invalid version %q (expected dotted numbers like 1.13.2)", cfg.Configure.Ninja)
 	}
 	if err := validateDeps(cfg); err != nil {
+		return err
+	}
+	if err := validateRust(cfg); err != nil {
 		return err
 	}
 	if err := validateVariables("cmake.variables", cfg.Configure.Variables); err != nil {

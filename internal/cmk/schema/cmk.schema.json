@@ -114,6 +114,16 @@
         "$ref": "#/definitions/dependency"
       }
     },
+    "rust": {
+      "type": "object",
+      "description": "In-tree Rust staticlib crates built by cmk via Cargo and exported to CMake as find_package() targets.",
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9_.-]+$"
+      },
+      "additionalProperties": {
+        "$ref": "#/definitions/rustCrate"
+      }
+    },
     "install": {
       "type": "object",
       "description": "Defaults for cmk install.",
@@ -336,6 +346,58 @@
           "type": "array",
           "items": { "type": "string" },
           "description": "Project-relative file globs whose contents participate in the dependency store identity."
+        }
+      }
+    },
+    "rustCrate": {
+      "type": "object",
+      "description": "In-tree Rust staticlib crate managed by cmk and exposed via <cmake-name>Config.cmake.",
+      "required": ["manifest"],
+      "additionalProperties": false,
+      "properties": {
+        "manifest": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Path to Cargo.toml (relative to project root or absolute)."
+        },
+        "package": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Cargo package name passed to --package (defaults to the rust key name)."
+        },
+        "lib-name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Staticlib base name without lib prefix or .a/.lib suffix (defaults to package name with '-' replaced by '_')."
+        },
+        "cmake-name": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "CMake package and target name exported as <cmake-name>::<cmake-name> (defaults to the rust key name)."
+        },
+        "features": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Cargo features passed to --features."
+        },
+        "no-default-features": {
+          "type": "boolean",
+          "default": false,
+          "description": "Pass --no-default-features to cargo build."
+        },
+        "target": {
+          "type": "string",
+          "description": "Explicit Rust target triple passed to --target."
+        },
+        "cxxbridge": {
+          "type": "boolean",
+          "default": false,
+          "description": "Export CXXBRIDGE_OUT_DIR to build.rs and expose generated include/ and bridge.cc via <cmake-name>Config.cmake."
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Extra environment variables passed to cargo build."
         }
       }
     },

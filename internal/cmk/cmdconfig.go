@@ -172,6 +172,9 @@ func (t *buildTree) configureLocked(extraArgs []string, forceFresh bool) error {
 	if err != nil {
 		return err
 	}
+	if err := prepareRustCrates(p, tc, dir, preset); err != nil {
+		return err
+	}
 
 	injected, stampArgs, err := computeInjection(p, tc, preset, extraArgs)
 	if err != nil {
@@ -269,6 +272,8 @@ type injectionParts struct {
 	// toolStamp folds managed cmake/ninja versions and paths into the
 	// identity so changing cmake.version or cmake.ninja reconfigures fresh.
 	toolStamp []string
+	// rustStamp folds cmk.yaml rust crate definitions into the identity.
+	rustStamp []string
 }
 
 // injectionParts assembles the injection for one configured preset. extraArgs
@@ -279,6 +284,7 @@ func (p *Project) injectionParts(tc *Toolchain, preset *PresetCfg, extraArgs []s
 	if err != nil {
 		return nil, err
 	}
+	exports = append(exports, allRustExports(p, presetBuildDir(p, preset))...)
 	presetName := ""
 	if preset != nil {
 		presetName = preset.Name
@@ -296,6 +302,7 @@ func (p *Project) injectionParts(tc *Toolchain, preset *PresetCfg, extraArgs []s
 		userArgs:  append(variableArgs(p.Cfg.Configure.Variables, vars), expandAll(p.Cfg.Configure.Args, vars)...),
 		envStamp:  envStampEntries(p),
 		toolStamp: p.tools.stampEntries(),
+		rustStamp: rustStampEntries(p),
 	}
 	if preset != nil {
 		if preset.BuildType != "" {
@@ -343,7 +350,8 @@ func (in *injectionParts) stampArgs() []string {
 	out := in.argv()
 	out = append(out, "preset:"+in.preset, "generator:"+in.generator)
 	out = append(out, in.envStamp...)
-	return append(out, in.toolStamp...)
+	out = append(out, in.toolStamp...)
+	return append(out, in.rustStamp...)
 }
 
 // computeInjection is the argv/stamp projection of injectionParts.

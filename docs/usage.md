@@ -316,7 +316,44 @@ cmk clean --all             # remove the entire store and archive download cache
 
 ---
 
-## 6. Formatting, linting, and developer environment
+## 6. In-tree Rust crates (`rust:`)
+
+For C++ projects that include in-tree Rust `staticlib` crates (such as a `clap` CLI, `tonic` gRPC runtime, or FFI bridge), declare them under `rust:` in `cmk.yaml` instead of driving Cargo from CMake via Corrosion:
+
+```yaml
+version: 1
+
+toolchain:
+  default: libcxx-pgo
+
+rust:
+  rust_cli:
+    manifest: rust_cli/Cargo.toml
+    cxxbridge: true
+```
+
+On `cmk config`, `cmk` builds the crate with the pinned C/C++ toolchain environment, probes required Rust native static libraries, and generates `<build-dir>/cmk-rust/cmake/rust_cli/rust_cliConfig.cmake` (injected via `-Drust_cli_DIR=...`). On every `cmk build`, `cmk run`, or `cmk test`, `cmk` runs an incremental `cargo build --lib` for the selected configuration (`Debug` vs. `Release`) before invoking CMake/Ninja.
+
+In `CMakeLists.txt`, consume the crate like any standard package with zero Rust-specific logic:
+
+```cmake
+find_package(rust_cli REQUIRED)
+
+add_library(cpp_core STATIC
+    cpp_core/src/core.cpp
+    ${rust_cli_CXXBRIDGE_SOURCE}   # only needed when cxxbridge: true
+)
+target_link_libraries(cpp_core PUBLIC rust_cli::rust_cli)
+
+add_executable(app main.cpp)
+target_link_libraries(app PRIVATE cpp_core)
+```
+
+For Cargo workspaces with multiple executables, declare one `rust:` entry per `staticlib` facade package pointing to the same workspace `manifest`; all entries share `<build-dir>/cmk-rust/cargo-target` so common `rlib` dependencies are compiled once.
+
+---
+
+## 7. Formatting, linting, and developer environment
 
 ### `cmk fmt` and `cmk lint`
 

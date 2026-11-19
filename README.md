@@ -8,6 +8,7 @@
 - **Zero-boilerplate CMake workflows (`cmk`)** — Defaults to `Ninja Multi-Config` in `./build` with `Debug` and `Release` configurations, optional pinned `cmake.version` / `cmake.ninja` downloads, automatic File API staleness checks, C++20/23 module scanner/stdlib wiring (`import std;`), cross-worktree `ccache` sharing, and automatic `LLVM_SYMBOLIZER_PATH` injection for sanitizers.
 - **Native IDE & editor interop** — Mirrors sanitized `compile_commands.json` for `clangd`, generates `CMakeUserPresets.json` for IDEs, ships an embedded JSON Schema for `cmk.yaml`, and provides a native [CLion integration](integrations/clion-cmk/README.md).
 - **Content-addressed dependency store** — Keep simple CMake dependencies in `FetchContent`/`CPM`, and move heavy or non-CMake third-party builds into project-owned Bash recipes cached in a shared content-addressed store with local `cmk dev` worktree overlays.
+- **First-class in-tree Rust crates (`rust:`)** — Drive Cargo `staticlib` builds with the pinned C/C++ toolchain environment and export standard `find_package()` targets (including optional `cxxbridge` codegen) so CMake stays free of Corrosion or Rust toolchain logic.
 - **Works with plain CMake projects too** — Run `cmk build`, `cmk run`, `cmk test`, `cmk tu`, `cmk fmt`, and `cmk lint` against any existing CMake build directory even without `cmk.yaml`.
 
 ## Installation
