@@ -340,11 +340,7 @@ In `CMakeLists.txt`, consume the crate like any standard package with zero Rust-
 ```cmake
 find_package(rust_cli REQUIRED)
 
-add_library(cpp_core STATIC
-    cpp_core/src/core.cpp
-    ${rust_cli_CXXBRIDGE_SOURCE}   # only needed when cxxbridge: true
-)
-target_include_directories(cpp_core PUBLIC "${CMAKE_SOURCE_DIR}/cpp_core/include")
+add_library(cpp_core STATIC cpp_core/src/core.cpp)
 target_link_libraries(cpp_core PUBLIC rust_cli::rust_cli)
 
 add_executable(app main.cpp)
@@ -353,7 +349,7 @@ target_link_libraries(app PRIVATE cpp_core)
 
 `cmk` does not force a specific call direction between C++ and Rust:
 - **Acyclic (one-way) dependencies**: When Rust is a leaf library (C++ calls Rust, and any Rust→C++ callbacks go through runtime vtables/function pointers) or when a C++ leaf library is only called by Rust (`target_link_libraries(rust_cli::rust_cli INTERFACE cpp_leaf)`), standard `target_link_libraries` works with no extra linker flags.
-- **Bidirectional static dependencies**: If Rust statically calls into `cpp_core` (for example via `#[cxx::bridge]` `extern "C++"` or `extern "C"`) while `cpp_core` also calls Rust, keeping `${rust_cli_CXXBRIDGE_SOURCE}` in `cpp_core` gives `bridge.cc` access to `cpp_core`'s include paths, and linking the executable with CMake's `RESCAN` link group resolves the static library cycle across GNU `ld`, `lld`, `ld64`, and MSVC:
+- **Bidirectional static dependencies**: If Rust statically calls into `cpp_core` via `#[cxx::bridge]` `extern "C++"`, list the required C++ header directories in `rust.<name>.cxxbridge-includes` so `cmk`'s generated target can compile `bridge.cc`, and link the executable with CMake's `RESCAN` link group to resolve the static library cycle across GNU `ld`, `lld`, `ld64`, and MSVC:
   ```cmake
   target_link_libraries(app PRIVATE "$<LINK_GROUP:RESCAN,rust_cli::rust_cli,cpp_core>")
   ```

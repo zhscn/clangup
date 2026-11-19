@@ -392,7 +392,12 @@
         "cxxbridge": {
           "type": "boolean",
           "default": false,
-          "description": "Export CXXBRIDGE_OUT_DIR to build.rs and expose generated include/ and bridge.cc via <cmake-name>Config.cmake."
+          "description": "Export CXXBRIDGE_OUT_DIR to build.rs, automatically compile bridge.cc into the exported CMake target, and expose generated headers."
+        },
+        "cxxbridge-includes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Optional project-relative or absolute include directories added privately when compiling bridge.cc (needed only when #[cxx::bridge] contains extern \"C++\" includes)."
         },
         "lto": {
           "type": "string",

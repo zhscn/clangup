@@ -73,7 +73,7 @@ rust:
 	}
 
 	buildDir := filepath.Join(root, "build")
-	if err := writeRustCMakeConfig(buildDir, "rust-cli", crate, "Debug", []string{"pthread", "dl", "m"}); err != nil {
+	if err := writeRustCMakeConfig(root, buildDir, "rust-cli", crate, "Debug", []string{"pthread", "dl", "m"}); err != nil {
 		t.Fatalf("writeRustCMakeConfig failed: %v", err)
 	}
 
@@ -84,12 +84,13 @@ rust:
 	}
 	text := string(data)
 	for _, needle := range []string{
-		"add_library(rust_cli::rust_cli STATIC IMPORTED GLOBAL)",
+		"add_library(_cmk_rust_cli_archive STATIC IMPORTED GLOBAL)",
+		"add_library(_cmk_rust_cli_cxxbridge STATIC",
+		"add_library(rust_cli::rust_cli ALIAS _cmk_rust_cli_cxxbridge)",
 		"IMPORTED_LOCATION_DEBUG",
 		"IMPORTED_LOCATION_RELEASE",
 		`INTERFACE_LINK_LIBRARIES "pthread" "dl" "m"`,
-		"INTERFACE_INCLUDE_DIRECTORIES",
-		"set(rust_cli_CXXBRIDGE_SOURCE",
+		"target_include_directories(_cmk_rust_cli_cxxbridge PUBLIC",
 		"set(rust_cli_FOUND TRUE)",
 	} {
 		if !strings.Contains(text, needle) {
