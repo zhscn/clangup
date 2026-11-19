@@ -52,7 +52,12 @@ func cmdInstall(options installOptions) error {
 	if options.Strip || p.Cfg.Install.Strip {
 		installArgs = append(installArgs, "--strip")
 	}
-	return runStreaming(p.commandEnv(), "cmake", installArgs...)
+	if p.Managed {
+		if _, err := p.buildTools(); err != nil {
+			return err
+		}
+	}
+	return runStreaming(p.commandEnv(), p.cmakeBin(), installArgs...)
 }
 
 func joinRegexAlternatives(patterns []string) string {

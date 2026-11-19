@@ -31,6 +31,18 @@
       "description": "CMake configure presets, multi-config configurations, cache variables, and generator settings.",
       "additionalProperties": false,
       "properties": {
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+          "description": "Managed CMake version downloaded from upstream Kitware releases. When omitted, cmk uses cmake from PATH.",
+          "examples": ["4.5.0", "3.31.6"]
+        },
+        "ninja": {
+          "type": "string",
+          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+          "description": "Managed Ninja version downloaded from clangup R2 tool releases. When omitted, cmk uses ninja from PATH.",
+          "examples": ["1.13.2"]
+        },
         "generator": {
           "type": "string",
           "description": "Default CMake generator (defaults to Ninja Multi-Config).",

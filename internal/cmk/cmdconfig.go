@@ -155,6 +155,10 @@ func (t *buildTree) configureWithOptions(extraArgs []string, forceFresh bool) er
 func (t *buildTree) configureLocked(extraArgs []string, forceFresh bool) error {
 	dir, p := t.dir, t.p
 	preset := t.preset()
+	bt, err := p.buildTools()
+	if err != nil {
+		return err
+	}
 	tc, err := p.toolchain()
 	if err != nil {
 		return err
@@ -181,12 +185,21 @@ func (t *buildTree) configureLocked(extraArgs []string, forceFresh bool) error {
 	// can short-circuit to the previous dep entries — store entries are
 	// immutable, so the old paths still exist and the staleness would
 	// be silent. --fresh discards the cache and re-finds everything.
+	// Likewise, if CMakeCache.txt was modified outside cmk or configured
+	// with a different cmake/ninja binary, --fresh restores a clean tree.
 	changed := injectionChanged(dir, stampArgs)
-	if forceFresh || changed {
+	toolMismatch := cacheToolMismatch(dir, bt, gen)
+	externalCacheEdit := cacheModifiedOutsideCMK(dir)
+	if forceFresh || changed || toolMismatch != "" || externalCacheEdit {
 		if _, err := os.Stat(filepath.Join(dir, "CMakeCache.txt")); err == nil {
-			if forceFresh && !changed {
+			switch {
+			case forceFresh && !changed && toolMismatch == "" && !externalCacheEdit:
 				fmt.Fprintf(os.Stderr, "cmk: reconfiguring %s with --fresh\n", dir)
-			} else {
+			case toolMismatch != "":
+				fmt.Fprintf(os.Stderr, "cmk: %s; reconfiguring %s with --fresh\n", toolMismatch, dir)
+			case externalCacheEdit && !changed:
+				fmt.Fprintf(os.Stderr, "cmk: CMakeCache.txt was modified outside cmk; reconfiguring %s with --fresh\n", dir)
+			default:
 				fmt.Fprintf(os.Stderr, "cmk: injected configuration changed; reconfiguring %s with --fresh\n", dir)
 			}
 			cmakeArgs = append(cmakeArgs, "--fresh")
@@ -199,8 +212,9 @@ func (t *buildTree) configureLocked(extraArgs []string, forceFresh bool) error {
 	if err := t.ensureFileAPI(); err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "+ cmake %s\n", shellQuote(cmakeArgs))
-	if err := runStreaming(p.commandEnv(tc.envMap()), "cmake", cmakeArgs...); err != nil {
+	cmakeBin := bt.cmakeBin()
+	fmt.Fprintf(os.Stderr, "+ %s %s\n", shellQuote([]string{cmakeBin}), shellQuote(cmakeArgs))
+	if err := runStreaming(p.commandEnv(tc.envMap()), cmakeBin, cmakeArgs...); err != nil {
 		return fmt.Errorf("cmake configure failed: %w", err)
 	}
 	// The stamp's mtime doubles as the staleness baseline: written after
@@ -252,6 +266,9 @@ type injectionParts struct {
 	// envStamp folds the [env] overlay into the identity: configure
 	// reads it through $ENV{...}, and no file mtime reflects a change.
 	envStamp []string
+	// toolStamp folds managed cmake/ninja versions and paths into the
+	// identity so changing cmake.version or cmake.ninja reconfigures fresh.
+	toolStamp []string
 }
 
 // injectionParts assembles the injection for one configured preset. extraArgs
@@ -274,10 +291,11 @@ func (p *Project) injectionParts(tc *Toolchain, preset *PresetCfg, extraArgs []s
 		// cmk owns reconfiguration (see ensureConfigured): the generated
 		// build system gets no regen rule, so a stale configure can never
 		// be re-run by ninja with an environment cmk didn't control.
-		argvOnly: []string{"-DCMAKE_SUPPRESS_REGENERATION=ON"},
-		exports:  exports,
-		userArgs: append(variableArgs(p.Cfg.Configure.Variables, vars), expandAll(p.Cfg.Configure.Args, vars)...),
-		envStamp: envStampEntries(p),
+		argvOnly:  []string{"-DCMAKE_SUPPRESS_REGENERATION=ON"},
+		exports:   exports,
+		userArgs:  append(variableArgs(p.Cfg.Configure.Variables, vars), expandAll(p.Cfg.Configure.Args, vars)...),
+		envStamp:  envStampEntries(p),
+		toolStamp: p.tools.stampEntries(),
 	}
 	if preset != nil {
 		if preset.BuildType != "" {
@@ -287,6 +305,11 @@ func (p *Project) injectionParts(tc *Toolchain, preset *PresetCfg, extraArgs []s
 		in.userArgs = append(in.userArgs, expandAll(preset.Args, vars)...)
 	}
 	in.userArgs = append(in.userArgs, extraArgs...)
+	if p.tools != nil && p.tools.NinjaBinDir != "" &&
+		strings.HasPrefix(strings.ToLower(in.generator), "ninja") &&
+		!definesVar(in.userArgs, "CMAKE_MAKE_PROGRAM") {
+		in.common = append(in.common, "-DCMAKE_MAKE_PROGRAM="+p.tools.NinjaBin)
+	}
 	in.toolchain = tc.cmakeArgs(in.userArgs)
 	if isMultiConfig(p.Cfg, preset) {
 		in.multiConfig = append(in.multiConfig,
@@ -319,7 +342,8 @@ func (in *injectionParts) argv() []string {
 func (in *injectionParts) stampArgs() []string {
 	out := in.argv()
 	out = append(out, "preset:"+in.preset, "generator:"+in.generator)
-	return append(out, in.envStamp...)
+	out = append(out, in.envStamp...)
+	return append(out, in.toolStamp...)
 }
 
 // computeInjection is the argv/stamp projection of injectionParts.

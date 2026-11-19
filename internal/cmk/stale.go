@@ -72,6 +72,17 @@ func (t *buildTree) ensureConfigured(policy configurePolicy) error {
 		if dirty {
 			return fmt.Errorf("--locked: cmk.lock does not match toolchain in cmk.yaml; run `cmk config` (or `cmk update toolchain`) and commit the lock")
 		}
+		if err := verifyLockedTools(p.Cfg, p.Lock); err != nil {
+			return err
+		}
+		bt, toolsDirty, err := resolveBuildTools(p.Cfg, p.Lock)
+		if err != nil {
+			return err
+		}
+		if toolsDirty {
+			return fmt.Errorf("--locked: cmk.lock does not match cmake/ninja in cmk.yaml; run `cmk config` and commit the lock")
+		}
+		p.tools = bt
 		if err := verifyLockedDeps(p.Cfg, p.Lock); err != nil {
 			return err
 		}
@@ -80,6 +91,9 @@ func (t *buildTree) ensureConfigured(policy configurePolicy) error {
 			return fmt.Errorf("--locked: configuration of %s is stale (%s); run `cmk config`", p.relToRoot(dir), reason)
 		}
 		return nil
+	}
+	if _, err := p.buildTools(); err != nil {
+		return err
 	}
 	tc, err := p.toolchain()
 	if err != nil {
@@ -215,6 +229,9 @@ func (t *buildTree) reconfigureReason(tc *Toolchain) string {
 	}
 	if injectionChanged(dir, stampArgs) {
 		return "injected configuration changed"
+	}
+	if mismatch := cacheToolMismatch(dir, p.tools, effectiveGenerator(p.Cfg, t.preset())); mismatch != "" {
+		return mismatch
 	}
 	stampInfo, err := os.Stat(filepath.Join(dir, injectionStampFile))
 	if err != nil {

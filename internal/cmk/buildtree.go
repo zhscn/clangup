@@ -127,7 +127,7 @@ func (t *buildTree) build(jobs int, targets []string, cleanFirst, verbose bool, 
 	if err != nil {
 		return err
 	}
-	return runStreaming(env, "cmake", cmakeBuildArgs(t.dir, t.config, jobs, targets, cleanFirst, verbose, passthrough)...)
+	return runStreaming(env, t.p.cmakeBin(), cmakeBuildArgs(t.dir, t.config, jobs, targets, cleanFirst, verbose, passthrough)...)
 }
 
 // hasNinjaTarget probes whether the Ninja build graph defines name (for
@@ -137,9 +137,13 @@ func (t *buildTree) hasNinjaTarget(name string) bool {
 	if !fileExists(filepath.Join(t.dir, "build.ninja")) {
 		return false
 	}
-	ninjaBin, err := exec.LookPath("ninja")
-	if err != nil {
-		return false
+	ninjaBin := t.p.ninjaBin()
+	if !filepath.IsAbs(ninjaBin) {
+		var err error
+		ninjaBin, err = exec.LookPath(ninjaBin)
+		if err != nil {
+			return false
+		}
 	}
 	args := []string{"-C", t.dir}
 	if t.config != "" {

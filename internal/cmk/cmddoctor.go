@@ -44,14 +44,25 @@ func cmdDoctor() error {
 	doctorToolchain(c, p)
 
 	fmt.Println("build tools:")
-	checkTool(c, "cmake")
+	var doctorTools *BuildTools
 	if p.Managed {
-		for _, preset := range p.Cfg.Configure.Presets {
-			if strings.HasPrefix(strings.ToLower(effectiveGenerator(p.Cfg, preset)), "ninja") {
-				checkTool(c, "ninja")
-				break
+		doctorTools = locateBuildTools(p.Cfg, p.Lock)
+		p.tools = doctorTools
+		doctorBuildTool(c, "cmake", p.Cfg.Configure.Version, doctorTools.CMakeBin, doctorTools.CMakeBinDir != "")
+		needNinja := p.Cfg.Configure.Ninja != ""
+		if !needNinja {
+			for _, preset := range p.Cfg.Configure.Presets {
+				if strings.HasPrefix(strings.ToLower(effectiveGenerator(p.Cfg, preset)), "ninja") {
+					needNinja = true
+					break
+				}
 			}
 		}
+		if needNinja {
+			doctorBuildTool(c, "ninja", p.Cfg.Configure.Ninja, doctorTools.NinjaBin, doctorTools.NinjaBinDir != "")
+		}
+	} else {
+		checkTool(c, "cmake")
 	}
 
 	if p.Managed && hasMultiConfigPreset(p.Cfg) {
@@ -100,6 +111,7 @@ func cmdDoctor() error {
 
 	fmt.Println("locations:")
 	fmt.Printf("  store      %s\n", storeDir())
+	fmt.Printf("  tools      %s\n", toolsDir())
 	fmt.Printf("  downloads  %s\n", downloadsDir())
 	if p.Managed {
 		if p.Cfg.Configure.emitUserPresets() {
@@ -139,6 +151,18 @@ func checkTool(c *doctorChecker, name string) {
 	} else {
 		c.fail("%s not found on PATH", name)
 	}
+}
+
+func doctorBuildTool(c *doctorChecker, name, version, path string, installed bool) {
+	if version == "" {
+		checkTool(c, name)
+		return
+	}
+	if installed && path != "" {
+		c.ok("%s %s (%s)", name, version, path)
+		return
+	}
+	c.note("%s %s (not installed yet; will download on next config)", name, version)
 }
 
 func doctorToolchain(c *doctorChecker, p *Project) {

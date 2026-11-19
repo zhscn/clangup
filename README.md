@@ -5,7 +5,7 @@
 ## Highlights
 
 - **Pinned Clang toolchains (`clangup`)** — Install prebuilt Clang + LLVM tools (`clang`, `clang++`, `lld`, `clang-format`, `clang-tidy`, `clang-scan-deps`, `llvm-symbolizer`, `llvm-ar`) from channels such as `default`, `libcxx`, and PGO/BOLT-optimized `libcxx-pgo`, pinned per platform in `cmk.lock`.
-- **Zero-boilerplate CMake workflows (`cmk`)** — Defaults to `Ninja Multi-Config` in `./build` with `Debug` and `Release` configurations, automatic File API staleness checks, C++20/23 module scanner/stdlib wiring (`import std;`), cross-worktree `ccache` sharing, and automatic `LLVM_SYMBOLIZER_PATH` injection for sanitizers.
+- **Zero-boilerplate CMake workflows (`cmk`)** — Defaults to `Ninja Multi-Config` in `./build` with `Debug` and `Release` configurations, optional pinned `cmake.version` / `cmake.ninja` downloads, automatic File API staleness checks, C++20/23 module scanner/stdlib wiring (`import std;`), cross-worktree `ccache` sharing, and automatic `LLVM_SYMBOLIZER_PATH` injection for sanitizers.
 - **Native IDE & editor interop** — Mirrors sanitized `compile_commands.json` for `clangd`, generates `CMakeUserPresets.json` for IDEs, ships an embedded JSON Schema for `cmk.yaml`, and provides a native [CLion integration](integrations/clion-cmk/README.md).
 - **Content-addressed dependency store** — Keep simple CMake dependencies in `FetchContent`/`CPM`, and move heavy or non-CMake third-party builds into project-owned Bash recipes cached in a shared content-addressed store with local `cmk dev` worktree overlays.
 - **Works with plain CMake projects too** — Run `cmk build`, `cmk run`, `cmk test`, `cmk tu`, `cmk fmt`, and `cmk lint` against any existing CMake build directory even without `cmk.yaml`.
@@ -109,7 +109,7 @@ source <(cmk completion zsh)
 | `cmk lint [file...]` | `l` | Lint source files with `clang-tidy` |
 | `cmk add <name>` | `a` | Add an external dependency entry and recipe stub |
 | `cmk sync [dep...]` | `s` | Build external dependencies into the shared store |
-| `cmk update [dep\|toolchain...]` | | Advance floating toolchain or Git dependency pins in `cmk.lock` |
+| `cmk update [dep\|toolchain\|cmake\|ninja...]` | | Advance floating toolchain, managed `cmake`/`ninja`, or Git dependency pins in `cmk.lock` |
 | `cmk dev [dep [path] \| --drop dep]` | | Override dependencies with local working trees via `cmk.dev.yaml` |
 | `cmk clean [--prune \| --all]` | | Inspect, prune, or wipe the shared dependency store |
 | `cmk env` / `cmk shell [-- cmd...]` | | Export or enter the full project build environment |

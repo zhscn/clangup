@@ -586,6 +586,18 @@ func gitCheckout(dir, url, ref, commit string) error {
 // and dev builds so a recipe behaves identically in both.
 func recipeEnv(p *Project, name string, d *DepCfg, tc *Toolchain, prefix, work, src string) ([]string, error) {
 	env := append(recipeBaseEnv(), tc.scriptEnv()...)
+	if dirs := p.tools.managedBinDirs(); len(dirs) > 0 {
+		updated := false
+		for i, kv := range env {
+			if rest, ok := strings.CutPrefix(kv, "PATH="); ok {
+				env[i] = "PATH=" + prependPath(rest, dirs...)
+				updated = true
+			}
+		}
+		if !updated {
+			env = append(env, "PATH="+prependPath(os.Getenv("PATH"), dirs...))
+		}
+	}
 	env = append(env,
 		"CMK_PREFIX="+prefix,
 		"CMK_WORK="+work,

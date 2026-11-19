@@ -133,7 +133,7 @@ cmk config --if-stale               # configure only when missing or inputs chan
 cmk config -- -DENABLE_BENCH=ON     # pass ad-hoc cache defines (preserved across auto-reconfigures)
 ```
 
-You rarely need to run `cmk config` manually after edits: `cmk build`, `cmk run`, `cmk test`, `cmk install`, `cmk tu`, and `cmk lint` inspect the CMake File API reply (`cmakeFiles-v1` + `CONFIGURE_DEPENDS` globs) and `.cmk/injection.json` before running, reconfiguring automatically whenever `CMakeLists.txt`, `cmk.yaml`, `cmk.lock`, or dependency prefixes change.
+You rarely need to run `cmk config` manually after edits: `cmk build`, `cmk run`, `cmk test`, `cmk install`, `cmk tu`, and `cmk lint` inspect the CMake File API reply (`cmakeFiles-v1` + `CONFIGURE_DEPENDS` globs), `CMakeCache.txt` (including `CMAKE_COMMAND`/`CMAKE_MAKE_PROGRAM` when `cmake.version` or `cmake.ninja` is pinned), and `.cmk/injection.json` before running, reconfiguring automatically (with `--fresh` when external `cmake` edits or injection/tool changes are detected) whenever `CMakeLists.txt`, `cmk.yaml`, `cmk.lock`, or dependency prefixes change.
 
 - Pass **`--locked`** in CI to fail instead of writing `cmk.lock`, reconfiguring a stale tree, or accepting local `cmk.dev.yaml` overlays.
 - Pass **`--no-config`** when iterating on source files and you want to skip staleness checks altogether.
@@ -270,8 +270,9 @@ In `CMakeLists.txt`, consume the package with standard `find_package(ZLIB REQUIR
 ### Updating pinned toolchains and dependencies
 
 ```sh
-cmk update                  # re-resolve all floating toolchains and Git refs in cmk.lock
+cmk update                  # re-resolve floating toolchains, managed cmake/ninja, and Git refs in cmk.lock
 cmk update toolchain        # update only the host platform's toolchain pin
+cmk update cmake ninja      # refresh managed cmake and ninja pins in cmk.lock
 cmk update fmt              # update only fmt's Git commit pin
 cmk sync                    # rebuild any dependencies whose identity changed
 ```
@@ -357,7 +358,7 @@ eval "$(cmk env)"
 ### IDE setup, shell completion, and diagnostics
 
 - **`clangd` (VS Code, Neovim, Helix, Zed)** — With `cmake.compile-commands: default` (set by `cmk init`), `cmk` keeps `./compile_commands.json` in the project root pointed at the active configuration. Switch it to another configuration (e.g. `Asan`) via `cmake.compile-commands: Asan` or disable it with `none`.
-- **CMake Presets IDEs** — `cmk config` writes `CMakeUserPresets.json` (gitignored) with full compiler, cache variable, dependency prefix, and environment definitions for every preset (`cmk-<preset>`). Set `cmake.user-presets: false` to disable.
+- **CMake Presets IDEs** — `cmk config` writes `CMakeUserPresets.json` (gitignored) with full compiler, managed `cmakeExecutable`/`CMAKE_MAKE_PROGRAM` (when `cmake.version`/`cmake.ninja` are set), cache variable, dependency prefix, and environment definitions for every preset (`cmk-<preset>`). Set `cmake.user-presets: false` to disable.
 - **CLion** — Install the [CLion `cmk` plugin](../integrations/clion-cmk/README.md) so CLion delegates `cmk-*` preset configuration to `cmk config --if-stale` while keeping native debugging, test runners, and code navigation.
 - **Shell completion** — Enable dynamic tab-completion for presets, multi-config configurations, build directories, CMake targets, translation units, and dependency names:
   ```sh

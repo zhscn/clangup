@@ -17,12 +17,13 @@ import (
 const presetPrefix = "cmk-"
 
 type configurePreset struct {
-	Name           string            `json:"name"`
-	DisplayName    string            `json:"displayName"`
-	Generator      string            `json:"generator"`
-	BinaryDir      string            `json:"binaryDir"`
-	CacheVariables map[string]string `json:"cacheVariables"`
-	Environment    map[string]string `json:"environment,omitempty"`
+	Name            string            `json:"name"`
+	DisplayName     string            `json:"displayName"`
+	Generator       string            `json:"generator"`
+	BinaryDir       string            `json:"binaryDir"`
+	CMakeExecutable string            `json:"cmakeExecutable,omitempty"`
+	CacheVariables  map[string]string `json:"cacheVariables"`
+	Environment     map[string]string `json:"environment,omitempty"`
 }
 type buildPreset struct {
 	Name            string `json:"name"`
@@ -129,13 +130,18 @@ func writeUserPresets(p *Project, tc *Toolchain) error {
 			dir = "${sourceDir}/" + filepath.ToSlash(dir)
 		}
 		prName := presetPrefix + name
+		cmakeExecutable := ""
+		if p.tools != nil && p.tools.CMakeBinDir != "" {
+			cmakeExecutable = p.tools.CMakeBin
+		}
 		out.ConfigurePresets = append(out.ConfigurePresets, configurePreset{
-			Name:           prName,
-			DisplayName:    name + " (cmk)",
-			Generator:      generator,
-			BinaryDir:      dir,
-			CacheVariables: cache,
-			Environment:    presetEnv,
+			Name:            prName,
+			DisplayName:     name + " (cmk)",
+			Generator:       generator,
+			BinaryDir:       dir,
+			CMakeExecutable: cmakeExecutable,
+			CacheVariables:  cache,
+			Environment:     presetEnv,
 		})
 		if isMultiConfig(p.Cfg, pr) {
 			for _, configuration := range configuredConfigurations(p.Cfg) {

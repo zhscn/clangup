@@ -130,7 +130,8 @@ func cmdTU(names []string, options variantOptions) error {
 	if err != nil {
 		return err
 	}
-	list := exec.Command("ninja", append(append([]string{}, ninjaBase...), "-t", "targets", "all")...)
+	ninjaBin := tree.p.ninjaBin()
+	list := exec.Command(ninjaBin, append(append([]string{}, ninjaBase...), "-t", "targets", "all")...)
 	list.Env = env
 	out, err := list.Output()
 	if err != nil {
@@ -150,7 +151,7 @@ func cmdTU(names []string, options variantOptions) error {
 
 	var sources map[string][]string
 	if len(names) > 0 {
-		db := exec.Command("ninja", append(append([]string{}, ninjaBase...), "-t", "compdb")...)
+		db := exec.Command(ninjaBin, append(append([]string{}, ninjaBase...), "-t", "compdb")...)
 		db.Env = env
 		data, err := db.Output()
 		if err != nil {
@@ -225,7 +226,7 @@ func cmdTU(names []string, options variantOptions) error {
 		ninjaArgs = append(ninjaArgs, "-v")
 	}
 	ninjaArgs = append(ninjaArgs, selected...)
-	return runStreaming(env, "ninja", ninjaArgs...)
+	return runStreaming(env, ninjaBin, ninjaArgs...)
 }
 
 func cmakeBuildArgs(dir, cfgName string, jobs int, targets []string, cleanFirst, verbose bool, rest []string) []string {

@@ -80,6 +80,8 @@ type PresetCfg struct {
 }
 
 type ConfigureCfg struct {
+	Version              string                `yaml:"version"`
+	Ninja                string                `yaml:"ninja"`
 	Generator            string                `yaml:"generator"`
 	DefaultPreset        string                `yaml:"default-preset"`
 	DefaultConfiguration string                `yaml:"default-configuration"`
@@ -134,6 +136,7 @@ var presetNameRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.-]*$`)
 var cmakeCacheNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 var toolchainPlatformRe = regexp.MustCompile(`^(linux|macos)-(x86_64|aarch64)$`)
 var sha256Re = regexp.MustCompile(`^[0-9a-f]{64}$`)
+var toolVersionRe = regexp.MustCompile(`^[0-9]+(?:\.[0-9]+)*$`)
 
 func loadConfig(root string) (*Config, bool, error) {
 	cfg := &Config{
@@ -333,6 +336,12 @@ func validateConfig(cfg *Config, root string) error {
 		if selector == "" {
 			return fmt.Errorf("toolchain.%s: selector is empty", platform)
 		}
+	}
+	if cfg.Configure.Version != "" && !toolVersionRe.MatchString(cfg.Configure.Version) {
+		return fmt.Errorf("cmake.version: invalid version %q (expected dotted numbers like 4.5.0)", cfg.Configure.Version)
+	}
+	if cfg.Configure.Ninja != "" && !toolVersionRe.MatchString(cfg.Configure.Ninja) {
+		return fmt.Errorf("cmake.ninja: invalid version %q (expected dotted numbers like 1.13.2)", cfg.Configure.Ninja)
 	}
 	if err := validateDeps(cfg); err != nil {
 		return err

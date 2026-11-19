@@ -39,5 +39,10 @@ func cmdTest(patterns []string, options testOptions) error {
 		ctestArgs = append(ctestArgs, "--verbose")
 	}
 	ctestArgs = append(ctestArgs, options.CTestArgs...)
-	return runStreaming(tree.p.commandEnv(), "ctest", ctestArgs...)
+	if tree.p.Managed {
+		if _, err := tree.p.buildTools(); err != nil {
+			return err
+		}
+	}
+	return runStreaming(tree.p.commandEnv(), tree.p.ctestBin(), ctestArgs...)
 }

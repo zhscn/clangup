@@ -32,6 +32,8 @@ type Project struct {
 	devAffected map[string]bool
 	// tc caches the resolved toolchain (see Project.toolchain).
 	tc *Toolchain
+	// tools caches the resolved cmake/ctest/ninja executables (see Project.buildTools).
+	tools *BuildTools
 }
 
 // devOverrides is the nil-safe view of the override map (tests build
@@ -141,6 +143,55 @@ func (p *Project) toolchain() (*Toolchain, error) {
 
 func (p *Project) toolchainSelector() string {
 	return p.Cfg.Toolchain.selectorFor(runtime.GOOS, runtime.GOARCH)
+}
+
+// buildTools resolves the project's managed cmake/ninja once per invocation,
+// persisting any updated lock pin on first resolution. Foreign projects or
+// projects without cmake.version/cmake.ninja resolve tools from PATH.
+func (p *Project) buildTools() (*BuildTools, error) {
+	if p.tools != nil {
+		return p.tools, nil
+	}
+	if !p.Managed {
+		bt, _, err := resolveBuildTools(nil, nil)
+		if err != nil {
+			return nil, err
+		}
+		p.tools = bt
+		return bt, nil
+	}
+	bt, dirty, err := resolveBuildTools(p.Cfg, p.Lock)
+	if err != nil {
+		return nil, err
+	}
+	if dirty {
+		if err := saveLock(p.Root, p.Lock); err != nil {
+			return nil, err
+		}
+	}
+	p.tools = bt
+	return bt, nil
+}
+
+func (p *Project) cmakeBin() string {
+	if p.tools != nil {
+		return p.tools.cmakeBin()
+	}
+	return "cmake"
+}
+
+func (p *Project) ctestBin() string {
+	if p.tools != nil {
+		return p.tools.ctestBin()
+	}
+	return "ctest"
+}
+
+func (p *Project) ninjaBin() string {
+	if p.tools != nil {
+		return p.tools.ninjaBin()
+	}
+	return "ninja"
 }
 
 // tool resolves a toolchain program such as clang-format or clang-tidy.
@@ -390,6 +441,13 @@ func (p *Project) commandEnv(layers ...map[string]string) []string {
 			merged[k] = expandVars(val, vars)
 		}
 	}
+	if dirs := p.tools.managedBinDirs(); len(dirs) > 0 {
+		basePath := os.Getenv("PATH")
+		if existing, ok := merged["PATH"]; ok {
+			basePath = existing
+		}
+		merged["PATH"] = prependPath(basePath, dirs...)
+	}
 	for k, val := range merged {
 		env = append(env, k+"="+val)
 	}
@@ -405,6 +463,9 @@ func (p *Project) commandEnv(layers ...map[string]string) []string {
 func (p *Project) buildEnv(layers ...map[string]string) ([]string, error) {
 	if !p.Managed {
 		return p.commandEnv(layers...), nil
+	}
+	if _, err := p.buildTools(); err != nil {
+		return nil, err
 	}
 	tc, err := p.toolchain()
 	if err != nil {

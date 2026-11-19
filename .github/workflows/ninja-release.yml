@@ -1,0 +1,225 @@
+name: ninja release
+
+on:
+  workflow_dispatch:
+    inputs:
+      ninja_version:
+        description: Upstream Ninja version (without leading v)
+        required: true
+        default: "1.13.2"
+        type: string
+      ninja_sha256:
+        description: SHA-256 of ninja-build/ninja v<version>.tar.gz source archive
+        required: true
+        default: "974d6b2f4eeefa25625d34da3cb36bdcebe7fbce40f4c16ac0835fd1c0cbae17"
+        type: string
+      linux_toolchain:
+        description: clangup toolchain selector used on Linux (statically links libc++)
+        required: false
+        default: "libcxx"
+        type: string
+      macos_toolchain:
+        description: clangup toolchain selector used on macOS
+        required: false
+        default: "libcxx-pgo"
+        type: string
+      publish:
+        description: Upload and publish to R2
+        required: false
+        default: true
+        type: boolean
+
+concurrency:
+  group: ninja-release
+  cancel-in-progress: false
+
+env:
+  BUILDER_IMAGE: ghcr.io/zhscn/clangup-builder:1
+
+jobs:
+  linux:
+    name: build ${{ matrix.triple }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - triple: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+            verify_image: quay.io/centos/centos:7
+            max_glibc_minor: "17"
+          - triple: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            verify_image: quay.io/centos/centos:8
+            max_glibc_minor: "28"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build clangup binary
+        run: |
+          mkdir -p out/bin
+          CGO_ENABLED=0 go build -o out/bin/clangup ./cmd/clangup
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build static-libc++ ninja in builder container
+        env:
+          NINJA_VERSION: ${{ inputs.ninja_version }}
+          NINJA_SHA256: ${{ inputs.ninja_sha256 }}
+          TOOLCHAIN_SELECTOR: ${{ inputs.linux_toolchain }}
+          TRIPLE: ${{ matrix.triple }}
+        run: |
+          mkdir -p "out/targets/${TRIPLE}"
+          docker run --rm \
+            -v "$PWD:/work" \
+            -w /work \
+            -e NINJA_VERSION \
+            -e NINJA_SHA256 \
+            -e TOOLCHAIN_SELECTOR \
+            -e TRIPLE \
+            -e CLANGUP_HOME=/tmp/clangup-home \
+            -e CLANGUP_CACHE_HOME=/tmp/clangup-cache \
+            -e CLANGUP_CONFIG_HOME=/tmp/clangup-config \
+            "$BUILDER_IMAGE" \
+            bash -euxo pipefail -c '
+              /work/out/bin/clangup install "$TOOLCHAIN_SELECTOR"
+              prefix="$(/work/out/bin/clangup path "$TOOLCHAIN_SELECTOR")"
+              mkdir -p /tmp/ninja-build /tmp/ninja-stage/bin
+              cd /tmp/ninja-build
+              curl -fsSL -o "v${NINJA_VERSION}.tar.gz" "https://github.com/ninja-build/ninja/archive/refs/tags/v${NINJA_VERSION}.tar.gz"
+              echo "${NINJA_SHA256}  v${NINJA_VERSION}.tar.gz" | sha256sum -c -
+              tar -xf "v${NINJA_VERSION}.tar.gz"
+              cd "ninja-${NINJA_VERSION}"
+              CXX="${prefix}/bin/clang++" CXXFLAGS="-O2" python3 configure.py --bootstrap
+              "${prefix}/bin/llvm-strip" ninja
+              install -m 0755 ninja /tmp/ninja-stage/bin/ninja
+              tar --sort=name --owner=0 --group=0 --numeric-owner -C /tmp/ninja-stage -cf - bin/ninja \
+                | zstd -19 -T0 -o "/work/out/targets/${TRIPLE}/ninja.tar.zst"
+            '
+      - name: Verify binary on baseline image
+        env:
+          NINJA_VERSION: ${{ inputs.ninja_version }}
+          TRIPLE: ${{ matrix.triple }}
+          MAX_GLIBC_MINOR: ${{ matrix.max_glibc_minor }}
+        run: |
+          mkdir -p out/verify
+          zstd -dc "out/targets/${TRIPLE}/ninja.tar.zst" | tar -C out/verify -xf -
+          docker run --rm -v "$PWD/out/verify:/verify:ro" "${{ matrix.verify_image }}" bash -euxo pipefail -c "
+            ver=\"\$(/verify/bin/ninja --version)\"
+            test \"\$ver\" = \"${NINJA_VERSION}\"
+            ldd /verify/bin/ninja | tee /tmp/ninja.ldd
+            if grep -E 'libstdc[+][+]|libc[+][+]' /tmp/ninja.ldd; then
+              echo 'forbidden dynamic C++ runtime dependency' >&2
+              exit 1
+            fi
+          "
+          python3 - <<'PY'
+          import os, re, subprocess, sys
+          max_minor = int(os.environ["MAX_GLIBC_MINOR"])
+          out = subprocess.check_output(["readelf", "-V", "out/verify/bin/ninja"], text=True)
+          versions = sorted(set(re.findall(r"GLIBC_([0-9]+)\.([0-9]+)", out)))
+          for maj, mn in versions:
+              if (int(maj), int(mn)) > (2, max_minor):
+                  sys.exit(f"GLIBC_{maj}.{mn} exceeds baseline 2.{max_minor}")
+          print("verified GLIBC symbols:", [f"{a}.{b}" for a, b in versions])
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ninja-${{ matrix.triple }}
+          path: out/targets/${{ matrix.triple }}/ninja.tar.zst
+          if-no-files-found: error
+          retention-days: 7
+
+  macos:
+    name: build aarch64-apple-darwin
+    runs-on: macos-15
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: brew install zstd gnu-tar
+      - name: Build ninja on macOS
+        env:
+          NINJA_VERSION: ${{ inputs.ninja_version }}
+          NINJA_SHA256: ${{ inputs.ninja_sha256 }}
+          TOOLCHAIN_SELECTOR: ${{ inputs.macos_toolchain }}
+          MACOSX_DEPLOYMENT_TARGET: "13.0"
+        run: |
+          mkdir -p out/bin out/targets/aarch64-apple-darwin /tmp/ninja-build /tmp/ninja-stage/bin
+          go build -o out/bin/clangup ./cmd/clangup
+          ./out/bin/clangup install "$TOOLCHAIN_SELECTOR"
+          prefix="$(./out/bin/clangup path "$TOOLCHAIN_SELECTOR")"
+          cd /tmp/ninja-build
+          curl -fsSL -o "v${NINJA_VERSION}.tar.gz" "https://github.com/ninja-build/ninja/archive/refs/tags/v${NINJA_VERSION}.tar.gz"
+          echo "${NINJA_SHA256}  v${NINJA_VERSION}.tar.gz" | shasum -a 256 -c -
+          tar -xf "v${NINJA_VERSION}.tar.gz"
+          cd "ninja-${NINJA_VERSION}"
+          CXX="${prefix}/bin/clang++" CXXFLAGS="-O2 -mmacosx-version-min=13.0" python3 configure.py --bootstrap
+          strip -x ninja
+          test "$(./ninja --version)" = "${NINJA_VERSION}"
+          otool -L ninja
+          install -m 0755 ninja /tmp/ninja-stage/bin/ninja
+          gtar --sort=name --owner=0 --group=0 --numeric-owner -C /tmp/ninja-stage -cf - bin/ninja \
+            | zstd -19 -T0 -o "$GITHUB_WORKSPACE/out/targets/aarch64-apple-darwin/ninja.tar.zst"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ninja-aarch64-apple-darwin
+          path: out/targets/aarch64-apple-darwin/ninja.tar.zst
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [linux, macos]
+    if: ${{ inputs.publish }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ninja-x86_64-unknown-linux-gnu
+          path: out/targets/x86_64-unknown-linux-gnu
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ninja-aarch64-unknown-linux-gnu
+          path: out/targets/aarch64-unknown-linux-gnu
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ninja-aarch64-apple-darwin
+          path: out/targets/aarch64-apple-darwin
+      - name: Publish ninja release
+        env:
+          UPLOAD_ENDPOINT: ${{ vars.CLANGUP_UPLOAD_ENDPOINT }}
+          NINJA_VERSION: ${{ inputs.ninja_version }}
+        run: |
+          token="$(curl -fsSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=clangup-r2-uploader" | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+          python3 tools/publish.py \
+            --tool ninja \
+            --version "$NINJA_VERSION" \
+            --targets out/targets \
+            --output out/release \
+            --endpoint "$UPLOAD_ENDPOINT" \
+            --token "$token"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ninja-release
+          path: out/release/release.json
+          if-no-files-found: error
+          retention-days: 14

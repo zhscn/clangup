@@ -22,6 +22,9 @@ func cmdSync(names []string, force bool) error {
 		fmt.Fprintln(os.Stderr, "cmk: no dependencies in cmk.yaml")
 		return nil
 	}
+	if _, err := p.buildTools(); err != nil {
+		return err
+	}
 	tc, err := p.toolchain()
 	if err != nil {
 		return err
@@ -47,7 +50,7 @@ func cmdUpdate(names []string) error {
 	all := len(names) == 0
 	var depNames []string
 	for _, n := range names {
-		if n == "toolchain" {
+		if n == "toolchain" || n == "cmake" || n == "ninja" {
 			continue
 		}
 		if _, ok := p.Cfg.Deps[n]; !ok {
@@ -80,6 +83,36 @@ func cmdUpdate(names []string) error {
 			}
 			dirty = dirty || tcDirty
 			fmt.Fprintf(os.Stderr, "cmk: toolchain pinned to %s\n", pin.Selector)
+		}
+	}
+	if all || slices.Contains(names, "cmake") {
+		pin := lk.toolFor("cmake", runtime.GOOS, runtime.GOARCH)
+		if !pin.empty() {
+			*pin = LockTool{}
+			dirty = true
+		}
+		if p.Cfg.Configure.Version != "" {
+			_, toolDirty, err := ensureCMake(p.Cfg.Configure.Version, lk, runtime.GOOS, runtime.GOARCH)
+			if err != nil {
+				return err
+			}
+			dirty = dirty || toolDirty
+			fmt.Fprintf(os.Stderr, "cmk: cmake pinned to %s\n", p.Cfg.Configure.Version)
+		}
+	}
+	if all || slices.Contains(names, "ninja") {
+		pin := lk.toolFor("ninja", runtime.GOOS, runtime.GOARCH)
+		if !pin.empty() {
+			*pin = LockTool{}
+			dirty = true
+		}
+		if p.Cfg.Configure.Ninja != "" {
+			_, toolDirty, err := ensureNinja(p.Cfg.Configure.Ninja, lk, runtime.GOOS, runtime.GOARCH)
+			if err != nil {
+				return err
+			}
+			dirty = dirty || toolDirty
+			fmt.Fprintf(os.Stderr, "cmk: ninja pinned to %s\n", p.Cfg.Configure.Ninja)
 		}
 	}
 

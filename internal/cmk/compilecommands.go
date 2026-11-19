@@ -377,8 +377,11 @@ func (t *buildTree) prepareLintModuleDeps(lintDBDir string, selectedFiles []stri
 	if !fileExists(filepath.Join(t.dir, "build.ninja")) {
 		return nil
 	}
-	if _, err := exec.LookPath("ninja"); err != nil {
-		return nil
+	ninjaBin := t.p.ninjaBin()
+	if !filepath.IsAbs(ninjaBin) {
+		if _, err := exec.LookPath(ninjaBin); err != nil {
+			return nil
+		}
 	}
 	data, err := os.ReadFile(filepath.Join(lintDBDir, "compile_commands.json"))
 	if err != nil {
@@ -502,10 +505,11 @@ func (t *buildTree) runNinjaTargets(targets []string, jobs int, verbose bool) er
 	}
 	args = append(args, "-j", fmt.Sprint(jobs))
 	args = append(args, targets...)
+	ninjaBin := t.p.ninjaBin()
 	if verbose {
-		return runStreaming(env, "ninja", args...)
+		return runStreaming(env, ninjaBin, args...)
 	}
-	cmd := exec.Command("ninja", args...)
+	cmd := exec.Command(ninjaBin, args...)
 	cmd.Env = env
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%w\n%s", err, strings.TrimSpace(string(out)))

@@ -16,10 +16,17 @@ const lockFileName = "cmk.lock"
 // Lock pins the resolved inputs that cmk.yaml leaves floating: each
 // platform's exact toolchain release, archive sha256 digests, and git commits.
 type Lock struct {
-	Version    int                       `yaml:"version"`
-	Toolchains map[string]*LockToolchain `yaml:"toolchains,omitempty"`
-	Deps       map[string]*LockDep       `yaml:"dependencies,omitempty"`
+	Version    int                             `yaml:"version"`
+	Toolchains map[string]*LockToolchain       `yaml:"toolchains,omitempty"`
+	Tools      map[string]map[string]*LockTool `yaml:"tools,omitempty"`
+	Deps       map[string]*LockDep             `yaml:"dependencies,omitempty"`
 	dirty      bool
+}
+
+type LockTool struct {
+	Version string `yaml:"version,omitempty"`
+	URL     string `yaml:"url,omitempty"`
+	SHA256  string `yaml:"sha256,omitempty"`
 }
 
 type LockToolchain struct {
@@ -62,6 +69,9 @@ func loadLock(root string) (*Lock, error) {
 	if lk.Toolchains == nil {
 		lk.Toolchains = map[string]*LockToolchain{}
 	}
+	if lk.Tools == nil {
+		lk.Tools = map[string]map[string]*LockTool{}
+	}
 	if lk.Deps == nil {
 		lk.Deps = map[string]*LockDep{}
 	}
@@ -78,6 +88,16 @@ func saveLock(root string, lk *Lock) error {
 	for name, pin := range lk.Toolchains {
 		if pin == nil || pin.empty() {
 			delete(lk.Toolchains, name)
+		}
+	}
+	for tool, platforms := range lk.Tools {
+		for plat, pin := range platforms {
+			if pin == nil || pin.empty() {
+				delete(platforms, plat)
+			}
+		}
+		if len(platforms) == 0 {
+			delete(lk.Tools, tool)
 		}
 	}
 	var buf bytes.Buffer
@@ -99,6 +119,35 @@ func saveLock(root string, lk *Lock) error {
 
 func (pin LockToolchain) empty() bool {
 	return pin.Selector == "" && pin.Target == "" && pin.ManifestSHA256 == "" && pin.ArtifactSHA256 == ""
+}
+
+func (pin LockTool) empty() bool {
+	return pin.Version == "" && pin.URL == "" && pin.SHA256 == ""
+}
+
+func (lk *Lock) toolFor(tool, goos, goarch string) *LockTool {
+	if lk.Tools == nil {
+		lk.Tools = map[string]map[string]*LockTool{}
+	}
+	if lk.Tools[tool] == nil {
+		lk.Tools[tool] = map[string]*LockTool{}
+	}
+	plat := hostPlatform(goos, goarch)
+	if lk.Tools[tool][plat] == nil {
+		lk.Tools[tool][plat] = &LockTool{}
+	}
+	return lk.Tools[tool][plat]
+}
+
+func (lk *Lock) toolPin(tool, goos, goarch string) *LockTool {
+	if lk == nil || lk.Tools == nil || lk.Tools[tool] == nil {
+		return nil
+	}
+	pin := lk.Tools[tool][hostPlatform(goos, goarch)]
+	if pin == nil || pin.empty() {
+		return nil
+	}
+	return pin
 }
 
 // hostPlatform and platformForTarget are the platform keys cmk.lock is
