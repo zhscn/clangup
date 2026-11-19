@@ -1,10 +1,10 @@
 package cmk
 
 import (
+	_ "embed"
 	"fmt"
 	"maps"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 )
@@ -52,7 +52,11 @@ func writeRustCMakeConfig(projectRoot, buildDir, name string, c *RustCrateCfg, c
 	if c.CxxBridge {
 		fmt.Fprintln(&script, `set(ENV{CXXBRIDGE_OUT_DIR} "${out}/cargo-target/cxxbridge")`)
 	}
-	args := []string{cargo, "build", "--lib", "--manifest-path", manifest, "--package", rustPackageName(name, c)}
+	if c.LibName != "" {
+		fmt.Fprintf(&script, "set(expected_lib %s)\n", cmakeLiteral(strings.ReplaceAll(c.LibName, "-", "_")))
+	}
+	fmt.Fprintf(&script, "set(cargo_dir %s)\n", cmakeLiteral(filepath.Dir(manifest)))
+	args := []string{cargo, "build", "--message-format=json", "--lib", "--manifest-path", manifest, "--package", rustPackageName(name, c)}
 	if c.NoDefaultFeatures {
 		args = append(args, "--no-default-features")
 	}
@@ -60,18 +64,21 @@ func writeRustCMakeConfig(projectRoot, buildDir, name string, c *RustCrateCfg, c
 		args = append(args, "--features", strings.Join(c.Features, ","))
 	}
 	if c.Target != "" {
-		args = append(args, "--target", c.Target)
+		target := c.Target
+		if strings.HasSuffix(target, ".json") && !filepath.IsAbs(target) {
+			target = filepath.Join(projectRoot, target)
+		}
+		args = append(args, "--target", target)
 	}
+	fmt.Fprintln(&script, `file(MAKE_DIRECTORY "${out}")`)
 	fmt.Fprint(&script, "execute_process(COMMAND")
 	for _, arg := range args {
 		fmt.Fprintf(&script, " %s", cmakeLiteral(arg))
 	}
-	fmt.Fprintf(&script, ` --target-dir "${out}/cargo-target" ${profile_arg}
-  WORKING_DIRECTORY %s RESULT_VARIABLE status)
-if(NOT status STREQUAL "0")
-  message(FATAL_ERROR "Cargo build failed (${status})")
-endif()
-`, cmakeLiteral(projectRoot))
+	fmt.Fprint(&script, ` --target-dir "${out}/cargo-target" ${profile_arg}
+  WORKING_DIRECTORY "${cargo_dir}" OUTPUT_FILE "${out}/cargo.jsonl" RESULT_VARIABLE status)
+`)
+	script.WriteString(rustCollectCargoOutputs)
 	if c.CxxBridge {
 		script.WriteString(rustStageBridge)
 	}
@@ -80,14 +87,6 @@ endif()
 		return err
 	}
 
-	lib := "lib" + rustLibName(name, c) + ".a"
-	if runtime.GOOS == "windows" && !strings.HasSuffix(c.Target, "-gnu") {
-		lib = rustLibName(name, c) + ".lib"
-	}
-	targetDir := ""
-	if c.Target != "" {
-		targetDir = "/" + strings.TrimSuffix(filepath.Base(c.Target), ".json")
-	}
 	cargoTarget := rustCargoTargetName(cmakeName)
 	publicTarget := cmakeName + "::" + cmakeName
 	archiveTarget := publicTarget
@@ -102,17 +101,19 @@ if(NOT TARGET %[1]s)
     message(FATAL_ERROR "cmk Rust packages require CMake 3.20 or newer")
   endif()
   set(_cmk_rust_root %[2]s)
-  set(_cmk_rust_artifacts %[3]s)
-  set(_cmk_rust_lib %[4]s)
   set(_cmk_rust_release "$<CONFIG:Release,RelWithDebInfo,MinSizeRel>")
-  set(_cmk_rust_profile "$<IF:${_cmk_rust_release},release,debug>")
   set(_cmk_rust_out "${_cmk_rust_root}/config-$<CONFIG>")
-  add_custom_target(%[5]s
-    COMMAND "${CMAKE_COMMAND}" "-Dout=${_cmk_rust_out}"
-      "-Drelease=${_cmk_rust_release}" "-Ddebug_info=$<CONFIG:RelWithDebInfo>" -P %[6]s
-    BYPRODUCTS "${_cmk_rust_out}/${_cmk_rust_artifacts}/${_cmk_rust_profile}/${_cmk_rust_lib}"
+  if(MSVC)
+    set(_cmk_rust_lib rust.lib)
+  else()
+    set(_cmk_rust_lib librust.a)
+  endif()
+  add_custom_target(%[3]s
+    COMMAND "${CMAKE_COMMAND}" "-Dout=${_cmk_rust_out}" "-Darchive=${_cmk_rust_lib}"
+      "-Drelease=${_cmk_rust_release}" "-Ddebug_info=$<CONFIG:RelWithDebInfo>" -P %[4]s
+    BYPRODUCTS "${_cmk_rust_out}/${_cmk_rust_lib}"
 `, publicTarget, cmakeLiteral(filepath.ToSlash(filepath.Join(rustRootDir(buildDir), "crate-"+name))),
-		cmakeLiteral("cargo-target"+targetDir), cmakeLiteral(lib), cargoTarget, cmakeLiteral(filepath.ToSlash(scriptPath)))
+		cargoTarget, cmakeLiteral(filepath.ToSlash(scriptPath)))
 	if c.CxxBridge {
 		fmt.Fprintln(&config, `      "${_cmk_rust_out}/bridge.cc" "${_cmk_rust_out}/bridge-headers.hh"`)
 	}
@@ -120,16 +121,11 @@ if(NOT TARGET %[1]s)
   add_library(%[1]s STATIC IMPORTED GLOBAL)
   add_dependencies(%[1]s %[2]s)
   set_property(TARGET %[1]s PROPERTY IMPORTED_LOCATION
-    "${_cmk_rust_root}/config-/${_cmk_rust_artifacts}/debug/${_cmk_rust_lib}")
+    "${_cmk_rust_root}/config-/${_cmk_rust_lib}")
   foreach(_cmk_rust_config IN LISTS CMAKE_CONFIGURATION_TYPES CMAKE_BUILD_TYPE)
     string(TOUPPER "${_cmk_rust_config}" _cmk_rust_upper)
-    if(_cmk_rust_upper MATCHES "^(RELEASE|RELWITHDEBINFO|MINSIZEREL)$")
-      set(_cmk_rust_dir release)
-    else()
-      set(_cmk_rust_dir debug)
-    endif()
     set_property(TARGET %[1]s PROPERTY "IMPORTED_LOCATION_${_cmk_rust_upper}"
-      "${_cmk_rust_root}/config-${_cmk_rust_config}/${_cmk_rust_artifacts}/${_cmk_rust_dir}/${_cmk_rust_lib}")
+      "${_cmk_rust_root}/config-${_cmk_rust_config}/${_cmk_rust_lib}")
     set_property(TARGET %[1]s PROPERTY "MAP_IMPORTED_CONFIG_${_cmk_rust_upper}" "${_cmk_rust_config}")
   endforeach()
 `, archiveTarget, cargoTarget)
@@ -168,6 +164,9 @@ if(NOT TARGET %[1]s)
 	fmt.Fprintf(&config, "endif()\nset(%s_FOUND TRUE)\n", cmakeName)
 	return writeIfChanged(filepath.Join(cfgDir, cmakeName+"Config.cmake"), []byte(config.String()))
 }
+
+//go:embed rust_collect_cargo.cmake
+var rustCollectCargoOutputs string
 
 const rustLinkerPluginEnv = `  set(ENV{CARGO_PROFILE_RELEASE_LTO} off)
   foreach(key IN ITEMS RUSTFLAGS CFLAGS CXXFLAGS)

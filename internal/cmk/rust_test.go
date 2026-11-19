@@ -44,9 +44,6 @@ rust:
 	if crate == nil {
 		t.Fatal("expected rust-cli crate")
 	}
-	if got := rustLibName("rust-cli", crate); got != "rust_cli" {
-		t.Fatalf("rustLibName = %q, want rust_cli", got)
-	}
 	if got := rustCMakeName("rust-cli", crate); got != "rust_cli" {
 		t.Fatalf("rustCMakeName = %q, want rust_cli", got)
 	}

@@ -22,6 +22,10 @@ func TestIntegrationRustCMakeTargets(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Chdir(root)
+	host := detectRustHostTriple(root, os.Environ())
+	if host == "" {
+		t.Fatal("could not determine the Rust host target")
+	}
 	write := func(name, content string) {
 		t.Helper()
 		if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
@@ -48,7 +52,9 @@ rust:
   plain:
     manifest: crate/Cargo.toml
     package: example
+    lib-name: facade
 `)
+	write("crate/.cargo/config.toml", "[build]\ntarget = \""+host+"\"\n")
 	write("CMakeLists.txt", `cmake_minimum_required(VERSION 3.20)
 project(rust_targets LANGUAGES CXX)
 find_package(example REQUIRED)
@@ -74,6 +80,7 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
+name = "facade"
 crate-type = ["staticlib"]
 `)
 	write("crate/src/lib.rs", "#[no_mangle] pub extern \"C\" fn rust_value() -> i32 { 1 }\n")
@@ -155,7 +162,7 @@ extern "C" int bridge_value() { return rust_value(); }
 	checkApp("Release", "22")
 	checkApp("RelWithDebInfo", "22")
 	for _, config := range []string{"Release", "RelWithDebInfo"} {
-		if _, err := os.Stat(filepath.Join(rustDir, "config-"+config, "cargo-target", "release")); err != nil {
+		if _, err := os.Stat(filepath.Join(rustDir, "config-"+config, "cargo-target", host, "release")); err != nil {
 			t.Fatal(err)
 		}
 	}

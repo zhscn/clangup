@@ -69,13 +69,6 @@ func rustPackageName(name string, c *RustCrateCfg) string {
 	return name
 }
 
-func rustLibName(name string, c *RustCrateCfg) string {
-	if c != nil && c.LibName != "" {
-		return strings.ReplaceAll(c.LibName, "-", "_")
-	}
-	return strings.ReplaceAll(rustPackageName(name, c), "-", "_")
-}
-
 func rustRootDir(buildDir string) string {
 	return filepath.Join(buildDir, "cmk-rust")
 }
@@ -100,13 +93,13 @@ func rustStampEntries(p *Project) []string {
 	if len(p.Cfg.Rust) == 0 {
 		return nil
 	}
-	out := []string{"rust:cmake-build-rules=1"}
+	out := []string{"rust:cmake-build-rules=2"}
 	for _, name := range sortedRustNames(p.Cfg.Rust) {
 		c := p.Cfg.Rust[name]
 		out = append(out,
 			fmt.Sprintf("rust:%s:manifest=%s", name, c.Manifest),
 			fmt.Sprintf("rust:%s:pkg=%s", name, rustPackageName(name, c)),
-			fmt.Sprintf("rust:%s:lib=%s", name, rustLibName(name, c)),
+			fmt.Sprintf("rust:%s:lib=%s", name, c.LibName),
 			fmt.Sprintf("rust:%s:cmake=%s", name, rustCMakeName(name, c)),
 			fmt.Sprintf("rust:%s:target=%s", name, c.Target),
 			fmt.Sprintf("rust:%s:cxxbridge=%v", name, c.CxxBridge),

@@ -368,7 +368,7 @@
         "lib-name": {
           "type": "string",
           "minLength": 1,
-          "description": "Staticlib base name without lib prefix or .a/.lib suffix (defaults to package name with '-' replaced by '_')."
+          "description": "Optional expected Rust library target name. When omitted, use the staticlib reported by Cargo."
         },
         "cmake-name": {
           "type": "string",
@@ -387,7 +387,7 @@
         },
         "target": {
           "type": "string",
-          "description": "Explicit Rust target triple passed to --target."
+          "description": "Explicit Rust target passed to --target. When omitted, use Cargo's target configuration."
         },
         "cxxbridge": {
           "type": "boolean",

@@ -201,15 +201,15 @@ In-tree Rust `staticlib` crates managed directly by `cmk`. Crate keys match `^[A
 | --- | --- | --- |
 | `manifest` | `string` (required) | Path to `Cargo.toml` (project-relative or absolute). |
 | `package` | `string` | Cargo package name passed to `--package` (defaults to `<name>`). |
-| `lib-name` | `string` | Staticlib base name without `lib` prefix or `.a`/`.lib` suffix (defaults to `package` with `-` replaced by `_`). |
+| `lib-name` | `string` | Optional expected Rust library target name. cmk uses the staticlib reported by Cargo and checks it against this name when supplied. |
 | `cmake-name` | `string` | CMake package and target name exported as `<cmake-name>::<cmake-name>` (defaults to `<name>`). |
 | `features` | `string[]` | Cargo features passed to `--features`. |
-| `no-default-features` | `bool` | Pass `--no-default-features` to `cargo build` (default `false`). |
-| `target` | `string` | Explicit Rust target triple passed to `--target`. |
+| `no-default-features` | `bool` | Pass `--no-default-features` to Cargo (default `false`). |
+| `target` | `string` | Explicit Rust target passed to `--target`. When omitted, Cargo chooses the target using its normal configuration. |
 | `cxxbridge` | `bool` | Set `CXXBRIDGE_OUT_DIR` when invoking Cargo. The crate build script writes `bridge.cc` and an `include/` tree there. The exported target compiles the bridge and exposes its headers (default `false`). |
 | `cxxbridge-includes` | `string[]` | Optional include directories (project-relative or absolute) passed privately when compiling `bridge.cc` (only needed if `#[cxx::bridge]` contains `extern "C++"` includes). |
 | `lto` | `string` | LTO mode for release-profile builds (`Release`, `RelWithDebInfo`, `MinSizeRel`): `off` (default), `thin`, `fat`, or `linker-plugin` (cross-language ThinLTO via `-Clinker-plugin-lto` + `CFLAGS`/`CXXFLAGS` `-flto=thin` for `lld`). Ignored in `Debug`/custom configs. |
-| `env` | `map<string, string>` | Extra environment variables passed to `cargo build` and folded into the configure stamp. |
+| `env` | `map<string, string>` | Extra environment variables passed to Cargo and folded into the configure stamp. |
 
 The generated package requires CMake 3.20 or newer. During `cmk config`,
 cmk probes Rust's native runtime link requirements for the selected target and
@@ -219,8 +219,12 @@ It passes that directory to CMake as `<cmake-name>_DIR` and records it in
 
 `find_package(<cmake-name> REQUIRED)` makes the `<cmake-name>::<cmake-name>`
 target available. Building a target that links it runs Cargo in the configured
-C/C++ toolchain environment. Cargo handles incremental rebuilds and puts its
-outputs in `<build-dir>/cmk-rust/crate-<name>/config-<configuration>/cargo-target`.
+C/C++ toolchain environment, starting in the directory containing the configured
+manifest so Cargo can read the applicable `.cargo/config.toml`. Cargo handles
+incremental rebuilds and puts its outputs in
+`<build-dir>/cmk-rust/crate-<name>/config-<configuration>/cargo-target`.
+The generated build rule stages the staticlib reported by Cargo.
+
 `Release`, `RelWithDebInfo` and `MinSizeRel` use the release profile, with
 `RelWithDebInfo` enabling Rust debug information. Other configurations use the
 dev profile.
