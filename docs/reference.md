@@ -212,13 +212,13 @@ In-tree Rust `staticlib` crates managed directly by `cmk`. Crate keys match `^[A
 | `env` | `map<string, string>` | Extra environment variables passed to Cargo and folded into the configure stamp. |
 
 The generated package requires CMake 3.20+. During `cmk config`, `cmk` writes
-`<build-dir>/cmk-rust/cmake/<cmake-name>/<cmake-name>Config.cmake`, injects
+`<build-dir>/rust/cmake/<cmake-name>/<cmake-name>Config.cmake`, injects
 `-D<cmake-name>_DIR=...`, and mirrors it into `CMakeUserPresets.json`.
 
 `find_package(<cmake-name> REQUIRED)` exports `<cmake-name>::<cmake-name>`.
 Building a consumer invokes `cargo rustc` from the manifest's directory (so
 `.cargo/config.toml` applies) inside `cmk`'s C/C++ toolchain environment, with
-outputs isolated under `<build-dir>/cmk-rust/crate-<name>/config-<configuration>/cargo-target`.
+outputs isolated under `<build-dir>/rust/crate-<name>/config-<configuration>/cargo-target`.
 The generated rule stages Cargo's reported staticlib and forwards its native
 linker arguments and build-script search paths (stripping `-lstdc++`/`-lc++` so
 CMake's C++ standard library remains authoritative). For non-system shared

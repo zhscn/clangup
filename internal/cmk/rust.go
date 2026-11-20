@@ -68,7 +68,7 @@ func rustPackageName(name string, c *RustCrateCfg) string {
 }
 
 func rustRootDir(buildDir string) string {
-	return filepath.Join(buildDir, "cmk-rust")
+	return filepath.Join(buildDir, "rust")
 }
 
 func rustPackageConfigDir(buildDir, cmakeName string) string {
@@ -91,7 +91,7 @@ func rustStampEntries(p *Project) []string {
 	if len(p.Cfg.Rust) == 0 {
 		return nil
 	}
-	out := []string{"rust:cmake-build-rules=4"}
+	out := []string{"rust:cmake-build-rules=5"}
 	for _, name := range sortedRustNames(p.Cfg.Rust) {
 		c := p.Cfg.Rust[name]
 		out = append(out,

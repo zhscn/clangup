@@ -149,7 +149,7 @@ extern "C" int bridge_value() { return rust_value(); }
 		}
 	}
 	build("Debug", "unrelated")
-	rustDir := filepath.Join(tree.dir, "cmk-rust", "crate-example")
+	rustDir := filepath.Join(tree.dir, "rust", "crate-example")
 	if _, err := os.Stat(rustDir); !os.IsNotExist(err) {
 		t.Fatalf("configuring and building an unrelated target created Rust outputs: %v", err)
 	}
