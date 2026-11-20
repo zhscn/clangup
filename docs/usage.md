@@ -347,6 +347,11 @@ add_executable(app main.cpp)
 target_link_libraries(app PRIVATE cpp_core)
 ```
 
+For a crate that generates only headers, such as one using cbindgen, omit
+`cxxbridge`. Have `build.rs` write its headers to `CMK_RUST_INCLUDE_DIR` when
+cmk sets it. Linking the generated CMake target adds that directory to the
+consumer's include path and runs Cargo before the consumer compiles.
+
 The example uses ordinary target linking because its static dependencies go in
 one direction. Calls back into C++ through a function pointer still fit this
 model. If Rust statically calls into `cpp_core` via `#[cxx::bridge]`

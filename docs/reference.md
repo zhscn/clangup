@@ -206,7 +206,7 @@ In-tree Rust `staticlib` crates managed directly by `cmk`. Crate keys match `^[A
 | `features` | `string[]` | Cargo features passed to `--features`. |
 | `no-default-features` | `bool` | Pass `--no-default-features` to Cargo (default `false`). |
 | `target` | `string` | Explicit Rust target passed to `--target`. When omitted, Cargo chooses the target using its normal configuration. |
-| `cxxbridge` | `bool` | Set `CXXBRIDGE_OUT_DIR` when invoking Cargo. The crate build script writes `bridge.cc` and an `include/` tree there. The exported target compiles the bridge and exposes its headers (default `false`). |
+| `cxxbridge` | `bool` | Compile the `bridge.cc` that the crate build script writes to `CXXBRIDGE_OUT_DIR` (default `false`). |
 | `cxxbridge-includes` | `string[]` | Optional include directories (project-relative or absolute) passed privately when compiling `bridge.cc` (only needed if `#[cxx::bridge]` contains `extern "C++"` includes). |
 | `lto` | `string` | LTO mode for release-profile builds (`Release`, `RelWithDebInfo`, `MinSizeRel`): `off` (default), `thin`, `fat`, or `linker-plugin` (cross-language ThinLTO via `-Clinker-plugin-lto` + `CFLAGS`/`CXXFLAGS` `-flto=thin` for `lld`). Ignored in `Debug`/custom configs. |
 | `env` | `map<string, string>` | Extra environment variables passed to Cargo and folded into the configure stamp. |
@@ -227,12 +227,18 @@ libraries, configure runtime search paths in CMake.
 `Release`, `RelWithDebInfo` (with Rust debug info), and `MinSizeRel` use the
 release profile; other configurations use the dev profile.
 
-With `cxxbridge: true`, Cargo generates `bridge.cc` and `include/` before CMake
-compiles `bridge.cc` with the project's C++ toolchain. The exported target links
-the Rust archive, exposes the generated headers, and tracks header changes so
-affected C++ targets recompile automatically. `<cmake-name>_CXXBRIDGE_INCLUDE_DIR`
-and `<cmake-name>_CXXBRIDGE_SOURCE` are also set (with `$<CONFIG>` generator
-expressions) for use in target properties.
+Each exported target adds a generated header directory to its consumers'
+include paths. During the Cargo build, `CMK_RUST_INCLUDE_DIR` points to that
+directory for the selected crate and configuration. A build script can write
+headers there and register `cargo:rerun-if-env-changed=CMK_RUST_INCLUDE_DIR`
+alongside its input dependencies. CMake runs Cargo before compiling consumers
+and recompiles them when the generated headers change.
+
+With `cxxbridge: true`, `CMK_RUST_INCLUDE_DIR` points to the `include/`
+subdirectory of `CXXBRIDGE_OUT_DIR`. CMake also compiles the generated
+`bridge.cc` with the project's C++ toolchain. The package exposes
+`<cmake-name>_CXXBRIDGE_INCLUDE_DIR` and `<cmake-name>_CXXBRIDGE_SOURCE` with
+`$<CONFIG>` generator expressions for use in target properties.
 
 #### `install`, `env`, `target-env`, `format`, `lint`
 

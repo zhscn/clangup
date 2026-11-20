@@ -87,8 +87,10 @@ extern "C" int bridge_value();
 int main() { std::printf("%d\n", bridge_value() + header_value); }
 `)
 	write("unrelated.cpp", "int main() {}\n")
-	write("plain.cpp", `extern "C" int rust_value();
-int main() { return rust_value() == 1 ? 0 : 1; }
+	write("plain.cpp", `#include "plain/value.h"
+#include <cstdio>
+extern "C" int rust_value();
+int main() { std::printf("%d\n", rust_value() + plain_value); }
 `)
 	write("crate/Cargo.toml", `[package]
 name = "example"
@@ -104,6 +106,7 @@ crate-type = ["staticlib"]
 `
 	write("crate/src/lib.rs", rustSource)
 	write("crate/value.txt", "10")
+	write("crate/plain-value.txt", "100")
 	write("crate/build.rs", `use std::{env, fs, path::PathBuf};
 
 fn main() {
@@ -112,12 +115,21 @@ fn main() {
     println!("cargo:rerun-if-changed=../native libs/libcmk_rust_native.a");
     println!("cargo:rerun-if-changed=value.txt");
     println!("cargo:rerun-if-env-changed=CXXBRIDGE_OUT_DIR");
-    let Some(out) = env::var_os("CXXBRIDGE_OUT_DIR") else { return; };
+    println!("cargo:rerun-if-env-changed=CMK_RUST_INCLUDE_DIR");
+    let include = PathBuf::from(env::var_os("CMK_RUST_INCLUDE_DIR").unwrap());
+    let Some(out) = env::var_os("CXXBRIDGE_OUT_DIR") else {
+        println!("cargo:rerun-if-changed=plain-value.txt");
+        fs::create_dir_all(include.join("plain")).unwrap();
+        let value = fs::read_to_string("plain-value.txt").unwrap();
+        fs::write(include.join("plain/value.h"), format!("constexpr int plain_value = {value};\n")).unwrap();
+        return;
+    };
     assert_eq!(env::var("BRIDGE_TEST").unwrap(), "x;y]]");
     let out = PathBuf::from(out);
-    fs::create_dir_all(out.join("include/nested")).unwrap();
+    assert_eq!(include, out.join("include"));
+    fs::create_dir_all(include.join("nested")).unwrap();
     let value = fs::read_to_string("value.txt").unwrap();
-    fs::write(out.join("include/nested/value.h"), format!("constexpr int header_value = {value};\n")).unwrap();
+    fs::write(include.join("nested/value.h"), format!("constexpr int header_value = {value};\n")).unwrap();
     fs::write(out.join("bridge.cc"), r#"extern "C" int rust_value();
 extern "C" int bridge_value() { return rust_value(); }
 "#).unwrap();
@@ -141,43 +153,52 @@ extern "C" int bridge_value() { return rust_value(); }
 		t.Helper()
 		return run("cmake", append([]string{"--build", tree.dir, "--config", config, "--target", target}, extra...)...)
 	}
-	checkApp := func(config, want string) {
+	checkApp := func(config, target, want string) {
 		t.Helper()
-		app := filepath.Join(tree.dir, config, "app")
+		app := filepath.Join(tree.dir, config, target)
 		if got := strings.TrimSpace(run(app)); got != want {
-			t.Fatalf("%s output = %q, want %q", config, got, want)
+			t.Fatalf("%s/%s output = %q, want %q", config, target, got, want)
 		}
 	}
 	build("Debug", "unrelated")
 	rustDir := filepath.Join(tree.dir, "rust", "crate-example")
-	if _, err := os.Stat(rustDir); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(rustDir, "config-Debug", "cargo.jsonl")); !os.IsNotExist(err) {
 		t.Fatalf("configuring and building an unrelated target created Rust outputs: %v", err)
 	}
 
 	build("Debug", "plain_app")
-	run(filepath.Join(tree.dir, "Debug", "plain_app"))
-	if _, err := os.Stat(rustDir); !os.IsNotExist(err) {
+	checkApp("Debug", "plain_app", "101")
+	if _, err := os.Stat(filepath.Join(rustDir, "config-Debug", "cargo.jsonl")); !os.IsNotExist(err) {
 		t.Fatalf("building the plain archive triggered an unrelated Rust package: %v", err)
 	}
 
+	if out := build("Debug", "plain_app"); strings.Contains(out, "Building CXX") || strings.Contains(out, "Linking CXX") {
+		t.Fatalf("no-op build rebuilt the plain archive's consumer:\n%s", out)
+	}
+	write("crate/plain-value.txt", "200")
+	build("Debug", "plain_app")
+	checkApp("Debug", "plain_app", "201")
+	build("Debug", "plain_app", "--clean-first")
+	checkApp("Debug", "plain_app", "201")
+
 	build("Debug", "app")
-	checkApp("Debug", "11")
+	checkApp("Debug", "app", "11")
 	if out := build("Debug", "app"); strings.Contains(out, "Building CXX") || strings.Contains(out, "Linking CXX") {
 		t.Fatalf("no-op build rebuilt C++ targets:\n%s", out)
 	}
 	write("crate/src/lib.rs", strings.Replace(rustSource, "cmk_native_value() }", "cmk_native_value() + 1 }", 1))
 	build("Debug", "app")
-	checkApp("Debug", "12")
+	checkApp("Debug", "app", "12")
 	write("crate/value.txt", "20")
 	build("Debug", "app")
-	checkApp("Debug", "22")
+	checkApp("Debug", "app", "22")
 	buildNative("5")
 	build("Debug", "app")
-	checkApp("Debug", "26")
+	checkApp("Debug", "app", "26")
 
 	run("cmake", "--build", tree.dir, "--config", "Debug", "--target", "app:Release", "app:RelWithDebInfo", "--parallel", "4")
-	checkApp("Release", "26")
-	checkApp("RelWithDebInfo", "26")
+	checkApp("Release", "app", "26")
+	checkApp("RelWithDebInfo", "app", "26")
 	for _, config := range []string{"Release", "RelWithDebInfo"} {
 		if _, err := os.Stat(filepath.Join(rustDir, "config-"+config, "cargo-target", host, "release")); err != nil {
 			t.Fatal(err)
@@ -185,5 +206,5 @@ extern "C" int bridge_value() { return rust_value(); }
 	}
 
 	build("Debug", "app", "--clean-first")
-	checkApp("Debug", "26")
+	checkApp("Debug", "app", "26")
 }

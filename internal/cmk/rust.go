@@ -91,7 +91,7 @@ func rustStampEntries(p *Project) []string {
 	if len(p.Cfg.Rust) == 0 {
 		return nil
 	}
-	out := []string{"rust:cmake-build-rules=5"}
+	out := []string{"rust:cmake-build-rules=6"}
 	for _, name := range sortedRustNames(p.Cfg.Rust) {
 		c := p.Cfg.Rust[name]
 		out = append(out,
