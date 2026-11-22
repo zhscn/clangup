@@ -22,6 +22,7 @@ type InstallRecord struct {
 	Prefix             string         `json:"prefix"`
 	ManifestSHA256     string         `json:"manifest_sha256"`
 	ArtifactSHA256     string         `json:"artifact_sha256"`
+	CPUISA             string         `json:"cpu_isa,omitempty"`
 	DriverRequirements []string       `json:"driver_requirements,omitempty"`
 	ArchiveSHA256      string         `json:"archive_sha256,omitempty"`
 	PatchsetSHA256     string         `json:"patchset_sha256,omitempty"`

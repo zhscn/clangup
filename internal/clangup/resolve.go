@@ -40,6 +40,7 @@ func (s *selection) record(prefix string) toolchain.InstallRecord {
 		Channel: s.channel, Version: s.release.Version, Release: s.release.Release,
 		Target: s.artifact.Target, Prefix: prefix,
 		ManifestSHA256: s.artifact.Manifest.SHA256, ArtifactSHA256: s.artifact.Artifact.SHA256,
+		CPUISA:             s.manifest.RuntimeRequirements.CPUISA,
 		DriverRequirements: s.manifest.DriverRequirements.ExternalComponents,
 		ArchiveSHA256:      s.manifest.Source.Archive.SHA256,
 		PatchsetSHA256:     s.manifest.Source.PatchsetSHA256,

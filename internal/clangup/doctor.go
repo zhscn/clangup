@@ -73,6 +73,7 @@ func newDoctorCommand() *cobra.Command {
 				active = &copy
 			}
 		}
+		cpuCompatible := active == nil || checkCPUISA(check, active)
 		if active != nil && len(active.DriverRequirements) > 0 {
 			fmt.Fprintln(command.OutOrStdout(), "driver requirements:")
 			names := append([]string(nil), active.DriverRequirements...)
@@ -101,7 +102,7 @@ func newDoctorCommand() *cobra.Command {
 		} else {
 			check.warn("%s is not in PATH; run clangup env", bin)
 		}
-		if full && active != nil {
+		if full && active != nil && cpuCompatible {
 			runDoctorSmoke(check, active)
 		}
 		if check.failed {

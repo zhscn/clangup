@@ -89,6 +89,7 @@ func installDirect(file, location, prefix, explicitTarget string, force bool) (*
 		Channel: channel, Version: manifest.Release.Version, Release: manifest.Release.Release,
 		Target: manifest.RuntimeRequirements.Triple, Prefix: prefix,
 		ManifestSHA256: hex.EncodeToString(manifestDigest[:]), ArtifactSHA256: object.SHA256,
+		CPUISA:             manifest.RuntimeRequirements.CPUISA,
 		DriverRequirements: manifest.DriverRequirements.ExternalComponents,
 		ArchiveSHA256:      manifest.Source.Archive.SHA256, PatchsetSHA256: manifest.Source.PatchsetSHA256,
 		Driver: manifest.Driver, Optimization: manifest.Optimization,
