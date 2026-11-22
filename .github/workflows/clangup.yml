@@ -6,6 +6,8 @@ on:
       - .github/workflows/clangup.yml
       - .github/workflows/default-channel.yml
       - .github/workflows/gcc-channel.yml
+      - .github/workflows/gcc-pgo-*.yml
+      - .github/scripts/gcc-pgo-stage.sh
       - .github/workflows/libcxx-channel.yml
       - .github/workflows/libcxx-pgo-*.yml
       - .github/scripts/libcxx-pgo-*.sh
@@ -22,6 +24,8 @@ on:
       - .github/workflows/clangup.yml
       - .github/workflows/default-channel.yml
       - .github/workflows/gcc-channel.yml
+      - .github/workflows/gcc-pgo-*.yml
+      - .github/scripts/gcc-pgo-stage.sh
       - .github/workflows/libcxx-channel.yml
       - .github/workflows/libcxx-pgo-*.yml
       - .github/scripts/libcxx-pgo-*.sh
@@ -83,7 +87,9 @@ jobs:
             channels/gcc/16.2.0/build/build-linux.sh \
             channels/gcc/16.2.0/build/verify-linux.sh \
             channels/gcc/16.2.0/build/build-macos.sh \
-            channels/gcc/16.2.0/build/verify-macos.sh
+            channels/gcc/16.2.0/build/verify-macos.sh \
+            channels/gcc/16.2.0/build/bootstrap.sh \
+            .github/scripts/gcc-pgo-stage.sh
 
       - name: Check module files
         run: go mod tidy -diff

@@ -1,0 +1,67 @@
+name: gcc-pgo channel
+
+on:
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: Published GCC seed release
+        type: string
+        default: '16.2.0-1'
+
+concurrency:
+  group: gcc-pgo-channel
+  cancel-in-progress: false
+
+jobs:
+  profile:
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/gcc-pgo-stage.yml
+    with:
+      stage: profile
+      seed: ${{ inputs.seed }}
+
+  train:
+    needs: profile
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/gcc-pgo-stage.yml
+    with:
+      stage: train
+      previous: profile
+      seed: ${{ inputs.seed }}
+
+  feedback:
+    needs: train
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/gcc-pgo-stage.yml
+    with:
+      stage: feedback
+      previous: train
+      seed: ${{ inputs.seed }}
+
+  publish:
+    needs: feedback
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: gcc-pgo-feedback-*
+          path: out/targets
+      - name: Assemble release
+        run: python3 channels/build/assemble.py --targets out/targets --output out/release
+      - name: Publish release
+        env:
+          UPLOAD_ENDPOINT: ${{ vars.CLANGUP_UPLOAD_ENDPOINT }}
+        run: |
+          token="$(curl -fsSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=clangup-r2-uploader" | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+          python3 channels/build/publish.py --endpoint "$UPLOAD_ENDPOINT" --token "$token" --release out/release/release.json

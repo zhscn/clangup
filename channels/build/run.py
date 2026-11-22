@@ -874,7 +874,7 @@ def make_manifest(
         },
         "source": {
             "archive": {
-                **({} if release["channel"] == "gcc" else {"llvm_version": release["version"]}),
+                **({} if release["channel"] in ("gcc", "gcc-pgo") else {"llvm_version": release["version"]}),
                 "origin_url": source["url"],
                 "sha256": source["sha256"],
             },
@@ -945,6 +945,7 @@ def parse_arguments() -> argparse.Namespace:
         default=("Debug", "Release"),
         help="training build types to execute in this stage",
     )
+    parser.add_argument("--gcc-stage", choices=("profile", "train", "feedback"))
     parser.add_argument(
         "--resume",
         action="store_true",
@@ -957,13 +958,32 @@ def build_gcc(
     args: argparse.Namespace, lock: dict[str, Any], target: dict[str, Any]
 ) -> None:
     work = args.work.resolve()
-    if work.exists() and any(work.iterdir()):
-        fail("GCC builds require an empty --work directory")
+    stage = args.gcc_stage
     seed = Path(os.environ.get("CLANGUP_BOOTSTRAP_PREFIX", "/opt/clangup-bootstrap"))
     script = safe_channel_file(args.channel_root.resolve(), f"build/build-{target['os']}.sh")
-    source, identity = prepare_source(
-        lock, args.source.resolve(), args.channel_root.resolve(), work
-    )
+    stamp = work / "gcc-stage.json"
+    identity = source_identity(lock["source"])
+    inputs = {
+        "work": str(work),
+        "plan_sha256": sha256_file(args.plan),
+        "target": target["triple"],
+        "seed": str(seed.resolve()),
+        "seed_identity": os.environ.get("CLANGUP_BOOTSTRAP_IDENTITY", ""),
+        "environment": os.environ.get("CLANGUP_BUILD_ENVIRONMENT_IDENTITY", ""),
+        "build_scripts": sha256_directory(script.parent),
+        "runner": sha256_file(Path(__file__)),
+    }
+    if stage in ("train", "feedback"):
+        previous = "profile" if stage == "train" else "train"
+        if not stamp.is_file() or load_json(stamp) != {**inputs, "stage": previous}:
+            fail(f"GCC {stage} requires a matching {previous} checkpoint")
+        source = next((work / "source").iterdir())
+    else:
+        if work.exists() and any(work.iterdir()):
+            fail("GCC builds require an empty --work directory")
+        source, identity = prepare_source(
+            lock, args.source.resolve(), args.channel_root.resolve(), work
+        )
     prefix = work / "prefix"
     run(
         [
@@ -974,8 +994,14 @@ def build_gcc(
             str(prefix),
             str(seed),
             str(args.jobs),
+            stage or "bootstrap",
         ]
     )
+    if stage == "train" and not any((work / "build").rglob("*.gcda")):
+        fail("GCC training produced no profile data")
+    if stage in ("profile", "train"):
+        write_json(stamp, {**inputs, "stage": stage})
+        return
     package_gcc(args, lock, target, prefix, identity)
 
 
@@ -1009,7 +1035,7 @@ def package_gcc(
                 )
             },
             "bootstrap": {
-                "kind": "clang",
+                "kind": "gcc" if args.gcc_stage else "clang",
                 "identity": os.environ.get("CLANGUP_BOOTSTRAP_IDENTITY", "unknown"),
             },
             "plan_sha256": sha256_file(args.plan),
@@ -1081,9 +1107,14 @@ def main() -> None:
     if "source" in target:
         lock = {**lock, "source": target["source"]}
 
-    if lock["release"]["channel"] == "gcc":
+    channel = lock["release"]["channel"]
+    if args.gcc_stage and channel != "gcc-pgo":
+        fail("--gcc-stage requires a gcc-pgo plan")
+    if channel in ("gcc", "gcc-pgo"):
+        if channel == "gcc-pgo" and not args.gcc_stage:
+            fail("gcc-pgo requires --gcc-stage")
         if args.start_at != "instrumented" or args.stop_after != "bolt" or args.resume:
-            fail("GCC uses a single build invocation with no stage or resume options")
+            fail("GCC stages are selected with --gcc-stage")
         build_gcc(args, lock, target)
         return
 

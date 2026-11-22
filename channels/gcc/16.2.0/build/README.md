@@ -37,3 +37,18 @@ For single-file deployment, link the application with
 run the application on the deployment platform.
 
 [GCC 16.2 Darwin patch]: https://github.com/Homebrew/homebrew-core/blob/af6b5d310c29ce89ac70b7b9094022f8ebb5c005/Patches/gcc/gcc-16.2.0.diff
+
+## Profile-guided build
+
+The `gcc-pgo` release uses an installed `gcc` artifact as its seed. Generate
+the plan from `release-pgo.yaml` and call `run.py` three times with
+`--gcc-stage profile`, `--gcc-stage train` and `--gcc-stage feedback`.
+The profile stage builds the instrumented compiler. Training uses that
+compiler to build GCC itself. Feedback uses the recorded counts to build the
+release compiler, then verifies and packages it.
+
+Each CI job hands the next job the build tree and seed. GCC's make rules
+use timestamps to decide what to rebuild, and its generated files contain
+absolute paths, so the workflow preserves timestamps and links and restores
+the tree at the same path. Resume with the same plan, seed, build scripts
+and build environment.

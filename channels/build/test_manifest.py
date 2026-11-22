@@ -1,3 +1,4 @@
+import argparse
 import importlib.util
 from pathlib import Path
 import tempfile
@@ -13,6 +14,59 @@ SPEC.loader.exec_module(RUN)
 
 
 class ManifestTest(unittest.TestCase):
+    def test_gcc_pgo_checkpoints_require_order_and_matching_inputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            channel = root / "channel"
+            scripts = channel / "build"
+            scripts.mkdir(parents=True)
+            (scripts / "build-linux.sh").touch()
+            plan = root / "plan.json"
+            plan.write_text("{}")
+            args = argparse.Namespace(
+                gcc_stage="profile",
+                work=root / "work",
+                plan=plan,
+                source=root / "gcc.tar.xz",
+                channel_root=channel,
+                jobs=2,
+            )
+            lock = {"source": {"sha256": "a" * 64, "patchset_sha256": "b" * 64}}
+            target = {"os": "linux", "triple": "x86_64-unknown-linux-gnu"}
+            tree = args.work / "source" / "gcc"
+            profile_data = args.work / "build" / "profile.gcda"
+
+            def prepare_source(*_):
+                tree.mkdir(parents=True)
+                return tree, RUN.source_identity(lock["source"])
+
+            with (
+                mock.patch.object(RUN, "prepare_source", side_effect=prepare_source),
+                mock.patch.object(RUN, "run") as run,
+                mock.patch.object(RUN, "package_gcc") as package,
+            ):
+                RUN.build_gcc(args, lock, target)
+                self.assertEqual(run.call_args.args[0][-1], "profile")
+                args.gcc_stage = "feedback"
+                with self.assertRaisesRegex(SystemExit, "matching train checkpoint"):
+                    RUN.build_gcc(args, lock, target)
+
+                args.gcc_stage = "train"
+                with self.assertRaisesRegex(SystemExit, "no profile data"):
+                    RUN.build_gcc(args, lock, target)
+                profile_data.parent.mkdir()
+                profile_data.touch()
+                RUN.build_gcc(args, lock, target)
+                self.assertEqual(run.call_args.args[0][-1], "train")
+
+                args.gcc_stage = "feedback"
+                with mock.patch.dict("os.environ", CLANGUP_BOOTSTRAP_IDENTITY="different"):
+                    with self.assertRaisesRegex(SystemExit, "matching train checkpoint"):
+                        RUN.build_gcc(args, lock, target)
+                RUN.build_gcc(args, lock, target)
+                self.assertEqual(run.call_args.args[0][-1], "feedback")
+                package.assert_called_once()
+
     def test_source_identity_has_no_repository_object_reference(self):
         with tempfile.TemporaryDirectory() as directory:
             artifact = Path(directory) / "toolchain.tar.zst"
