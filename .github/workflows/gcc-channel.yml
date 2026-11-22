@@ -1,0 +1,108 @@
+name: gcc channel
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: gcc-channel
+  cancel-in-progress: false
+
+env:
+  CHANNEL_ROOT: channels/gcc/16.2.0
+  TARGET: x86_64-unknown-linux-gnu
+  BUILDER_IMAGE: ghcr.io/zhscn/clangup-builder:1
+  DOWNLOAD_ROOT: https://dl.clangup.dev
+  BOOTSTRAP_EXACT: libcxx-pgo/23.1.5-1
+  VERIFY_IMAGE: quay.io/centos/centos@sha256:e4ca2ed0202e76be184e75fb26d14bf974193579039d5573fb2348664deef76e
+
+jobs:
+  linux:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Resolve source and Clang seed
+        run: |
+          mkdir -p inputs/seed
+          go run ./cmd/channel-plan "$CHANNEL_ROOT/release.yaml" inputs/plan.json
+          curl -fsSL --retry 3 "$(jq -er '.source.url' inputs/plan.json)" -o inputs/gcc.tar.xz
+          printf '%s  %s\n' "$(jq -er '.source.sha256' inputs/plan.json)" inputs/gcc.tar.xz | sha256sum -c -
+
+          curl -fsSL --retry 3 "$DOWNLOAD_ROOT/releases/$BOOTSTRAP_EXACT/release.json" -o inputs/seed-release.json
+          seed=$(jq -ec --arg target "$TARGET" '.artifacts[] | select(.target == $target) | .artifact' inputs/seed-release.json)
+          curl -fsSL --retry 3 "$DOWNLOAD_ROOT/$(jq -er '.key' <<< "$seed")" -o inputs/seed.tar.zst
+          seed_sha=$(jq -er '.sha256' <<< "$seed")
+          printf '%s  %s\n' "$seed_sha" inputs/seed.tar.zst | sha256sum -c -
+          tar --use-compress-program=unzstd -xf inputs/seed.tar.zst -C inputs/seed
+          echo "CLANGUP_BOOTSTRAP_IDENTITY=${BOOTSTRAP_EXACT/\//@}#$TARGET:sha256:$seed_sha" >> "$GITHUB_ENV"
+      - name: Prepare EL7 builder
+        run: |
+          docker pull "$BUILDER_IMAGE"
+          base=$(docker image inspect --format '{{index .RepoDigests 0}}' "$BUILDER_IMAGE")
+          docker build --tag clangup-gcc-builder:local - <<DOCKERFILE
+          FROM $base
+          RUN yum -y --setopt=retries=10 install gmp-devel mpfr-devel libmpc-devel flex && yum clean all
+          DOCKERFILE
+          echo "CLANGUP_BUILD_ENVIRONMENT_IDENTITY=$(docker image inspect --format '{{.Id}}' clangup-gcc-builder:local)" >> "$GITHUB_ENV"
+      - name: Bootstrap GCC
+        run: |
+          mkdir -p work/home out/target
+          docker run --rm --network none --user "$(id -u):$(id -g)" \
+            -v "$PWD:/workspace:ro" -v "$PWD/work:/build" -v "$PWD/out/target:/out" \
+            -e HOME=/build/home -e CLANGUP_BUILD_COMMIT="$GITHUB_SHA" \
+            -e CLANGUP_BUILD_ENVIRONMENT_IDENTITY -e CLANGUP_BOOTSTRAP_IDENTITY \
+            -e CLANGUP_BOOTSTRAP_PREFIX=/workspace/inputs/seed \
+            clangup-gcc-builder:local python3 /workspace/channels/build/run.py \
+              --plan /workspace/inputs/plan.json --source /workspace/inputs/gcc.tar.xz \
+              --target "$TARGET" --channel-root "/workspace/$CHANNEL_ROOT" \
+              --config-dir "/workspace/$CHANNEL_ROOT/build" --work /build/work --output /out \
+              --jobs "$(nproc)" --source-date-epoch "$(git log -1 --format=%ct)"
+      - name: Verify relocated toolchain and standalone executable
+        run: |
+          mkdir -p work/relocated
+          tar --use-compress-program=unzstd -xf out/target/toolchain.tar.zst -C work/relocated
+          docker run --rm --network none --user "$(id -u):$(id -g)" \
+            -v "$PWD/work/relocated:/toolchain:ro" -v "$PWD/work:/build" \
+            -v "$PWD/$CHANNEL_ROOT/build/verify-linux.sh:/verify.sh:ro" \
+            clangup-gcc-builder:local bash /verify.sh /toolchain /build/standalone
+          docker run --rm --network none -v "$PWD/work/standalone:/app:ro" "$VERIFY_IMAGE" /app
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: gcc-target-x86_64-unknown-linux-gnu
+          path: out/target/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: gcc-target-x86_64-unknown-linux-gnu
+          path: out/targets
+      - name: Assemble release
+        run: python3 channels/build/assemble.py --targets out/targets --output out/release
+      - name: Publish release
+        env:
+          UPLOAD_ENDPOINT: ${{ vars.CLANGUP_UPLOAD_ENDPOINT }}
+        run: |
+          token="$(curl -fsSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=clangup-r2-uploader" | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+          python3 channels/build/publish.py --endpoint "$UPLOAD_ENDPOINT" --token "$token" --release out/release/release.json

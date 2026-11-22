@@ -5,6 +5,7 @@ on:
     paths:
       - .github/workflows/clangup.yml
       - .github/workflows/default-channel.yml
+      - .github/workflows/gcc-channel.yml
       - .github/workflows/libcxx-channel.yml
       - .github/workflows/libcxx-pgo-*.yml
       - .github/scripts/libcxx-pgo-*.sh
@@ -20,6 +21,7 @@ on:
     paths:
       - .github/workflows/clangup.yml
       - .github/workflows/default-channel.yml
+      - .github/workflows/gcc-channel.yml
       - .github/workflows/libcxx-channel.yml
       - .github/workflows/libcxx-pgo-*.yml
       - .github/scripts/libcxx-pgo-*.sh
@@ -77,7 +79,9 @@ jobs:
             channels/libcxx/23.1.0/build/verify-linux.sh \
             channels/libcxx/23.1.0/build/verify-asan-matrix.sh \
             channels/libcxx-pgo/23.1.5/build/build-linux.sh \
-            channels/libcxx-pgo/23.1.5/build/verify-linux.sh
+            channels/libcxx-pgo/23.1.5/build/verify-linux.sh \
+            channels/gcc/16.2.0/build/build-linux.sh \
+            channels/gcc/16.2.0/build/verify-linux.sh
 
       - name: Check module files
         run: go mod tidy -diff
