@@ -98,7 +98,7 @@ jobs:
 
   macos:
     if: github.ref == 'refs/heads/main'
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 360
     permissions:
       contents: read
