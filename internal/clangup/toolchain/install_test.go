@@ -16,7 +16,7 @@ func TestInstallArchive(t *testing.T) {
 		{name: "bin/cc", link: "clang"},
 	})
 	destination := filepath.Join(t.TempDir(), "toolchain")
-	if err := InstallArchive(archive, destination, false); err != nil {
+	if err := InstallArchive(archive, destination, false, "default"); err != nil {
 		t.Fatal(err)
 	}
 	if target, err := os.Readlink(filepath.Join(destination, "bin", "cc")); err != nil || target != "clang" {
@@ -30,7 +30,7 @@ func TestInstallRejectsEscapingSymlink(t *testing.T) {
 		{name: "bin/clang++", contents: "clang++", mode: 0o755},
 		{name: "bin/escape", link: "../../outside"},
 	})
-	if err := InstallArchive(archive, filepath.Join(t.TempDir(), "toolchain"), false); err == nil {
+	if err := InstallArchive(archive, filepath.Join(t.TempDir(), "toolchain"), false, "default"); err == nil {
 		t.Fatal("escaping symlink was accepted")
 	}
 }
@@ -39,10 +39,10 @@ func TestInstallArchiveReplacesManagedDestination(t *testing.T) {
 	first := makeArchive(t, []archiveEntry{{name: "bin/clang", contents: "old", mode: 0o755}, {name: "bin/clang++", contents: "old", mode: 0o755}})
 	second := makeArchive(t, []archiveEntry{{name: "bin/clang", contents: "new", mode: 0o755}, {name: "bin/clang++", contents: "new", mode: 0o755}})
 	destination := filepath.Join(t.TempDir(), "toolchain")
-	if err := InstallArchive(first, destination, false); err != nil {
+	if err := InstallArchive(first, destination, false, "default"); err != nil {
 		t.Fatal(err)
 	}
-	if err := InstallArchive(second, destination, true); err != nil {
+	if err := InstallArchive(second, destination, true, "default"); err != nil {
 		t.Fatal(err)
 	}
 	contents, err := os.ReadFile(filepath.Join(destination, "bin", "clang"))
@@ -94,4 +94,23 @@ func makeArchive(t *testing.T, entries []archiveEntry) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func TestInstallGCCArchive(t *testing.T) {
+	archive := makeArchive(t, []archiveEntry{
+		{name: "bin/gcc", contents: "gcc", mode: 0o755},
+		{name: "bin/g++", contents: "g++", mode: 0o755},
+	})
+	prefix := filepath.Join(t.TempDir(), "gcc")
+	if err := InstallArchive(archive, prefix, false, "gcc"); err != nil {
+		t.Fatal(err)
+	}
+	record := InstallRecord{Channel: "gcc", Version: "16.2.0", Release: 1, Target: "x86_64-unknown-linux-gnu", Prefix: prefix}
+	t.Setenv("CLANGUP_HOME", t.TempDir())
+	if err := RecordInstall(record); err != nil {
+		t.Fatal(err)
+	}
+	if !IsInstalled(prefix, "", "") {
+		t.Fatal("GCC installation was not recognized")
+	}
 }

@@ -133,7 +133,7 @@ func installSelector(selector, prefix, explicitTarget string, force bool) (*Inst
 	if err != nil {
 		return nil, err
 	}
-	if err := toolchain.InstallArchive(archive, prefix, force); err != nil {
+	if err := toolchain.InstallArchive(archive, prefix, force, record.Channel); err != nil {
 		return nil, err
 	}
 	if err := toolchain.RecordInstall(record); err != nil {
@@ -151,15 +151,20 @@ func installSelector(selector, prefix, explicitTarget string, force bool) (*Inst
 // compilers, whichever tools the artifact shipped, and the toolchain
 // file if it has one.
 func installationResult(record *toolchain.InstallRecord) *InstallResult {
+	cc, cxx := toolchain.CompilerPaths(record.Channel)
 	result := &InstallResult{
 		Schema: "clangup.install/v1", Channel: record.Channel, Version: record.Version,
 		Release: record.Release, Target: record.Target, ManifestSHA256: record.ManifestSHA256,
 		ArtifactSHA256: record.ArtifactSHA256, DriverRequirements: record.DriverRequirements,
-		Prefix: record.Prefix, CC: filepath.Join(record.Prefix, "bin", "clang"),
-		CXX: filepath.Join(record.Prefix, "bin", "clang++"), Driver: record.Driver,
+		Prefix: record.Prefix, CC: filepath.Join(record.Prefix, cc),
+		CXX: filepath.Join(record.Prefix, cxx), Driver: record.Driver,
 		Tools: map[string]string{},
 	}
-	for name, executable := range installedTools() {
+	tools := installedTools()
+	if cc == "bin/gcc" {
+		tools = map[string]string{"ar": "gcc-ar", "nm": "gcc-nm", "ranlib": "gcc-ranlib"}
+	}
+	for name, executable := range tools {
 		if path := filepath.Join(record.Prefix, "bin", executable); fileExists(path) {
 			result.Tools[name] = path
 		}

@@ -36,12 +36,20 @@ func (record InstallRecord) ID() string {
 	return fmt.Sprintf("%s@%s#%s", record.Channel, record.Exact(), record.Target)
 }
 
+func CompilerPaths(channel string) (cc, cxx string) {
+	if channel == "gcc" || channel == "gcc-pgo" {
+		return "bin/gcc", "bin/g++"
+	}
+	return "bin/clang", "bin/clang++"
+}
+
 func IsInstalled(prefix, manifestSHA256, artifactSHA256 string) bool {
 	record, err := LoadInstallRecord(prefix)
 	if err != nil || record.Prefix != prefix || record.ManifestSHA256 != manifestSHA256 || record.ArtifactSHA256 != artifactSHA256 {
 		return false
 	}
-	for _, executable := range []string{"bin/clang", "bin/clang++"} {
+	cc, cxx := CompilerPaths(record.Channel)
+	for _, executable := range []string{cc, cxx} {
 		info, err := os.Stat(filepath.Join(prefix, executable))
 		if err != nil || !info.Mode().IsRegular() {
 			return false

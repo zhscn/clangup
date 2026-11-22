@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 
@@ -83,7 +84,7 @@ func newDoctorCommand() *cobra.Command {
 		fmt.Fprintln(command.OutOrStdout(), "setup:")
 		if state.Prefix == "" {
 			check.fail("no default toolchain")
-		} else if _, err := os.Stat(filepath.Join(state.Prefix, "bin", "clang")); err != nil {
+		} else if active == nil || !toolchain.IsInstalled(active.Prefix, active.ManifestSHA256, active.ArtifactSHA256) {
 			check.fail("default toolchain is missing")
 		} else {
 			check.ok("default prefix %s", state.Prefix)
@@ -163,17 +164,23 @@ func runDoctorSmoke(check *doctorCheck, record *toolchain.InstallRecord) {
 		check.fail("write smoke source: %v", err)
 		return
 	}
-	compiler := filepath.Join(record.Prefix, "bin", "clang++")
+	_, cxx := toolchain.CompilerPaths(record.Channel)
+	compiler := filepath.Join(record.Prefix, cxx)
 	trace, err := exec.Command(compiler, "-###", "-x", "c++", "/dev/null").CombinedOutput()
 	if err != nil {
 		check.fail("default driver trace: %v\n%s", err, trace)
 	} else {
 		checkDriverContract(check, record.Driver, string(trace))
 	}
-	for _, variant := range []struct {
+	variants := []struct {
 		name  string
 		flags []string
-	}{{"default C++", []string{"-std=c++11"}}, {"default ASan", []string{"-std=c++11", "-fsanitize=address"}}} {
+	}{{"default C++", []string{"-std=c++11"}}, {"default ASan", []string{"-std=c++11", "-fsanitize=address"}}}
+	if cxx == "bin/g++" {
+		variants[0].flags = []string{"-std=c++20", "-static-libstdc++", "-static-libgcc"}
+		variants[1].flags = []string{"-std=c++20", "-static-libstdc++", "-static-libgcc", "-fsanitize=address", "-static-libasan"}
+	}
+	for _, variant := range variants {
 		binary := filepath.Join(directory, strings.ToLower(strings.ReplaceAll(variant.name, " ", "-")))
 		arguments := append(append([]string{}, variant.flags...), source, "-o", binary)
 		if output, err := exec.Command(compiler, arguments...).CombinedOutput(); err != nil {
@@ -218,15 +225,16 @@ func driverValue(driver map[string]any, keys ...string) string {
 }
 
 func checkDriverContract(check *doctorCheck, driver map[string]any, trace string) {
+	linkArgs := strings.Fields(strings.ReplaceAll(trace, `"`, ""))
 	cxx := driverValue(driver, "cxx_stdlib", "name")
 	switch cxx {
 	case "libc++":
-		if !strings.Contains(trace, `"-lc++"`) {
+		if !slices.Contains(linkArgs, "-lc++") {
 			check.fail("default driver does not select libc++")
 			return
 		}
-	case "system":
-		if runtime.GOOS == "linux" && !strings.Contains(trace, `"-lstdc++"`) {
+	case "system", "libstdc++":
+		if runtime.GOOS == "linux" && !slices.Contains(linkArgs, "-lstdc++") {
 			check.fail("default driver does not select system libstdc++")
 			return
 		}
@@ -239,7 +247,7 @@ func checkDriverContract(check *doctorCheck, driver map[string]any, trace string
 		check.fail("default driver does not select compiler-rt")
 		return
 	}
-	if driverValue(driver, "unwindlib") == "libgcc" && !strings.Contains(trace, `"-lgcc_s"`) {
+	if driverValue(driver, "unwindlib") == "libgcc" && !slices.Contains(linkArgs, "-lgcc_s") {
 		check.fail("default driver does not select libgcc_s")
 		return
 	}

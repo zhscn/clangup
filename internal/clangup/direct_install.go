@@ -82,7 +82,7 @@ func installDirect(file, location, prefix, explicitTarget string, force bool) (*
 	if err != nil {
 		return nil, err
 	}
-	if err := toolchain.InstallArchive(archive, prefix, force); err != nil {
+	if err := toolchain.InstallArchive(archive, prefix, force, channel); err != nil {
 		return nil, err
 	}
 	record := toolchain.InstallRecord{

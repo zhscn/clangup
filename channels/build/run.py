@@ -874,7 +874,7 @@ def make_manifest(
         },
         "source": {
             "archive": {
-                "llvm_version": release["version"],
+                **({} if release["channel"] == "gcc" else {"llvm_version": release["version"]}),
                 "origin_url": source["url"],
                 "sha256": source["sha256"],
             },
@@ -953,6 +953,94 @@ def parse_arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def build_gcc(
+    args: argparse.Namespace, lock: dict[str, Any], target: dict[str, Any]
+) -> None:
+    work = args.work.resolve()
+    if work.exists() and any(work.iterdir()):
+        fail("GCC builds require an empty --work directory")
+    seed = Path(os.environ.get("CLANGUP_BOOTSTRAP_PREFIX", "/opt/clangup-bootstrap"))
+    script = safe_channel_file(args.channel_root.resolve(), "build/build-linux.sh")
+    source, identity = prepare_source(
+        lock, args.source.resolve(), args.channel_root.resolve(), work
+    )
+    prefix = work / "prefix"
+    run(
+        [
+            "bash",
+            str(script),
+            str(source),
+            str(work / "build"),
+            str(prefix),
+            str(seed),
+            str(args.jobs),
+        ]
+    )
+    package_gcc(args, lock, target, prefix, identity)
+
+
+def package_gcc(
+    args: argparse.Namespace, lock: dict[str, Any], target: dict[str, Any],
+    prefix: Path, identity: str,
+) -> None:
+    work = args.work.resolve()
+    output = args.output.resolve()
+    verify = safe_channel_file(args.channel_root.resolve(), "build/verify-linux.sh")
+    run(["bash", str(verify), str(prefix), str(work / "cxx20-smoke")])
+    validate_payload(prefix)
+    reset_directory(output)
+    artifact = package(
+        prefix,
+        output,
+        "toolchain.tar.zst",
+        args.source_date_epoch,
+        args.zstd_threads,
+        args.zstd_level,
+    )
+    manifest = make_manifest(
+        lock,
+        target,
+        artifact,
+        {
+            "commit": os.environ.get("CLANGUP_BUILD_COMMIT", "unknown"),
+            "environment": {
+                "identity": os.environ.get(
+                    "CLANGUP_BUILD_ENVIRONMENT_IDENTITY", "unknown"
+                )
+            },
+            "bootstrap": {
+                "kind": "clang",
+                "identity": os.environ.get("CLANGUP_BOOTSTRAP_IDENTITY", "unknown"),
+            },
+            "plan_sha256": sha256_file(args.plan),
+            "source_identity_sha256": identity,
+            "source_date_epoch": args.source_date_epoch,
+        },
+    )
+    write_target_output(output, lock["release"], target, artifact, manifest)
+
+
+def write_target_output(
+    output: Path,
+    release: dict[str, Any],
+    target: dict[str, Any],
+    artifact: Path,
+    manifest: dict[str, Any],
+) -> None:
+    write_json(output / "manifest.json", manifest)
+    write_json(
+        output / "target.json",
+        {
+            "schema": "clangup.channel-target/v1",
+            "release": release,
+            "target": target["triple"],
+            "artifact": artifact.name,
+            "manifest": "manifest.json",
+        },
+    )
+    print(f"built {artifact} (sha256:{manifest['artifact']['sha256']})")
+
+
 def main() -> None:
     args = parse_arguments()
     if args.jobs < 1 or args.link_jobs < 1 or args.zstd_threads < 1:
@@ -989,6 +1077,12 @@ def main() -> None:
     )
     if target["os"] != expected_os:
         fail(f"target OS {target['os']} does not match host {platform.system()}")
+
+    if lock["release"]["channel"] == "gcc":
+        if args.start_at != "instrumented" or args.stop_after != "bolt" or args.resume:
+            fail("GCC uses a single build invocation with no stage or resume options")
+        build_gcc(args, lock, target)
+        return
 
     plan = args.plan.resolve()
     archive = args.source.resolve()
@@ -1077,17 +1171,7 @@ def main() -> None:
         "finished_at": dt.datetime.now(dt.timezone.utc).isoformat(),
     }
     manifest = make_manifest(lock, target, artifact, build_identity)
-    manifest_path = output / "manifest.json"
-    write_json(manifest_path, manifest)
-    target_output = {
-        "schema": "clangup.channel-target/v1",
-        "release": release,
-        "target": target["triple"],
-        "artifact": artifact.name,
-        "manifest": manifest_path.name,
-    }
-    write_json(output / "target.json", target_output)
-    print(f"built {artifact} (sha256:{manifest['artifact']['sha256']})")
+    write_target_output(output, release, target, artifact, manifest)
 
 
 if __name__ == "__main__":

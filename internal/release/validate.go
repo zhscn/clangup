@@ -130,10 +130,10 @@ func validateDriver(driver Driver, field string) error {
 	if driver.Libc != "system" {
 		return fmt.Errorf("%s.libc has unsupported value %q", field, driver.Libc)
 	}
-	if !oneOf(driver.CXXStdlib, "system", "libc++") {
+	if !oneOf(driver.CXXStdlib, "system", "libc++", "libstdc++") {
 		return fmt.Errorf("%s.cxx_stdlib has unsupported value %q", field, driver.CXXStdlib)
 	}
-	if !oneOf(driver.CXXStdlibLinkage, "system", "static") {
+	if !oneOf(driver.CXXStdlibLinkage, "system", "static", "shared") {
 		return fmt.Errorf("%s.cxx_stdlib_linkage has unsupported value %q", field, driver.CXXStdlibLinkage)
 	}
 	if driver.CXXStdlib == "system" && driver.CXXStdlibLinkage != "system" {
@@ -142,7 +142,7 @@ func validateDriver(driver Driver, field string) error {
 	if !oneOf(driver.Linker, "system", "lld") {
 		return fmt.Errorf("%s.linker has unsupported value %q", field, driver.Linker)
 	}
-	if !oneOf(driver.RTLib, "system", "compiler-rt") {
+	if !oneOf(driver.RTLib, "system", "compiler-rt", "libgcc") {
 		return fmt.Errorf("%s.rtlib has unsupported value %q", field, driver.RTLib)
 	}
 	if !oneOf(driver.UnwindLib, "system", "libgcc", "libunwind") {
