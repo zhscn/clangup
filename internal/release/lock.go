@@ -65,6 +65,15 @@ func Lock(loaded *Loaded) (*LockFile, error) {
 		if target.OS == "linux" {
 			lockedTarget.Libc = &LibcRequirement{Name: target.Libc, MinVersion: target.LibcVersion}
 		}
+		if patches, ok := loaded.TargetPatches[target.Triple]; ok {
+			source := locked.Source
+			source.Patches = append(slices.Clone(source.Patches), patches...)
+			source.PatchsetSHA256, err = patchsetSHA256(source.Patches)
+			if err != nil {
+				return nil, err
+			}
+			lockedTarget.Source = &source
+		}
 		locked.Targets = append(locked.Targets, lockedTarget)
 	}
 	sort.Slice(locked.Targets, func(left, right int) bool {

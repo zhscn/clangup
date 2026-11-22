@@ -81,7 +81,9 @@ jobs:
             channels/libcxx-pgo/23.1.5/build/build-linux.sh \
             channels/libcxx-pgo/23.1.5/build/verify-linux.sh \
             channels/gcc/16.2.0/build/build-linux.sh \
-            channels/gcc/16.2.0/build/verify-linux.sh
+            channels/gcc/16.2.0/build/verify-linux.sh \
+            channels/gcc/16.2.0/build/build-macos.sh \
+            channels/gcc/16.2.0/build/verify-macos.sh
 
       - name: Check module files
         run: go mod tidy -diff

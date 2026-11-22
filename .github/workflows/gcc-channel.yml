@@ -9,16 +9,27 @@ concurrency:
 
 env:
   CHANNEL_ROOT: channels/gcc/16.2.0
-  TARGET: x86_64-unknown-linux-gnu
   BUILDER_IMAGE: ghcr.io/zhscn/clangup-builder:1
   DOWNLOAD_ROOT: https://dl.clangup.dev
   BOOTSTRAP_EXACT: libcxx-pgo/23.1.5-1
-  VERIFY_IMAGE: quay.io/centos/centos@sha256:e4ca2ed0202e76be184e75fb26d14bf974193579039d5573fb2348664deef76e
 
 jobs:
   linux:
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            verify_image: quay.io/centos/centos@sha256:e4ca2ed0202e76be184e75fb26d14bf974193579039d5573fb2348664deef76e
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            verify_image: quay.io/centos/centos@sha256:ec16f510e8cd1cceeddc6888fcb37c6d6b7c6863fbc70bdbe660a8ccad4bab6a
+    runs-on: ${{ matrix.runner }}
+    env:
+      TARGET: ${{ matrix.target }}
+      VERIFY_IMAGE: ${{ matrix.verify_image }}
     timeout-minutes: 360
     permissions:
       contents: read
@@ -75,18 +86,59 @@ jobs:
           tar --use-compress-program=unzstd -xf out/target/toolchain.tar.zst -C work/relocated
           docker run --rm --network none --user "$(id -u):$(id -g)" \
             -v "$PWD/work/relocated:/toolchain:ro" -v "$PWD/work:/build" \
-            -v "$PWD/$CHANNEL_ROOT/build/verify-linux.sh:/verify.sh:ro" \
-            clangup-gcc-builder:local bash /verify.sh /toolchain /build/standalone
+            -v "$PWD/$CHANNEL_ROOT/build:/verify:ro" \
+            clangup-gcc-builder:local bash /verify/verify-linux.sh /toolchain /build/standalone
           docker run --rm --network none -v "$PWD/work/standalone:/app:ro" "$VERIFY_IMAGE" /app
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: gcc-target-x86_64-unknown-linux-gnu
+          name: gcc-target-${{ matrix.target }}
+          path: out/target/
+          if-no-files-found: error
+          retention-days: 7
+
+  macos:
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-14
+    timeout-minutes: 360
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - run: brew install make gmp mpfr libmpc zstd gnu-tar
+      - name: Resolve source
+        run: |
+          mkdir -p inputs out/target
+          go run ./cmd/channel-plan "$CHANNEL_ROOT/release.yaml" inputs/plan.json
+          curl -fsSL --retry 3 "$(jq -er '.source.url' inputs/plan.json)" -o inputs/gcc.tar.xz
+          printf '%s  %s\n' "$(jq -er '.source.sha256' inputs/plan.json)" inputs/gcc.tar.xz | shasum -a 256 -c -
+      - name: Bootstrap GCC
+        run: |
+          clang=$(xcrun --find clang)
+          export CLANGUP_BOOTSTRAP_PREFIX="$(dirname "$(dirname "$clang")")"
+          export CLANGUP_BOOTSTRAP_IDENTITY="$("$clang" --version | head -n1)"
+          export CLANGUP_BUILD_ENVIRONMENT_IDENTITY="$(xcodebuild -version | tr '\n' ' ')"
+          export CLANGUP_BUILD_COMMIT="$GITHUB_SHA"
+          python3 channels/build/run.py --plan inputs/plan.json --source inputs/gcc.tar.xz \
+            --target arm64-apple-darwin --channel-root "$CHANNEL_ROOT" \
+            --config-dir "$CHANNEL_ROOT/build" --work work/build --output out/target \
+            --jobs "$(sysctl -n hw.ncpu)" --source-date-epoch "$(git log -1 --format=%ct)"
+      - name: Verify relocated toolchain
+        run: |
+          mkdir -p work/relocated
+          gtar --use-compress-program=unzstd -xf out/target/toolchain.tar.zst -C work/relocated
+          bash "$CHANNEL_ROOT/build/verify-macos.sh" "$PWD/work/relocated" "$PWD/work/standalone"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: gcc-target-arm64-apple-darwin
           path: out/target/
           if-no-files-found: error
           retention-days: 7
 
   publish:
-    needs: linux
+    needs: [linux, macos]
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
@@ -96,7 +148,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: gcc-target-x86_64-unknown-linux-gnu
+          pattern: gcc-target-*
           path: out/targets
       - name: Assemble release
         run: python3 channels/build/assemble.py --targets out/targets --output out/release

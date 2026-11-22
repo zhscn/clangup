@@ -147,3 +147,27 @@ changelog:
 		t.Fatal(err)
 	}
 }
+
+func TestGCCDarwinPatchIsTargetSpecific(t *testing.T) {
+	loaded, err := Load(filepath.Join("..", "..", "channels", "gcc", "16.2.0", "release.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := Lock(loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Targets) != 3 || len(plan.Source.Patches) != 0 {
+		t.Fatalf("unexpected GCC target or source configuration: %#v", plan)
+	}
+	for _, target := range plan.Targets {
+		if target.OS == "macos" {
+			if target.Source == nil || target.Source.SHA256 != plan.Source.SHA256 ||
+				len(target.Source.Patches) != 1 || target.Source.PatchsetSHA256 == plan.Source.PatchsetSHA256 {
+				t.Fatalf("unexpected Darwin source: %#v", target.Source)
+			}
+		} else if target.Source != nil {
+			t.Fatalf("target %s overrides the shared source", target.Triple)
+		}
+	}
+}

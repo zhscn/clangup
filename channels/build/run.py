@@ -960,7 +960,7 @@ def build_gcc(
     if work.exists() and any(work.iterdir()):
         fail("GCC builds require an empty --work directory")
     seed = Path(os.environ.get("CLANGUP_BOOTSTRAP_PREFIX", "/opt/clangup-bootstrap"))
-    script = safe_channel_file(args.channel_root.resolve(), "build/build-linux.sh")
+    script = safe_channel_file(args.channel_root.resolve(), f"build/build-{target['os']}.sh")
     source, identity = prepare_source(
         lock, args.source.resolve(), args.channel_root.resolve(), work
     )
@@ -985,7 +985,7 @@ def package_gcc(
 ) -> None:
     work = args.work.resolve()
     output = args.output.resolve()
-    verify = safe_channel_file(args.channel_root.resolve(), "build/verify-linux.sh")
+    verify = safe_channel_file(args.channel_root.resolve(), f"build/verify-{target['os']}.sh")
     run(["bash", str(verify), str(prefix), str(work / "cxx20-smoke")])
     validate_payload(prefix)
     reset_directory(output)
@@ -1077,6 +1077,9 @@ def main() -> None:
     )
     if target["os"] != expected_os:
         fail(f"target OS {target['os']} does not match host {platform.system()}")
+
+    if "source" in target:
+        lock = {**lock, "source": target["source"]}
 
     if lock["release"]["channel"] == "gcc":
         if args.start_at != "instrumented" or args.stop_after != "bolt" or args.resume:

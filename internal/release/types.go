@@ -42,6 +42,7 @@ type Driver struct {
 }
 
 type Target struct {
+	PatchSeries        string        `yaml:"patch_series"`
 	OS                 string        `yaml:"os"`
 	Arch               string        `yaml:"arch"`
 	Triple             string        `yaml:"triple"`
@@ -79,10 +80,11 @@ type PatchEntry struct {
 }
 
 type Loaded struct {
-	Path       string
-	BundleRoot string
-	Spec       Spec
-	Patches    []LockedPatch
+	Path          string
+	BundleRoot    string
+	Spec          Spec
+	Patches       []LockedPatch
+	TargetPatches map[string][]LockedPatch
 }
 
 type LockFile struct {
@@ -113,6 +115,7 @@ type LockedPatch struct {
 }
 
 type LockedTarget struct {
+	Source             *LockedSource              `json:"source,omitempty"`
 	OS                 string                     `json:"os"`
 	Arch               string                     `json:"arch"`
 	Triple             string                     `json:"triple"`

@@ -234,7 +234,7 @@ func checkDriverContract(check *doctorCheck, driver map[string]any, trace string
 			return
 		}
 	case "system", "libstdc++":
-		if runtime.GOOS == "linux" && !slices.Contains(linkArgs, "-lstdc++") {
+		if (runtime.GOOS == "linux" || cxx == "libstdc++") && !slices.Contains(linkArgs, "-lstdc++") {
 			check.fail("default driver does not select system libstdc++")
 			return
 		}
@@ -247,7 +247,7 @@ func checkDriverContract(check *doctorCheck, driver map[string]any, trace string
 		check.fail("default driver does not select compiler-rt")
 		return
 	}
-	if driverValue(driver, "unwindlib") == "libgcc" && !slices.Contains(linkArgs, "-lgcc_s") {
+	if driverValue(driver, "unwindlib") == "libgcc" && !slices.Contains(linkArgs, "-lgcc_s") && !slices.Contains(linkArgs, "-lgcc_s.1.1") {
 		check.fail("default driver does not select libgcc_s")
 		return
 	}

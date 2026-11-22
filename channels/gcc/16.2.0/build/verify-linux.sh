@@ -6,27 +6,9 @@ output=$2
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-cat > "$work/smoke.cc" <<'CPP'
-#include <format>
-#include <stdexcept>
-#include <string_view>
-#include <thread>
-
-int main() {
-    int result = 1;
-    std::thread worker([&] {
-        try {
-            throw std::runtime_error(std::format("{}", 42));
-        } catch (const std::runtime_error& error) {
-            result = std::string_view(error.what()) != "42";
-        }
-    });
-    worker.join();
-    return result;
-}
-CPP
+source_dir=$(dirname "$(realpath "$0")")
 env -u LD_LIBRARY_PATH "$prefix/bin/g++" -std=c++20 -pthread -static-libstdc++ -static-libgcc \
-    "$work/smoke.cc" -Wl,-Map,"$work/link.map" -o "$output"
+    "$source_dir/smoke.cc" -Wl,-Map,"$work/link.map" -o "$output"
 
 prefix=$(realpath "$prefix")
 for library in libstdc++.a libgcc.a libgcc_eh.a; do

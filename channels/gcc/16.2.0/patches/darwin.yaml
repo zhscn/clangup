@@ -1,0 +1,5 @@
+schema: clangup.patch-series/v1
+strip: 1
+patches:
+  - path: patches/gcc-16.2.0-darwin.patch
+    sha256: 578a78ae0bc62a02f260b6a20c7f23e71deee16ed644e9cb5619247be4df5a71

@@ -11,10 +11,10 @@ prefix=$3
 seed=$(realpath "$4")
 jobs=$5
 
-if [[ $(getconf GNU_LIBC_VERSION) != 'glibc 2.17' || $(uname -m) != x86_64 ]]; then
-    echo 'GCC channel requires an x86-64 glibc 2.17 build environment' >&2
-    exit 1
-fi
+case "$(uname -m):$(getconf GNU_LIBC_VERSION)" in
+    "x86_64:glibc 2.17"|"aarch64:glibc 2.28") ;;
+    *) echo 'GCC requires x86-64 EL7 or ARM64 EL8' >&2; exit 1 ;;
+esac
 
 mkdir -p "$build" "$prefix"
 prefix=$(realpath "$prefix")

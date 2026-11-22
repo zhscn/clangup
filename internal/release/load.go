@@ -44,6 +44,17 @@ func Load(path string) (*Loaded, error) {
 		}
 		loaded.Patches = patches
 	}
+	loaded.TargetPatches = make(map[string][]LockedPatch)
+	for _, target := range authoring.Targets {
+		if target.PatchSeries == "" {
+			continue
+		}
+		patches, err := loadPatchSeries(loaded.BundleRoot, target.PatchSeries)
+		if err != nil {
+			return nil, fmt.Errorf("target %s: %w", target.Triple, err)
+		}
+		loaded.TargetPatches[target.Triple] = patches
+	}
 	return loaded, nil
 }
 
